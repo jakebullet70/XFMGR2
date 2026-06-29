@@ -25,5 +25,7 @@ COPY /Y "%~dp0xfmgr.prg" "%RUNDIR%\xfmgr.prg" >NUL
 REM 3) launch with the clean folder as the host filesystem root (no AUTOBOOT.X16
 REM    there), so the emulator boots straight into xfmgr.prg.
 CALL "%~dp0LOCAL.BAT"
-START "" /D "%RUNDIR%" "%x16%" -fsroot "%RUNDIR%" -prg xfmgr.prg -run -rtc -joy1
+REM -ram 512 pins the machine to the base 512 KB (banks 0-63) for testing, so the
+REM    runtime bank-count detection and the "of 63 banks" About readout are exercised.
+START "" /D "%RUNDIR%" "%x16%" -fsroot "%RUNDIR%" -ram 512 -prg xfmgr.prg -run -rtc -joy1
 ENDLOCAL
