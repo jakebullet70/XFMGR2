@@ -5,7 +5,8 @@
 ;   We never free a single record, so a bump pointer is all we need: O(1) alloc,
 ;   zero per-record header, zero fragmentation, "free" = reset the pointer.
 ;
-; Storage spans many 8KB banks (1..MAX_BANK). A 16-bit pointer can only see the
+; Storage spans many 8KB banks (FIRST_BANK..max_bank, the latter detected at runtime from
+; the installed RAM so we never write a bank that doesn't exist). A 16-bit pointer can only see the
 ; one 8KB window that is currently mapped, so an arena location is a FAR pointer:
 ;   (bank: ubyte, offset: uword).   No record straddles a bank boundary - if it
 ;   would not fit in the remaining space, we waste the tail and roll to the next
@@ -17,11 +18,15 @@ xarena {
     %option ignore_unused
 
     const ubyte FIRST_BANK = 2          ; bank 0 = Kernal; bank 1 = xtree dir-extras table
-    const ubyte MAX_BANK   = 255
     const uword WIN_START  = $a000
     const uword WIN_END    = $bf00      ; reserve $bf00-$bfff as scratch / guard
 
     ; --- allocator state ---
+    ubyte max_bank                      ; highest usable RAM bank on THIS machine; set in
+                                        ; reset() from cx16.numbanks(). A 512 KB X16 has 64
+                                        ; banks (0..63) -> max_bank 63; a 2 MB machine -> 255.
+                                        ; Banks wrap/alias above this, so we must never roll
+                                        ; past it (silent corruption otherwise).
     ubyte cur_bank
     uword cur_ptr
     ubyte high_bank                     ; highest bank touched (for stats / eviction)
@@ -32,6 +37,9 @@ xarena {
 
     sub reset() {
         ; Bulk-free everything. No traversal needed.
+        ; Detect the installed RAM so we never allocate into banks that don't exist on this
+        ; machine. numbanks() returns the COUNT (1..256); highest valid index = count-1.
+        max_bank  = lsb(cx16.numbanks() - 1)
         cur_bank  = FIRST_BANK
         cur_ptr   = WIN_START
         high_bank = FIRST_BANK
@@ -41,8 +49,9 @@ xarena {
         ; Reserve nbytes; on success result_bank/result_off point at the space.
         ; nbytes must be <= (WIN_END - WIN_START); callers only store small records.
         if cur_ptr + nbytes > WIN_END {
-            ; won't fit in the current bank -> roll to the next one
-            if cur_bank >= MAX_BANK
+            ; won't fit in the current bank -> roll to the next one (but not past the last
+            ; bank this machine actually has - rolling further would alias and corrupt)
+            if cur_bank >= max_bank
                 return false
             cur_bank++
             cur_ptr = WIN_START

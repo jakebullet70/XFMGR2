@@ -2143,6 +2143,14 @@ main {
         aboutln(4,  "an XTree-style file manager")
         aboutln(5,  "for the Commander X16")
         aboutln(7,  "version 1.0.0")
+        ; live banked-RAM usage: banks 1..high_bank are in use (bank 1 = dir-extras,
+        ; 2..high_bank = file arena), of max_bank usable on this machine (63 on a 512 KB X16).
+        txt.plot(HX0 + 2, HY0 + 9)
+        txt.print("banked RAM: ")
+        txt.print_ub(xarena.high_bank)
+        txt.print(" of ")
+        txt.print_ub(xarena.max_bank)
+        txt.print(" banks")
         aboutln(12, "written in Prog8")
         aboutln(13, "(c)2026 sadLogic")
         txt.color(COL_ACCENT)
