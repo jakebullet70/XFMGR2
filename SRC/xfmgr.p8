@@ -1368,13 +1368,13 @@ main {
         txt.print_uw(xfiles.ft_count)
         txt.print(" file(s)")
         txt.chrout($92)
-        sys.wait(120)               ; show the banner ~2 seconds, then auto-dismiss
+        sys.wait(90)               ; show the banner ~2 seconds, then auto-dismiss
     }
 
     sub op_edit() {
         ; E (file pane): open the selected file in the ROM-resident X16 Edit. We give
         ; the editor the banks ABOVE our file arena so its text buffer doesn't clobber
-        ; the cached records. X16Edit runs modally and returns here when the user exits.
+        ; the cached records. X16Edit runs modally  way to and returns here when the user exits.
         if xfiles.ft_count == 0
             return
         ubyte ebank = cx16.search_x16edit()
