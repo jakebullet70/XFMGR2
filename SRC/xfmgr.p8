@@ -140,6 +140,17 @@ main {
     str his_fname = "?" * 20                ; scratch: "<category>.his"
 
     sub start() {
+        ; XFMGR2 depends on R49+ Kernal behaviour (notably the X16 Edit ROM API used by
+        ; the E command). Refuse to run on older or pre-release ROMs instead of booting
+        ; into a UI that would misbehave when the editor is invoked.
+        ubyte romver
+        bool prerelease
+        romver, prerelease = cx16.rom_version()
+        if prerelease or romver < 49 {
+            txt.print("\rxfmgr2 requires kernal r49 or newer.\r")
+            return
+        }
+
         ; remember the current mode (returns mode, width, height) to restore on exit
         saved_mode, cx16.r0L, cx16.r0H = cx16.get_screen_mode()
         cx16.set_screen_mode(SCREEN_MODE)        ; 80x30
@@ -1371,6 +1382,12 @@ main {
             flash("X16 Edit not present in ROM")
             return
         }
+        if xarena.high_bank >= xarena.max_bank {
+            ; arena has consumed every usable bank - nothing left to hand the editor
+            ; (also avoids high_bank+1 wrapping to 0 when high_bank == 255)
+            flash("no free RAM banks for editor")
+            return
+        }
         xfiles.get_name(file_cursor, namebuf)
         xtree.build_path(cur_dir, pathbuf)
         diskio.chdir(pathbuf)
@@ -1379,7 +1396,7 @@ main {
         ubyte oldrom = cx16.getrombank()
         cx16.rombank(ebank)
         cx16.x16edit_loadfile_options(
-            firstbank, 255, namebuf,
+            firstbank, xarena.max_bank, namebuf,    ; last bank = this machine's real top bank
             mkword(%00000011, strings.length(namebuf)),   ; opts: auto-indent + word-wrap
             mkword(80, 4),                                 ; wrap col 80, tab stop 4
             mkword($61, diskio.drivenumber),               ; normal colour, drive
