@@ -55,12 +55,14 @@ main {
     const ubyte FOCUS_FILE = 1
 
     ; selection bar colors (high nibble = bg, low nibble = fg)
-    ; classic XTree palette (X16 default 16-color: 1=white 3=cyan 6=blue 7=yellow 0=black)
+    ; (X16 default 16-color: 1=white 6=blue 7=yellow 11=dark gray 14=light blue 0=black)
     const ubyte COL_FG    = 1           ; body text: white
-    const ubyte COL_BG    = 6           ; field: blue
-    const ubyte COL_ACCENT = 7          ; titles / hotkeys: yellow
-    const ubyte HILITE    = $30         ; focused selection bar: cyan bg, black text
-    const ubyte COL_TAGROW = $67        ; tagged file row: blue bg, yellow text
+    const ubyte COL_BG    = 11          ; field: dark gray
+    const ubyte COL_ACCENT = 7          ; hotkey letters: yellow
+    const ubyte COL_TITLE  = 14         ; window / box titles: light blue (matches borders)
+    const ubyte COL_BOX   = $be         ; frame / box borders: light blue on dark gray (bg nibble = COL_BG)
+    const ubyte HILITE    = $e1         ; focused selection bar: light-blue bg, white text
+    const ubyte COL_TAGROW = $e1        ; tagged file row: blue bg, white text
 
     ; box-drawing SCREENCODES (drawn with setchr so the cursor never moves / scrolls)
     const ubyte SC_TL = sc:'┌'
@@ -524,14 +526,17 @@ main {
         ; a horizontal frame line with a junction at the vertical divider.
         ; setchr writes straight to the screen matrix - no cursor move, no scroll.
         txt.setchr(0, row, lc)
+        txt.setclr(0, row, COL_BOX)
         ubyte col
         for col in 1 to 78 {
             if col == SPLIT
                 txt.setchr(col, row, jc)
             else
                 txt.setchr(col, row, SC_H)
+            txt.setclr(col, row, COL_BOX)
         }
         txt.setchr(79, row, rc)
+        txt.setclr(79, row, COL_BOX)
     }
 
     sub draw_frame() {
@@ -546,15 +551,24 @@ main {
         txt.setchr(79, CMDROW1, SC_V)
         txt.setchr(0, CMDROW2, SC_V)
         txt.setchr(79, CMDROW2, SC_V)
+        txt.setclr(0, HDRROW, COL_BOX)
+        txt.setclr(79, HDRROW, COL_BOX)
+        txt.setclr(0, CMDROW1, COL_BOX)
+        txt.setclr(79, CMDROW1, COL_BOX)
+        txt.setclr(0, CMDROW2, COL_BOX)
+        txt.setclr(79, CMDROW2, COL_BOX)
         ; side + middle borders down the content area
         ubyte r
         for r in PANE_TOP to PANE_BOT {
             txt.setchr(0, r, SC_V)
             txt.setchr(SPLIT, r, SC_V)
             txt.setchr(79, r, SC_V)
+            txt.setclr(0, r, COL_BOX)
+            txt.setclr(SPLIT, r, COL_BOX)
+            txt.setclr(79, r, COL_BOX)
         }
         ; window titles embedded in the divider line
-        txt.color(COL_ACCENT)
+        txt.color(COL_TITLE)
         txt.plot(TREE_TEXT, 2)
         txt.print(" DIRECTORY ")
         txt.plot(FILE_TEXT, 2)
@@ -1927,6 +1941,8 @@ main {
         txt.setchr(x0, row, SC_V)
         txt.setchr(x1, row, SC_V)
         blank_span(x0+1, x1-1, row)
+        txt.setclr(x0, row, COL_BOX)
+        txt.setclr(x1, row, COL_BOX)
     }
 
     sub draw_box(ubyte x0, ubyte y0, ubyte x1, ubyte y1, str title) {
@@ -1937,17 +1953,23 @@ main {
         txt.setchr(x1, y0, SC_TR)
         txt.setchr(x0, y1, SC_BL)
         txt.setchr(x1, y1, SC_BR)
+        txt.setclr(x0, y0, COL_BOX)
+        txt.setclr(x1, y0, COL_BOX)
+        txt.setclr(x0, y1, COL_BOX)
+        txt.setclr(x1, y1, COL_BOX)
         ubyte c
         for c in x0+1 to x1-1 {
             txt.setchr(c, y0, SC_H)
             txt.setchr(c, y1, SC_H)
+            txt.setclr(c, y0, COL_BOX)
+            txt.setclr(c, y1, COL_BOX)
         }
         ubyte y
         for y in y0+1 to y1-1
             box_row(x0, x1, y)
         box_shadow(x0, y0, x1, y1)
         if title[0] != 0 {
-            txt.color(COL_ACCENT)
+            txt.color(COL_TITLE)
             txt.plot(x0+2, y0)
             txt.print(title)
             txt.color(COL_FG)
