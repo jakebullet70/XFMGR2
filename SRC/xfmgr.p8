@@ -16,6 +16,7 @@
 %import xfiles
 %import xscan
 %import xviewer
+%import hlprs
 %import emudbg
 %zeropage basicsafe
 %option no_sysinit
@@ -80,6 +81,7 @@ main {
     ubyte tree_cursor, tree_top
     ubyte file_cursor, file_top
     ubyte cur_dir
+    ubyte start_node                    ; tree node of the launch directory (selected at startup)
     uword cur_blocks                    ; total blocks of visible files in cur_dir
     ubyte saved_mode                    ; screen mode to restore on exit
 
@@ -169,17 +171,27 @@ main {
         txt.color2(COL_FG, COL_BG)               ; white text on a blue field
         txt.clear_screen()
 
+        ; remember where we were launched from before any diskio call clobbers the
+        ; shared buffer curdir() points into
+        void strings.copy(diskio.curdir(), pathbuf)
+
         xarena.reset()
         xfiles.reset()
-        xtree.init()                    ; creates root (index 0); captures base_path
-        void xscan.scan_dir(0)          ; log the root directory
+        xtree.init()                    ; creates root (index 0) = the drive root "/"
+        void xscan.scan_dir(0)          ; log the drive root
         xtree.d_flags[0] |= xtree.FL_EXPANDED
+
+        ; open the tree down to the launch directory and start with that folder selected
+        ; (XTree-style: the whole drive is logged from the root, current folder highlighted)
+        start_node = xscan.open_path(pathbuf)
+        void xscan.scan_dir(start_node)
+        xtree.d_flags[start_node] |= xtree.FL_EXPANDED
         xtree.rebuild_visible()
 
         focus = FOCUS_TREE
-        tree_cursor = 0
         tree_top = 0
-        select_dir(0)
+        set_tree_cursor_to(start_node)
+        select_dir(start_node)
 
         full_redraw()
         repeat {
@@ -197,14 +209,10 @@ main {
                     when g_key {
                         'q'  -> {
                             if confirm_quit() {
-                                void strings.copy(xtree.base_path, exit_dir)  ; quit to startup dir
+                                xtree.build_path(start_node, exit_dir)  ; quit to the launch dir
                                 break
                             }
                             dirty_cmd = true        ; restore the menu the prompt covered
-                        }
-                        '?'  -> {
-                            show_about()
-                            dirty_full = true
                         }
                         9    -> change_focus(FOCUS_FILE - focus)   ; TAB toggles pane
                         29   -> change_focus(FOCUS_FILE)           ; cursor-right
@@ -374,6 +382,19 @@ main {
     }
 
     sub change_focus(ubyte newfocus) {
+        ; Entering the FILE column on a directory that hasn't been logged yet logs it now
+        ; (scan folders + files) so the file pane has something to show, instead of landing
+        ; on an empty column. Mirrors the Enter key's first-time scan. Covers TAB and
+        ; cursor-right; switching back to the tree never triggers a scan.
+        if newfocus == FOCUS_FILE and xtree.d_flags[cur_dir] & xtree.FL_SCANNED == 0 {
+            void xscan.scan_dir(cur_dir)
+            if xtree.has_kids(cur_dir)
+                xtree.d_flags[cur_dir] |= xtree.FL_EXPANDED
+            xtree.rebuild_visible()
+            set_tree_cursor_to(cur_dir)
+            select_dir(cur_dir)
+            dirty_status = true
+        }
         focus = newfocus
         ; both panes' selection indicators flip (bar <-> '>') and the menu changes
         dirty_tree = true
@@ -424,6 +445,18 @@ main {
                 dirty_files = true
                 dirty_status = true
                 dirty_cmd = true        ; prompt was drawn over the menu
+            }
+            'p' -> {
+                op_prune()
+                dirty_full = true       ; confirm prompt + result message covered the screen
+            }
+            134 -> {                    ; F3: re-read (relog) this directory's sub-folders
+                op_relog()
+                dirty_full = true
+            }
+            'a' -> {                    ; A: about (replaces the old '?')
+                show_about()
+                dirty_full = true
             }
         }
     }
@@ -739,9 +772,8 @@ main {
                 print_trunc(namebuf, 27)
                 txt.plot(FILE_SIZE, srow)
                 txt.print_uw(xfiles.get_blocks(i))
-                ; tagged rows shown in yellow; the focused selection bar overrides
-                if xfiles.is_tagged(i)
-                    hilite_row(FILE_MARK, FILE_BAR_R, srow, COL_TAGROW)
+                ; tagged files are flagged by the '*' marker only - the row keeps the
+                ; normal colours (no bar). The focused selection bar still wins on the cursor.
                 if i == file_cursor and focus == FOCUS_FILE
                     hilite_row(FILE_MARK, FILE_BAR_R, srow, HILITE)
             }
@@ -773,11 +805,16 @@ main {
         if focus == FOCUS_TREE {
             txt.print("ENTER log  m")
             hk('K')
-            txt.print("dir  TAB files  ")
-            hk('?')
-            txt.print("about  ")
-            hk('Q')
-            txt.print("uit")
+            txt.print("dir  ")
+            hk('P')
+            txt.print("rune  TAB files  ")
+            txt.color(COL_ACCENT)
+            txt.print("F3")
+            txt.color(COL_FG)
+            txt.print(" relog")
+            txt.plot(74, CMDROW1)       ; About pinned to the far right of row 1 (key: A)
+            hk('A')
+            txt.print("bout")
         } else {
             hk('T')
             txt.print("ag ")
@@ -796,11 +833,7 @@ main {
             hk('R')
             txt.print("ename ")
             hk('D')
-            txt.print("elete  ")
-            hk('?')
-            txt.print("about  ")
-            hk('Q')
-            txt.print("uit")
+            txt.print("elete")
         }
     }
 
@@ -842,9 +875,7 @@ main {
         txt.color(COL_ACCENT)
         txt.print("  F3")
         txt.color(COL_FG)
-        txt.print(" relog  ")
-        hk('Q')
-        txt.print("uit-here")
+        txt.print(" relog")
     }
 
     sub draw_commands() {
@@ -874,17 +905,30 @@ main {
         txt.plot(TREE_TEXT, CMDROW2)
         txt.color(COL_FG)
         if menu_mode == 0 {
-            txt.print("hold ")
-            txt.color(COL_ACCENT)
-            txt.print("CTRL")
-            txt.color(COL_FG)
-            txt.print(" or ")
-            txt.color(COL_ACCENT)
-            txt.print("ALT")
-            txt.color(COL_FG)
-            txt.print(" for more commands")
+            if focus == FOCUS_FILE {            ; the DIR column has no CTRL/ALT commands, so
+                txt.print("hold ")             ; it shows no "hold CTRL/ALT" hint at all
+                txt.color(COL_ACCENT)
+                txt.print("CTRL")
+                txt.color(COL_FG)
+                txt.print(" or ")
+                txt.color(COL_ACCENT)
+                txt.print("ALT")
+                txt.color(COL_FG)
+                txt.print(" for more commands")
+            }
         } else {
             txt.print("release to return to the MENU")
+        }
+        ; Quit pinned to the far right of row 2 on every menu. In the ALT menu it is the
+        ; "Quit-here" variant (Alt-Q quits to the CURRENT dir); elsewhere it's plain Quit.
+        if menu_mode == 2 {
+            txt.plot(70, CMDROW2)
+            hk('Q')
+            txt.print("uit-here")
+        } else {
+            txt.plot(75, CMDROW2)
+            hk('Q')
+            txt.print("uit")
         }
     }
 
@@ -952,6 +996,48 @@ main {
             xtree.d_flags[cur_dir] |= xtree.FL_EXPANDED
             xtree.rebuild_visible()
             set_tree_cursor_to(cur_dir)
+        }
+    }
+
+    sub op_prune() {
+        ; P (tree col): recursively delete the selected directory and EVERYTHING under it.
+        ; Guarded by a typed confirmation - the user must retype the directory's exact name.
+        ; xscan.prune does the disk work; on success we unlink the node from the tree.
+        ubyte idx = cur_dir
+        if idx == 0 {
+            flash("can't prune the drive root")
+            return
+        }
+        if not input_line("PRUNE - type 'prune' to confirm:", inputbuf, 49, "prune", false)
+            return
+        if strings.compare(inputbuf, "prune") != 0 {
+            flash("not confirmed - prune cancelled")
+            return
+        }
+        ubyte parent = xtree.d_parent[idx]
+        ubyte uprow = tree_cursor                       ; pruned dir's visible row (>=1; root
+        if uprow != 0                                   ; is never prunable) -> land ONE row up,
+            uprow--                                     ; i.e. on the previous entry, not the top
+        xtree.build_path(parent, pathbuf)               ; parent dir (absolute, trailing '/')
+        void strings.copy(xtree.name_ptr(idx), namebuf) ; stable copy of the target name
+        msg_begin()
+        txt.print("pruning ")
+        print_trunc(namebuf, 40)
+        txt.print(" ...")
+        bool ok = xscan.prune(pathbuf, namebuf)
+        diskio.chdir(pathbuf)                           ; restore cwd to the parent
+        if ok {
+            xtree.unlink(idx)
+            xtree.rebuild_visible()
+            if uprow >= xtree.vis_count                 ; safety clamp after the node vanished
+                uprow = xtree.vis_count - 1
+            tree_cursor = uprow
+            if tree_cursor < tree_top                   ; keep the cursor on-screen
+                tree_top = tree_cursor
+            select_dir(xtree.vis_idx[uprow])
+            flash("pruned")
+        } else {
+            flash("prune failed (partial) - rescan the dir")
         }
     }
 
@@ -1699,11 +1785,42 @@ main {
         ubyte cur = 0
         ubyte top = 0
         ubyte idx
+        ; draw the box chrome ONCE (outside the loop, so it never flickers on scroll): an
+        ; empty-title box, then a CENTERED title on the top border and a CENTERED footer on
+        ; the bottom border with the hotkeys picked out in the accent colour.
+        const ubyte BIW = BX1 - BX0 - 1             ; box interior width
+        draw_box(BX0, BY0, BX1, BY1, "")
+        txt.plot(BX0 + 1 + (BIW - 18) / 2, BY0)     ; " pick a directory " = 18 chars
+        txt.color(COL_TITLE)
+        txt.print(" pick a directory ")
+        txt.color(COL_FG)
+        txt.plot(BX0 + 1 + (BIW - 46) / 2, BY1)     ; footer hint below = 46 chars
+        txt.color(COL_ACCENT)
+        txt.print("Up/Dn")
+        txt.color(COL_FG)
+        txt.print(" move  ")
+        txt.color(COL_ACCENT)
+        txt.print(">")
+        txt.color(COL_FG)
+        txt.print("expand ")
+        txt.color(COL_ACCENT)
+        txt.print("<")
+        txt.color(COL_FG)
+        txt.print("collapse  ")
+        txt.color(COL_ACCENT)
+        txt.print("Enter")
+        txt.color(COL_FG)
+        txt.print(" pick  ")
+        txt.color(COL_ACCENT)
+        txt.print("Esc")
+        txt.color(COL_FG)
         repeat {
-            draw_box(BX0, BY0, BX1, BY1, " pick a directory ")
+            ; repaint only the interior list rows (blank each first so longer prior names
+            ; don't leave a tail behind when scrolling)
             ubyte row
             for row in 0 to VIS-1 {
                 ubyte srow = BY0 + 1 + row
+                blank_span(BX0+1, BX1-1, srow)
                 ubyte i = top + row
                 if i < xtree.vis_count {
                     idx = xtree.vis_idx[i]
@@ -1726,10 +1843,6 @@ main {
                         hilite_row(BX0+1, BX1-1, srow, HILITE)
                 }
             }
-            txt.plot(BX0+2, BY1)
-            txt.color(COL_ACCENT)
-            txt.print(" Up/Dn move  >expand <collapse  Enter pick  Esc ")
-            txt.color(COL_FG)
 
             g_key = wait_key()
             when g_key {
@@ -1804,8 +1917,7 @@ main {
         ; F2 (when dirpick) picks a directory from the tree, Enter accepts, Esc cancels.
         ; `histname` selects the history category file.
         hist_load(histname)
-        blank_span(1, 78, CMDROW1)
-        blank_span(1, 78, CMDROW2)
+        hlprs.clear_section(1, CMDROW1, 78, 2, (COL_BG << 4) | COL_FG)
         txt.color(COL_ACCENT)
         txt.plot(1, MSGROW)
         txt.print(prompt)
@@ -1855,8 +1967,7 @@ main {
                         ; the picker drew over the panes; repaint, then re-show the prompt
                         full_redraw()
                         dirty_full = true
-                        blank_span(1, 78, CMDROW1)
-                        blank_span(1, 78, CMDROW2)
+                        hlprs.clear_section(1, CMDROW1, 78, 2, (COL_BG << 4) | COL_FG)
                         txt.color(COL_ACCENT)
                         txt.plot(1, MSGROW)
                         txt.print(prompt)
@@ -1873,8 +1984,7 @@ main {
                         ubyte picked = pick_dir()
                         full_redraw()
                         dirty_full = true
-                        blank_span(1, 78, CMDROW1)
-                        blank_span(1, 78, CMDROW2)
+                        hlprs.clear_section(1, CMDROW1, 78, 2, (COL_BG << 4) | COL_FG)
                         txt.color(COL_ACCENT)
                         txt.plot(1, MSGROW)
                         txt.print(prompt)
@@ -1913,6 +2023,8 @@ main {
 
     sub hilite_row(ubyte x0, ubyte x1, ubyte row, ubyte color) {
         ; paint a full-width selection bar over an already-drawn row
+        ; (the single-row case of hlprs.clr_section; kept inline as it's smaller in the
+        ;  hot draw loops than a by-variable call into the shared 5-arg helper)
         ubyte x
         for x in x0 to x1
             txt.setclr(x, row, color)
@@ -2036,10 +2148,12 @@ main {
             ; the next keypress is dispatched as a CTRL or ALT command (see main loop)
             ubyte hold = cx16.kbdbuf_get_modifiers()
             ubyte want = 0
-            if (hold & MOD_CTRL) != 0
-                want = 1
-            else if (hold & MOD_ALT) != 0
-                want = 2
+            if focus == FOCUS_FILE {            ; CTRL/ALT commands act on files - the DIR
+                if (hold & MOD_CTRL) != 0       ; column has none, so it always stays on the
+                    want = 1                    ; plain MENU regardless of the held modifier
+                else if (hold & MOD_ALT) != 0
+                    want = 2
+            }
             if want != menu_mode {
                 menu_mode = want
                 draw_commands()
@@ -2176,7 +2290,11 @@ main {
     }
 
     sub show_about() {
-        draw_box(HX0, HY0, HX1, HY1, " About ")
+        const ubyte BIW = HX1 - HX0 - 1             ; box interior width
+        draw_box(HX0, HY0, HX1, HY1, "")
+        txt.plot(HX0 + 1 + (BIW - 7) / 2, HY0)      ; centered " About " (7 chars) on top border
+        txt.color(COL_TITLE)
+        txt.print(" About ")
         txt.color(COL_FG)
         aboutln(2,  "X F M G R")
         aboutln(4,  "an XTree-style file manager")
@@ -2192,8 +2310,8 @@ main {
         txt.print(" banks")
         aboutln(12, "written in Prog8")
         aboutln(13, "(c)2026 sadLogic")
+        txt.plot(HX0 + 1 + (BIW - 15) / 2, HY1-1)   ; centered " press any key " (15 chars)
         txt.color(COL_ACCENT)
-        txt.plot(HX0+2, HY1-1)
         txt.print(" press any key ")
         txt.color(COL_FG)
         void wait_key()

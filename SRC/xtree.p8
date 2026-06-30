@@ -138,8 +138,9 @@ xtree {
     sub init() {
         dir_count = 0
         dname_next = 0
-        ; capture where we are on the disk as the root path
-        void strings.copy(diskio.curdir(), base_path)
+        ; the tree is always anchored at the drive root, so paths built from node 0 are
+        ; absolute regardless of which subdirectory XFMGR was launched from
+        void strings.copy("/", base_path)
         ; create the root node (its on-screen name is the disk/volume name)
         ubyte root = new_node(diskio.diskname(), NONE)
         d_flags[root] |= FL_EXPANDED
@@ -194,6 +195,26 @@ xtree {
         }
         d_flags[parent] |= FL_HASKIDS
         return idx
+    }
+
+    sub unlink(ubyte idx) {
+        ; detach idx from its parent's child chain (used after a directory is pruned on
+        ; disk). The node slot itself is NOT reclaimed - the pool is append-only, so it
+        ; just leaks until the next full reset(); its now-unreachable subtree leaks too.
+        ubyte parent = d_parent[idx]
+        if parent == NONE
+            return                          ; root has no parent; never unlinked
+        if d_first_child[parent] == idx {
+            d_first_child[parent] = d_next_sibling[idx]
+        } else {
+            ubyte s = d_first_child[parent]
+            while s != NONE and d_next_sibling[s] != idx
+                s = d_next_sibling[s]
+            if s != NONE
+                d_next_sibling[s] = d_next_sibling[idx]
+        }
+        if d_first_child[parent] == NONE
+            d_flags[parent] &= ~FL_HASKIDS  ; parent lost its last child: drop the +/- marker
     }
 
     sub is_expanded(ubyte idx) -> bool {
