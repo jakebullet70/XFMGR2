@@ -77,6 +77,13 @@ main {
     const ubyte SC_JT = sc:'┬'
     const ubyte SC_JB = sc:'┴'
 
+    ; bottom-menu key glyphs. The X16 (Commodore) charset has no CP437, so the
+    ; original  cp437:"◄╛"  Enter/return symbol is rebuilt from the native
+    ; left-arrow + corner ("←┘": come down, turn left, arrowhead), and the up-arrow
+    ; is the native ↑. PETSCII-encoded so txt.print streams them straight out.
+    str CR_STR       = petscii:"←┘"     ; Enter / carriage-return key
+    str UP_ARROW_STR = petscii:"↑"      ; cursor up-arrow
+
     ubyte focus
     ubyte tree_cursor, tree_top
     ubyte file_cursor, file_top
@@ -422,22 +429,27 @@ main {
                     dirty_status = true
                 }
             }
-            13 -> {                     ; enter: log / expand / collapse
+            13 -> {                     ; enter: log / expand / collapse / drill into files
                 ubyte idx = cur_dir
                 if xtree.d_flags[idx] & xtree.FL_SCANNED == 0 {
-                    void xscan.scan_dir(idx)
+                    void xscan.scan_dir(idx)        ; 1st Enter: log this dir
                     if xtree.has_kids(idx)
                         xtree.d_flags[idx] |= xtree.FL_EXPANDED
                     xtree.rebuild_visible()
                     set_tree_cursor_to(idx)
                     select_dir(idx)
-                } else {
-                    xtree.toggle_expand(idx)
+                    dirty_tree = true
+                    dirty_files = true
+                    dirty_status = true
+                } else if xtree.has_kids(idx) {
+                    xtree.toggle_expand(idx)        ; already logged, has subdirs: expand/collapse
                     set_tree_cursor_to(idx)
+                    dirty_tree = true
+                    dirty_files = true
+                    dirty_status = true
+                } else {
+                    change_focus(FOCUS_FILE)        ; logged, no subdirs: drill into the file pane
                 }
-                dirty_tree = true
-                dirty_files = true
-                dirty_status = true
             }
             'k' -> {
                 op_mkdir()
@@ -463,6 +475,9 @@ main {
 
     sub handle_file(ubyte key) {
         when key {
+            13 -> {                     ; enter: hop back to the dir tree column
+                change_focus(FOCUS_TREE)
+            }
             145 -> {                    ; up
                 if file_cursor != 0 {
                     file_cursor--
@@ -803,11 +818,18 @@ main {
     sub menu_plain_items() {
         ; the no-modifier commands, context-sensitive (tree vs file pane)
         if focus == FOCUS_TREE {
-            txt.print("ENTER log  m")
+            txt.color(COL_ACCENT)
+            txt.print(CR_STR)
+            txt.color(COL_FG)
+            txt.print("log  m")
             hk('K')
             txt.print("dir  ")
             hk('P')
-            txt.print("rune  TAB files  ")
+            txt.print("rune  ")
+            txt.color(COL_ACCENT)
+            txt.print("TAB")
+            txt.color(COL_FG)
+            txt.print(" files  ")
             txt.color(COL_ACCENT)
             txt.print("F3")
             txt.color(COL_FG)
@@ -915,6 +937,11 @@ main {
                 txt.print("ALT")
                 txt.color(COL_FG)
                 txt.print(" for more commands")
+            } else {                            ; tree pane: what Enter does here
+                txt.color(COL_ACCENT)
+                txt.print(CR_STR)
+                txt.color(COL_FG)
+                txt.print("open/log a folder")
             }
         } else {
             txt.print("release to return to the MENU")
@@ -1499,8 +1526,8 @@ main {
             firstbank, xarena.max_bank, namebuf,    ; last bank = this machine's real top bank
             mkword(%00000011, strings.length(namebuf)),   ; opts: auto-indent + word-wrap
             mkword(80, 4),                                 ; wrap col 80, tab stop 4
-            mkword($61, diskio.drivenumber),               ; normal colour, drive
-            mkword($16, $16))                              ; header / status colours
+            mkword((COL_BG << 4) | COL_FG, diskio.drivenumber),   ; normal: white on dark-gray (app theme), drive
+            mkword(HILITE, HILITE))                        ; header / status: light-blue bar (app accent)
         cx16.rombank(oldrom)
         sys.disable_caseswitch()
         diskio.chdir(pathbuf)                   ; X16Edit can change dir; restore ours
@@ -1893,7 +1920,7 @@ main {
         ; key help on the second command row, shown under any text prompt
         txt.plot(TREE_TEXT, CMDROW2)
         txt.color(COL_ACCENT)
-        txt.print("Up")
+        txt.print(UP_ARROW_STR)
         txt.color(COL_FG)
         txt.print("=history  ")
         if dirpick {
@@ -1903,7 +1930,7 @@ main {
             txt.print("=dir tree  ")
         }
         txt.color(COL_ACCENT)
-        txt.print("Enter")
+        txt.print(CR_STR)
         txt.color(COL_FG)
         txt.print("=OK  ")
         txt.color(COL_ACCENT)
