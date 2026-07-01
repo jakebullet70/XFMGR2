@@ -2,7 +2,10 @@
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
-on the right, with file **tagging** and a built-in **viewer**.
+on the right, with file **tagging** and a built-in **viewer**.  
+
+<img width="802" height="633" alt="image" src="https://github.com/user-attachments/assets/817859a9-4dc9-4e4c-bc4a-76ed56dec40f" />
+
 
 ## Build & run
 
