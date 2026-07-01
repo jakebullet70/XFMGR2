@@ -220,6 +220,20 @@ xtree {
             d_flags[parent] &= ~FL_HASKIDS  ; parent lost its last child: drop the +/- marker
     }
 
+    sub unlog(ubyte idx) {
+        ; Return a directory to its just-created, UNSCANNED state (the inverse of a scan):
+        ; cut its whole logged child subtree loose and clear the scan/expand flags, so the
+        ; pane shows "(Enter to log)" again and it will re-scan fresh on the next Enter.
+        ; Like unlink(), the orphaned child slots (and their name-arena bytes) LEAK - the
+        ; node pool and name arena are append-only - but they drop out of the visible tree
+        ; and are reclaimed on the next full reset(). The banked file records this dir
+        ; pointed at are likewise abandoned as dead space (see xarena; reset() reclaims).
+        d_first_child[idx] = NONE
+        d_flags[idx] &= ~(FL_SCANNED | FL_EXPANDED | FL_HASKIDS | FL_DENIED)
+        dx_clear(idx)                       ; file_count / off / bank + tagged -> 0
+        rebuild_visible()
+    }
+
     sub is_expanded(ubyte idx) -> bool {
         return d_flags[idx] & FL_EXPANDED != 0
     }

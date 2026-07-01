@@ -384,6 +384,10 @@ main {
                 op_relog()
                 dirty_full = true
             }
+            'r' -> {                        ; Alt-R: release (un-log) the current folder
+                op_release()
+                dirty_full = true           ; tree rows vanished + flash may cover the menu
+            }
             else -> { }
         }
     }
@@ -897,7 +901,9 @@ main {
         txt.color(COL_ACCENT)
         txt.print("  F3")
         txt.color(COL_FG)
-        txt.print(" relog")
+        txt.print(" relog  ")
+        hk('R')
+        txt.print("elease")
     }
 
     sub draw_commands() {
@@ -1548,6 +1554,22 @@ main {
             xtree.build_path(cur_dir, pathbuf)
             run_exit = true
         }
+    }
+
+    sub op_release() {
+        ; Alt-R (file pane): un-log the current folder to free the memory it holds. Clears
+        ; its scanned state, drops its logged subfolders + file records, and collapses it
+        ; back to the "(Enter to log)" state; a later Enter re-scans it fresh. The banked
+        ; bytes are reclaimed on the next full reset (the arena is append-only, see xarena),
+        ; so this releases the folder LOGICALLY. Nothing to release if it was never logged.
+        if xtree.d_flags[cur_dir] & xtree.FL_SCANNED == 0 {
+            flash("folder not logged")
+            return
+        }
+        xtree.unlog(cur_dir)
+        set_tree_cursor_to(cur_dir)             ; visible rows shrank; re-anchor the cursor
+        select_dir(cur_dir)                     ; file pane -> empty / (Enter to log)
+        focus = FOCUS_TREE                      ; released folder is empty; land back in the tree
     }
 
     sub chain_run(str name) {
