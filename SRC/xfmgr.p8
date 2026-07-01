@@ -139,6 +139,8 @@ main {
     str cm_ddir = "?" * 80
     str cm_src  = "?" * 132
     str cm_dst  = "?" * 132
+    ubyte cm_fail                           ; copy_one failure point: 0 ok/none, 1 src-open, 2 dst-open, 3 write
+    ubyte cm_wstat                          ; DOS status code captured when a write fails (diagnostic)
 
     ; shared text-input history (XTreeGold): the last HIST_N accepted entries,
     ; newest first. UP-arrow in any input pops up a scrollable picker.
@@ -344,13 +346,13 @@ main {
                 show_all()
                 dirty_full = true
             }
-            'c' -> {                        ; Ctrl-C: copy tagged files (global)
-                op_copymove_global(false)
+            'c' -> {                        ; Ctrl-C: copy this dir's tagged files
+                op_copymove(false, true)
                 dirty_full = true
             }
-            'o' -> {                        ; Ctrl-O: move tagged files (global)
+            'o' -> {                        ; Ctrl-O: move this dir's tagged files
                                             ; (Ctrl-M is Enter/$0D, eaten by the kernal)
-                op_copymove_global(true)
+                op_copymove(true, true)
                 dirty_full = true
             }
             'w' -> {                        ; Ctrl-W: tag files by wildcard
@@ -548,14 +550,14 @@ main {
                 dirty_cmd = true
             }
             'c' -> {
-                op_copymove(false)
+                op_copymove(false, false)       ; copy the single highlighted file (ignores tags)
                 dirty_tree = true               ; a copy can create a new dest folder in the tree
                 dirty_files = true
                 dirty_status = true
                 dirty_cmd = true
             }
             'm' -> {
-                op_copymove(true)
+                op_copymove(true, false)        ; move the single highlighted file (ignores tags)
                 dirty_tree = true               ; dest dir's tree counts may change
                 dirty_files = true
                 dirty_status = true
@@ -1038,6 +1040,11 @@ main {
             return
         }
         void strings.copy(xtree.name_ptr(idx), namebuf)     ; stable copy of the dir name
+        xtree.build_path(idx, pathbuf)                      ; the folder's own path
+        if not xscan.dir_is_empty(pathbuf) {                ; check emptiness up front, so a
+            flash("folder not empty - use Prune for a tree") ; non-empty folder is refused
+            return                                          ; before we bother confirming
+        }
         msg_begin()
         txt.print("Delete empty folder ")
         print_trunc(namebuf, 24)
@@ -1052,7 +1059,7 @@ main {
         diskio.chdir(pathbuf)
         diskio.rmdir(namebuf)
         if diskio.status_code() != 0 {
-            flash("folder not empty - use Prune for a tree")
+            flash("delete failed - relog the folder")        ; emptiness was pre-checked
             return
         }
         xtree.unlink(idx)                                   ; gone on disk -> drop it from the tree
@@ -1217,18 +1224,25 @@ main {
     }
 
     sub copy_one(str fname) -> bool {
-        ; stream-copy cm_sdir+fname -> cm_ddir+fname (both absolute paths). Source is
-        ; opened on the READ channel, dest on the WRITE channel (different logical
-        ; files), so both can be open at once and we copy in 255-byte chunks.
+        ; stream-copy cm_sdir+fname (absolute source, READ channel) into fname in the
+        ; CURRENT directory (WRITE channel). The caller has chdir'd into the dest dir, so
+        ; the dest is opened by BARE NAME: hostfs lands writes in the current dir, and an
+        ; absolute write path is the case that fails to resolve. The two channels are
+        ; different logical files, so both stay open while we copy in 255-byte chunks.
         void strings.copy(cm_sdir, cm_src)
         void strings.append(cm_src, fname)
-        void strings.copy(cm_ddir, cm_dst)
-        void strings.append(cm_dst, fname)
 
-        if not diskio.f_open(cm_src)
+        diskio.delete(fname)                     ; allow overwrite: CBM-DOS/hostfs won't truncate
+                                                 ; an existing file on open, so clear this name in
+                                                 ; the dest dir first (no-op when it isn't there)
+        if not diskio.f_open(cm_src) {
+            cm_fail = 1                          ; source file wouldn't open
             return false
-        if not diskio.f_open_w(cm_dst) {
+        }
+        if not diskio.f_open_w(fname) {
             diskio.f_close()
+            cm_fail = 2                          ; dest wouldn't open (missing dir / name clash?)
+            cm_wstat = diskio.status_code()      ; grab the DOS code for the diagnostic
             return false
         }
         bool ok = true
@@ -1237,6 +1251,8 @@ main {
             if n == 0
                 break
             if not diskio.f_write(&viewbuf, n) {
+                cm_fail = 3                       ; write failed
+                cm_wstat = diskio.status_code()   ; grab the DOS error code for the diagnostic
                 ok = false
                 break
             }
@@ -1290,8 +1306,10 @@ main {
     }
 
     sub ensure_dest_dir(str path) -> bool {
-        ; make sure the copy/move destination exists; if not, offer to create it.
-        ; returns false only if it is missing AND the user declines (caller then aborts).
+        ; make sure the copy/move destination exists; if not, offer to create it. Returns
+        ; false if it is missing AND the user declines, OR the create failed (caller aborts).
+        ; On a true return the CWD is left inside `path` (dir_exists chdir'd into it), which
+        ; is exactly what copy_one needs - it writes each file by bare name into the CWD.
         if dir_exists(path)
             return true
         msg_begin()
@@ -1299,14 +1317,22 @@ main {
         if not yes_no()
             return false
         make_last_dir(path)
-        return true
+        if dir_exists(path)                     ; confirm it really got created (and enter it)
+            return true
+        flash("could not create dest folder")
+        return false
     }
 
-    sub op_copymove(bool is_move) {
+    sub op_copymove(bool is_move, bool use_tags) {
+        ; use_tags=false (plain C/M): act on the single highlighted file, IGNORING tags.
+        ; use_tags=true  (CTRL C/O):  act on every tagged file in THIS directory only.
+        ; (cross-directory batch copy/move lives in ShowAll - see op_copymove_global.)
         if xfiles.ft_count == 0
             return
-        ; working set: all tagged files if any, else just the highlighted file
-        bool whole = xtree.dx_tag(cur_dir) != 0
+        if use_tags and xtree.dx_tag(cur_dir) == 0 {
+            flash("no tagged files in this dir")
+            return
+        }
 
         if is_move {
             if not input_line("Move to dir:", inputbuf, 79, "move", true)
@@ -1334,14 +1360,17 @@ main {
         }
         if not ensure_dest_dir(cm_ddir)         ; offer to create a missing destination
             return
-
+        diskio.chdir(cm_ddir)                   ; run the copy with the DEST as cwd - hostfs lands
+                                                ; writes in the current dir, so a freshly created
+                                                ; target must be entered (an existing one already is)
         uword done = 0
         uword failed = 0
+        cm_fail = 0
         ubyte i
         for i in 0 to xfiles.ft_count-1 {
-            if whole and not xfiles.is_tagged(i)
+            if use_tags and not xfiles.is_tagged(i)
                 continue
-            if not whole and i != file_cursor
+            if not use_tags and i != file_cursor
                 continue
             xfiles.get_name(i, namebuf)
             if copy_one(namebuf) {
@@ -1370,7 +1399,10 @@ main {
 
         clamp_file_cursor()
 
-        banner_copymove(is_move, done, failed)
+        if done == 0
+            copy_diag(xfiles.ft_count, xtree.dx_tag(cur_dir), file_cursor, failed)
+        else
+            banner_copymove(is_move, done, failed)
     }
 
     sub find_dir_by_path(str p) -> ubyte {
@@ -1419,8 +1451,9 @@ main {
     }
 
     sub op_copymove_global(bool is_move) {
-        ; Ctrl-C / Ctrl-M: copy or move EVERY tagged file (across all logged dirs) to a
-        ; chosen destination. Each file is copied from its own source directory.
+        ; ShowAll C/M: copy or move EVERY tagged file (across all logged dirs) to a chosen
+        ; destination. Each file is copied from its own source directory. This is the one
+        ; cross-directory batch; the CTRL menu's Copy/Move act on the current dir only.
         xfiles.collect_tagged()
         if xfiles.sa_count == 0 {
             flash("no tagged files anywhere")
@@ -1444,9 +1477,11 @@ main {
         ensure_slash(cm_ddir)
         if not ensure_dest_dir(cm_ddir)         ; offer to create a missing destination
             return
+        diskio.chdir(cm_ddir)                   ; copy with the dest as cwd (hostfs writes there)
 
         uword done = 0
         uword failed = 0
+        cm_fail = 0
         ubyte i
         for i in 0 to xfiles.sa_count-1 {
             xtree.build_path(xfiles.sa_dir[i], cm_sdir)     ; this file's source dir
@@ -1477,7 +1512,10 @@ main {
         void xfiles.build_index(cur_dir)
         clamp_file_cursor()
 
-        banner_copymove(is_move, done, failed)
+        if done == 0
+            copy_diag(xfiles.sa_count, xfiles.sa_count, 0, failed)
+        else
+            banner_copymove(is_move, done, failed)
     }
 
     sub op_sort() {
@@ -1916,6 +1954,35 @@ main {
             txt.chrout($92)
             sys.wait(200)                                     ; linger a little on problems
         }
+    }
+
+    sub copy_diag(uword nfiles, uword ntag, uword cur, uword failed) {
+        ; shown ONLY when a copy/move produced 0 files, to reveal WHY: whether nothing got
+        ; selected (a tag/cursor mismatch: tag:0 cur out of range) or the on-disk file opens/
+        ; writes failed. Waits for a key so the numbers can be read and reported.
+        msg_begin()
+        txt.print("0 copied  files:")
+        txt.print_uw(nfiles)
+        txt.print(" tag:")
+        txt.print_uw(ntag)
+        txt.print(" cur:")
+        txt.print_uw(cur)
+        txt.print(" fail:")
+        txt.print_uw(failed)
+        txt.print(" ")
+        when cm_fail {
+            1 -> txt.print("SRCopen")
+            2 -> txt.print("DSTopen")
+            3 -> {
+                txt.print("write(")
+                txt.print_uw(cm_wstat)
+                txt.print(")")
+            }
+            else -> txt.print("noneSel")
+        }
+        txt.print("  -key-")
+        txt.chrout($92)
+        void wait_key()
     }
 
     sub edit_render(uword destptr, ubyte n, ubyte curpos, ubyte fieldcol) {
@@ -2406,7 +2473,7 @@ main {
             }
             txt.plot(2, 29)
             txt.color(COL_ACCENT)
-            txt.print("up/dn move   U untag   ESC/Q exit")
+            txt.print("up/dn  U untag  C copy  M move  ESC/Q exit")
             txt.color(COL_FG)
 
             g_key = wait_key()
@@ -2438,6 +2505,26 @@ main {
                             cursor = xfiles.sa_count - 1
                         if cursor < top
                             top = cursor
+                    }
+                }
+                'c' -> {                    ; copy EVERY tagged file (across all dirs) to one dest
+                    if xfiles.sa_count != 0 {
+                        op_copymove_global(false)
+                        xfiles.collect_tagged()
+                        top = 0
+                        if cursor >= xfiles.sa_count
+                            cursor = 0
+                        txt.clear_screen()  ; the copy prompt/banner drew over the modal
+                    }
+                }
+                'm' -> {                    ; move EVERY tagged file (across all dirs) to one dest
+                    if xfiles.sa_count != 0 {
+                        op_copymove_global(true)
+                        xfiles.collect_tagged()
+                        top = 0
+                        if cursor >= xfiles.sa_count
+                            cursor = 0
+                        txt.clear_screen()
                     }
                 }
             }

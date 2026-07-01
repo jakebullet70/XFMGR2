@@ -130,6 +130,23 @@ xscan {
         return found
     }
 
+    sub dir_is_empty(str dirpath) -> bool {
+        ; true if dirpath holds no files and no subdirectories (ignoring . / ..). Used to
+        ; check a folder BEFORE offering to delete it, so a non-empty one is refused up front.
+        diskio.chdir(dirpath)
+        if not diskio.lf_start_list("*")
+            return true                         ; can't list -> let rmdir be the final judge
+        bool empty = true
+        while diskio.lf_next_entry() {
+            if diskio.list_filename[0] == '.'
+                continue                        ; skip . / .. / hidden
+            empty = false
+            break
+        }
+        diskio.lf_end_list()
+        return empty
+    }
+
     sub delete_all_files(str dirpath) {
         ; Delete every (non-dir) file in dirpath. The emulator's HOSTFS ignores a wildcard
         ; scratch ("s:*" removes only ONE match), so enumerate and delete each by name.
