@@ -21,8 +21,9 @@ one array dropped the BSS high-water by exactly the predicted bytes).
 Implications for memory tuning here:
 - Sharing a single global for a throwaway temp IS a real (if small) saving, but only safe
   when no routine re-reads the temp across a nested call that also writes it. We did this for
-  the keystroke dispatch var `g_key` (see [[xfmgr-architecture]]). Loop counters (i/j/row)
-  are NOT safe to share - they nest across calls (draw_tree -> build_tree_line).
+  the keystroke dispatch var `g_key` (see [[xfmgr-architecture]]). Loop counters CAN also be
+  shared (`g_ndx`) but ONLY in "leaf" loops whose body calls no other main sub and doesn't
+  nest - else they clobber across calls (draw_tree -> build_tree_line). See [[xfmgr-g-ndx-loop-counter]].
 - Bigger wins come from right-sizing fixed arrays (e.g. view_pages), not from temp locals.
 - `build.bat` now prints the main-RAM high-water after each compile - watch it to measure
   any allocation change. See [[xfmgr-run-and-persistence]].

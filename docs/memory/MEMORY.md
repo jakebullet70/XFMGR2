@@ -7,6 +7,7 @@
 - [X16 ALT is the Commodore key](x16-alt-is-commodore-key.md) — ALT+letter returns a graphics code, not the letter
 - [Launching a PRG on exit](x16-launch-program-dynamic-keyboard.md) — 10-byte kbd buffer; dynamic-keyboard chain_run
 - [Prog8 static variable allocation](prog8-static-variable-allocation.md) — every local is its own byte; no overlap
+- [g_ndx shared loop counter](xfmgr-g-ndx-loop-counter.md) — one global reused by leaf for-loops; the safety rule
 - [Prog8 module-split cost](prog8-module-split-cost.md) — cross-module calls are free; per-block init is the real cost
 - [X16 banked RAM min config](x16-banked-ram-min-config.md) — stock = banks 0-63; reserve the LOWEST bank
 - [X16 Edit bank handoff](xfmgr-editor-bank-handoff.md) — op_edit lastbank must be xarena.max_bank, never 255
