@@ -1149,7 +1149,7 @@ main {
             sys.wait(90)                                     ; show ~1.5s, then auto-dismiss (no keypress)
             box_close()
         } else {
-            flash("prune failed (partial) - rescan the dir")
+            flash("Prune failed (partial) - rescan the dir")
         }
     }
 
