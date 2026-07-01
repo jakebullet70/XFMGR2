@@ -14,5 +14,6 @@
 - [Prune command](xfmgr-prune-command.md) — DIR-col P recursively deletes a dir subtree (iterative, typed confirm)
 - [Always report mem stats](always-report-mem-stats.md) — include build memory-stats block in replies
 - [Revisit ShowAll](xfmgr-showall-revisit.md) — backlog: ShowAll is tagged-only across logged dirs; consider a whole-disk flat browser
+- [ZIP/ARC support (V2)](xfmgr-zip-arc-v2.md) — backlog: browse/extract archives in V2; DEFLATE/ARC decompress is the hard part
 - [RAM savings menu](xfmgr-ram-savings-menu.md) — verified ~2.9 KB of held main-RAM savings + the 3 overflow bugs already fixed
 - [Memory is git-tracked](memory-is-git-tracked.md) — this memory folder is a junction into the repo (docs/memory)
