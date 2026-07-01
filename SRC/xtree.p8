@@ -165,9 +165,12 @@ xtree {
     sub new_node(str name, ubyte parent) -> ubyte {
         if dir_count >= DIR_MAX
             return NONE
+        uword noff = dname_store(name)      ; reserve the name FIRST; if the name arena is full
+        if noff == $ffff                    ; ($ffff) don't create a half-built node whose
+            return NONE                     ; name_ptr would dereference dname_buf+$ffff
         ubyte idx = dir_count
         dir_count++
-        d_name_off[idx]      = dname_store(name)
+        d_name_off[idx]      = noff
         d_parent[idx]        = parent
         d_first_child[idx]   = NONE
         d_next_sibling[idx]  = NONE

@@ -1584,7 +1584,8 @@ main {
             void strings.copy(hist_ptr(top-1), hist_ptr(top))
             top--
         }
-        void strings.copy(sptr, hist_ptr(0))
+        str_copy_cap(sptr, hist_ptr(0), HIST_W - 1)  ; cap: prompts accept up to 79 chars,
+                                                     ; a slot is only HIST_W (50) bytes wide
         if hist_count < HIST_N
             hist_count++
     }
@@ -2241,7 +2242,9 @@ main {
                         txt.spc()
                     xtree.build_path(xfiles.sa_dir[i], sa_line)
                     xfiles.sa_name(i, namebuf)
-                    void strings.append(sa_line, namebuf)
+                    ubyte sl = lsb(strings.length(sa_line))     ; append the filename with a cap
+                    if sl < 99                                  ; so path+name can't overflow the
+                        str_copy_cap(namebuf, &sa_line + sl, 99 - sl)  ; 100-byte sa_line buffer
                     print_trunc(sa_line, 70)
                     txt.plot(73, srow)
                     txt.print_uw(xfiles.sa_blocks(i))
