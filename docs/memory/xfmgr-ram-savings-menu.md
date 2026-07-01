@@ -12,6 +12,18 @@ found + adversarially verified these savings; the user chose to **fix the overfl
 bugs first and HOLD the RAM changes**. Byte figures are the corrected (post-verify)
 estimates. This is the backlog to draw from when reclaiming RAM.
 
+**UPDATE (later same session):** free RAM fell to ~1.0 KB (998 B) after adding dir-rename,
+the 2-line copy/move+relog banners, dir-panel Prune/Quit-here, and the copy/move "create
+missing dest?" prompt. (Note: `diskio.status_code()` is already linked via xscan;
+`diskio.status()` is NOT — using status() costs ~186 B, so prefer status_code().)
+
+**QUICK-WINS PACKAGE NOW APPLIED (same session):** recovered **+989 B → ~1.9 KB (1987 B)** free.
+Applied: DIR_MAX 192→128 (-512 B BSS, caps logged dirs at 128), HIST_N 15→10 (-250 B slab,
+10 recents), `clamp_file_cursor()` helper dedup of the ~8 file-index-rebuild clamps (-183 B
+image), pr_leaf/pr_sub merge in xscan (-40 B), his_fname 20→16 (-4 B). All verified by build.
+**Still on the shelf:** the **cold-bank move** (~1.6 KB: reserve one bank, push/pop_rambank
+the modal-only `sa_*`/`cm_*`/`view_pages`/`pr_*`) and `hist_buf`→bank (525 B, high effort).
+
 **Bugs already FIXED (this session):**
 - `hist_store()` SRC/xfmgr.p8 — uncapped `strings.copy` of a ≤79-char prompt input
   into a 50-byte (`HIST_W`) slot → overflow. Now `str_copy_cap(sptr, hist_ptr(0), HIST_W-1)`.

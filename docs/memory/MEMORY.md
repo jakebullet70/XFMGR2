@@ -15,5 +15,7 @@
 - [Always report mem stats](always-report-mem-stats.md) — include build memory-stats block in replies
 - [Revisit ShowAll](xfmgr-showall-revisit.md) — backlog: ShowAll is tagged-only across logged dirs; consider a whole-disk flat browser
 - [ZIP/ARC support (V2)](xfmgr-zip-arc-v2.md) — backlog: browse/extract archives in V2; DEFLATE/ARC decompress is the hard part
+- [Embedded PETSCII color codes](x16-embedded-petscii-color-codes.md) — inline \x9e/\x05/\x9a in one txt.print string saves bytes vs txt.color() calls
+- [User tests in emulator themselves](user-tests-in-emulator-themselves.md) — build & launch, then report; don't drive the GUI to verify
 - [RAM savings menu](xfmgr-ram-savings-menu.md) — verified ~2.9 KB of held main-RAM savings + the 3 overflow bugs already fixed
 - [Memory is git-tracked](memory-is-git-tracked.md) — this memory folder is a junction into the repo (docs/memory)
