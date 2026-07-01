@@ -1,15 +1,21 @@
 ---
 name: xfmgr-drop-viewer-ram
-description: "Measured RAM gain from removing the internal xviewer and routing View to X16 Edit: ~3.1 KB (biggest single reclaim)"
+description: "DONE (2026-07-01): pulled internal xviewer from XFMGR2 (+3.1 KB free); code preserved as standalone SRC/tview.p8"
 metadata: 
   node_type: memory
   type: project
   originSessionId: b8fa7cc6-ce21-49c0-9d7e-f50a35429b63
 ---
 
-**Option: pull the internal viewer (SRC/xviewer.p8), route View (V) to X16 Edit.**
-Measured by an A/B build (2026-07-01, viewer in vs. `handle_file 'v'` -> `op_edit()` +
-`%import xviewer` removed; `%option ignore_unused` drops the now-unreferenced module):
+**APPLIED 2026-07-01.** Pulled the internal viewer from XFMGR2. Code first saved as the
+self-contained standalone program **SRC/tview.p8** (own main/buffers/helpers, opens a
+filename directly, no editor fallback; compiles to tview.prg ~3637 B) - the seed for a
+future CALLABLE viewer. Then in xfmgr.p8: `handle_file 'v'` -> `op_edit()` (View opens
+X16 Edit like E), `%import xviewer` removed, **SRC/xviewer.p8 deleted** (module form is in
+git; tview.p8 is the live copy). Free RAM **705 B -> 3846 B**.
+
+**A/B measurement** (viewer in vs. `handle_file 'v'` -> `op_edit()` + `%import xviewer`
+removed; `%option ignore_unused` drops the now-unreferenced module):
 
 | | with viewer | viewer pulled | gain |
 |---|--:|--:|--:|
@@ -24,10 +30,9 @@ Measured by an A/B build (2026-07-01, viewer in vs. `handle_file 'v'` -> `op_edi
 fallback, so View just repoints to it. `viewbuf`/`namebuf`/`pathbuf` are shared with the
 copy path (main module), so they are NOT reclaimed and NOT lost.
 
-**What's lost:** read-only paged text viewer (V), hex-dump toggle (H), in-file
-case-insensitive search (F/N). After the change V opens X16 Edit like E — editable (can
-accidentally alter files), no hex, no search. Decision pending: the viewer is a real
-feature; only pull it if the 3.1 KB is needed more than read-only view/hex/search.
+**What's lost in XFMGR:** read-only paged viewer (V), hex toggle (H), in-file search
+(F/N) - all still live in SRC/tview.p8. V now opens X16 Edit like E (editable; can alter
+files), no hex, no search. **tview.p8 TODO:** filename hand-off from XFMGR, large-file
+(>64 KB) handling, optional path/chdir.
 
-To execute: `handle_file 'v'` -> `op_edit()`; delete `%import xviewer` (line ~18) and
-`SRC/xviewer.p8` from the build. Related: [[xfmgr-ram-savings-menu]], [[xfmgr-editor-bank-handoff]].
+Related: [[xfmgr-ram-savings-menu]], [[xfmgr-editor-bank-handoff]].

@@ -1,64 +1,102 @@
-; xviewer - read-only paged file viewer (text + hex) with in-file search.
+; tview - standalone read-only paged text/hex file viewer for the Commander X16.
 ;
-; V opens the selected file in a paged, READ-ONLY view (it never writes, so it can't
-; corrupt the file - unlike E/Edit which opens X16 Edit). Pages are rendered by
-; re-reading from a remembered file offset, so paging works both ways. Files too big
-; for the 16-bit pager are handed to X16 Edit (see view_file). H toggles a hex dump;
-; F/N search the file (case-insensitive) and jump to the hit.
-; TODO: highlight the search hit; native >64 KB paging (32-bit offsets).
+; Extracted from XFMGR2's internal viewer (was SRC/xviewer.p8) so XFMGR can drop the
+; ~3.1 KB of viewer code and this can grow into a separate, CALLABLE viewer program.
 ;
-; Extracted from xfmgr.p8. Reaches back into the main module for shared scratch buffers
-; (viewbuf/namebuf/pathbuf), screen helpers (blank_span/print_trunc/msg_begin), the
-; keystroke reader (wait_key) + shared key global (g_key), current selection state
-; (file_cursor/cur_dir) and the large-file fallback (op_edit).
+; Controls:  PgDn/PgUp page   T/Home top   H hex<->text   F find   N find-next   Q quit
+; The pager uses 16-bit file offsets, so it pages within the first 64 KB of a file.
+;
+; STANDALONE SEED - still TODO before it's a finished callable program:
+;   * Receive the target filename from the caller (XFMGR) instead of the hardcoded
+;     default below. Options: a fixed RAM hand-off area, a tiny param file, or args.
+;   * Decide large-file (>64 KB) behaviour (XFMGR used to bounce those to X16 Edit).
+;   * Optionally restore path handling (chdir into the file's directory).
 
 %import textio
 %import diskio
 %import strings
-%import xtree
-%import xfiles
+%zeropage basicsafe
 
-xviewer {
+main {
     %option ignore_unused
 
-    const ubyte VTOP   = 1              ; first text row (row 0 = header)
-    const ubyte VROWS  = 28             ; text rows 1..28
-    const ubyte VWIDTH = 79             ; wrap column (keep off col 79 to avoid auto-scroll)
-    ; the viewer addresses pages with 16-bit file offsets, so it can only page within the
-    ; first 64 KB. Files bigger than ~60 KB (240 dir blocks, safely under that ceiling for
-    ; either 254- or 256-byte blocks) are handed to X16 Edit instead, which is built for
-    ; large files. NOTE: that path is editable, unlike the read-only viewer.
-    const uword VIEW_MAX_BLOCKS = 240
+    const ubyte SCREEN_MODE = $01      ; 80x30 text (matches XFMGR)
+    const ubyte VTOP   = 1             ; first text row (row 0 = header)
+    const ubyte VROWS  = 28            ; text rows 1..28
+    const ubyte VWIDTH = 79            ; wrap column (keep off col 79 to avoid auto-scroll)
+    const ubyte SCR_BOT = 29           ; footer row
 
+    ; --- shared scratch (in XFMGR these lived in the main module) ---
+    ubyte[256] viewbuf                 ; read buffer (viewer reads up to 250 bytes/call)
+    str namebuf = "?" * 80             ; the file to view
+    ubyte g_key                        ; last key read
+    ubyte saved_mode                   ; screen mode to restore on exit
+
+    ; --- viewer state ---
     ; file offset of the top of each visited page, so paging can go both forward and
-    ; backward by re-reading from a known offset (offsets are 16-bit, so the viewer pages
-    ; within the first 64 KB of a file). 100 pages = 2800 rows, well past the 64 KB ceiling
-    ; for normal text; view_file caps paging here.
+    ; backward by re-reading from a known offset (offsets are 16-bit -> first 64 KB only).
     uword[100] view_pages
-    bool view_eof                       ; the last rendered page reached end-of-file
-    bool view_hex                       ; viewer showing hex dump (vs text)
-    uword view_off                      ; hex-mode current page top offset
-    ubyte view_page                     ; text-mode current page index
-    ubyte view_known                    ; text-mode highest page index with a known offset
-    str view_find = "?" * 33            ; in-file search term (<= 32 chars)
-    uword view_next                     ; offset to resume "find next" from
-    uword view_match                    ; offset of the last search hit
+    bool view_eof                      ; the last rendered page reached end-of-file
+    bool view_hex                      ; viewer showing hex dump (vs text)
+    uword view_off                     ; hex-mode current page top offset
+    ubyte view_page                    ; text-mode current page index
+    ubyte view_known                   ; text-mode highest page index with a known offset
+    str view_find = "?" * 33           ; in-file search term (<= 32 chars)
+    uword view_next                    ; offset to resume "find next" from
+    uword view_match                   ; offset of the last search hit
+
+    sub start() {
+        ; TODO: receive this from the caller. Hardcoded for now so the program is testable
+        ; standalone (XFMGR's run\ folder ships a README.TXT).
+        void strings.copy("README.TXT", namebuf)
+
+        saved_mode, cx16.r0L, cx16.r0H = cx16.get_screen_mode()
+        cx16.set_screen_mode(SCREEN_MODE)
+        view_run()
+        cx16.set_screen_mode(saved_mode)
+        txt.clear_screen()
+    }
+
+    ; ---------- shared helpers (ported from XFMGR's main module) ----------
+
+    sub blank_span(ubyte col0, ubyte col1, ubyte row) {
+        txt.plot(col0, row)
+        ubyte c
+        for c in col0 to col1
+            txt.spc()
+    }
+
+    sub print_trunc(str s, ubyte maxlen) {
+        ubyte i = 0
+        while i < maxlen and s[i] != 0 {
+            txt.chrout(s[i])
+            i++
+        }
+    }
+
+    sub wait_key() -> ubyte {
+        repeat {
+            ubyte k = cbm.GETIN2()
+            if k != 0
+                return k
+        }
+    }
+
+    ; ---------- text page render ----------
 
     sub view_render(uword start_off, bool draw) -> uword {
         ; Walk one page of text starting at byte offset start_off; return the offset where
         ; the next page begins, and set view_eof if end-of-file was reached on this page.
         ; When draw is false this only MEASURES the page (no screen output) - used to rebuild
         ; the page chain when jumping to a search hit, so PgUp still works afterwards.
-        ; Only the TEXT BODY is repainted - the header (row 0) and footer stay put, so
-        ; they don't flicker on every PgUp/PgDn.
         view_eof = false
         ubyte br
         if draw {
             for br in VTOP to VTOP + VROWS - 1
-                main.blank_span(0, 78, br)
+                blank_span(0, 78, br)
         }
 
-        if not diskio.f_open(main.namebuf) {
+        if not diskio.f_open(namebuf) {
             if draw {
                 txt.plot(0, VTOP)
                 txt.print("cannot open file.")
@@ -72,7 +110,7 @@ xviewer {
             uword want = 250
             if toskip < want
                 want = toskip
-            uword got = diskio.f_read(&main.viewbuf, want)
+            uword got = diskio.f_read(&viewbuf, want)
             if got == 0
                 break
             toskip -= got
@@ -86,7 +124,7 @@ xviewer {
         if draw
             txt.plot(0, VTOP)
         repeat {
-            uword n = diskio.f_read(&main.viewbuf, 250)
+            uword n = diskio.f_read(&viewbuf, 250)
             if n == 0 {
                 view_eof = true
                 break
@@ -94,7 +132,7 @@ xviewer {
             ubyte cnt = lsb(n)
             ubyte j
             for j in 0 to cnt-1 {
-                ubyte ch = main.viewbuf[j]
+                ubyte ch = viewbuf[j]
                 consumed++
                 if ch == 10 and prev_cr {
                     prev_cr = false             ; swallow the LF of a CR/LF pair
@@ -137,7 +175,7 @@ xviewer {
         return consumed
     }
 
-    ; ---- hex dump ----
+    ; ---------- hex dump ----------
 
     sub hex_digit(ubyte v) -> ubyte {
         if v < 10
@@ -161,8 +199,8 @@ xviewer {
         view_eof = false
         ubyte br
         for br in VTOP to VTOP + VROWS - 1
-            main.blank_span(0, 78, br)
-        if not diskio.f_open(main.namebuf) {
+            blank_span(0, 78, br)
+        if not diskio.f_open(namebuf) {
             txt.plot(0, VTOP)
             txt.print("cannot open file.")
             view_eof = true
@@ -173,7 +211,7 @@ xviewer {
             uword want = 250
             if toskip < want
                 want = toskip
-            uword got = diskio.f_read(&main.viewbuf, want)
+            uword got = diskio.f_read(&viewbuf, want)
             if got == 0
                 break
             toskip -= got
@@ -181,7 +219,7 @@ xviewer {
         uword off = start_off
         ubyte row = 0
         repeat {
-            ubyte cnt = lsb(diskio.f_read(&main.viewbuf, 16))
+            ubyte cnt = lsb(diskio.f_read(&viewbuf, 16))
             if cnt == 0 {
                 view_eof = true
                 break
@@ -192,7 +230,7 @@ xviewer {
             ubyte i
             for i in 0 to 15 {
                 if i < cnt {
-                    put_hex8(main.viewbuf[i])
+                    put_hex8(viewbuf[i])
                     txt.spc()
                 } else {
                     txt.print("   ")
@@ -200,7 +238,7 @@ xviewer {
             }
             txt.spc()
             for i in 0 to cnt-1 {
-                ubyte ch = main.viewbuf[i]
+                ubyte ch = viewbuf[i]
                 if ch < 32 or ch > 126
                     ch = '.'
                 txt.chrout(ch)
@@ -218,7 +256,7 @@ xviewer {
         return off
     }
 
-    ; ---- search ----
+    ; ---------- search ----------
 
     sub view_fold(ubyte b) -> ubyte {
         ; ASCII case fold A-Z -> a-z (file bytes and search term are both ASCII)
@@ -233,14 +271,14 @@ xviewer {
         ubyte plen = lsb(strings.length(view_find))
         if plen == 0
             return false
-        if not diskio.f_open(main.namebuf)
+        if not diskio.f_open(namebuf)
             return false
         uword toskip = from
         while toskip != 0 {
             uword want = 250
             if toskip < want
                 want = toskip
-            uword got = diskio.f_read(&main.viewbuf, want)
+            uword got = diskio.f_read(&viewbuf, want)
             if got == 0
                 break
             toskip -= got
@@ -249,12 +287,12 @@ xviewer {
         ubyte mi = 0
         bool found = false
         repeat {
-            ubyte cnt = lsb(diskio.f_read(&main.viewbuf, 250))
+            ubyte cnt = lsb(diskio.f_read(&viewbuf, 250))
             if cnt == 0
                 break
             ubyte j
             for j in 0 to cnt-1 {
-                ubyte b = view_fold(main.viewbuf[j])
+                ubyte b = view_fold(viewbuf[j])
                 if b == view_fold(view_find[mi]) {
                     mi++
                     if mi == plen {
@@ -278,36 +316,36 @@ xviewer {
 
     sub view_read_find() -> bool {
         ; read a search term on the footer row; false if cancelled or empty
-        main.blank_span(0, 78, main.SCR_BOT)
+        blank_span(0, 78, SCR_BOT)
         txt.chrout($12)
-        txt.plot(0, main.SCR_BOT)
+        txt.plot(0, SCR_BOT)
         txt.print(" Find: ")
         txt.chrout($92)
         ubyte n = 0
         view_find[0] = 0
-        txt.plot(7, main.SCR_BOT)
+        txt.plot(7, SCR_BOT)
         repeat {
-            main.g_key = main.wait_key()
-            if main.g_key == 13 {
+            g_key = wait_key()
+            if g_key == 13 {
                 view_find[n] = 0
                 return n != 0
             }
-            if main.g_key == 27 or main.g_key == 3
+            if g_key == 27 or g_key == 3
                 return false
-            if main.g_key == 20 {                    ; backspace
+            if g_key == 20 {                    ; backspace
                 if n != 0 {
                     n--
                     view_find[n] = 0
-                    txt.plot(7 + n, main.SCR_BOT)
+                    txt.plot(7 + n, SCR_BOT)
                     txt.spc()
-                    txt.plot(7 + n, main.SCR_BOT)
+                    txt.plot(7 + n, SCR_BOT)
                 }
             } else {
-                if main.g_key >= $c1 and main.g_key <= $da
-                    main.g_key -= $80
-                if n < 32 and main.g_key >= 32 and main.g_key < 127 {
-                    view_find[n] = main.g_key
-                    txt.chrout(main.g_key)
+                if g_key >= $c1 and g_key <= $da
+                    g_key -= $80
+                if n < 32 and g_key >= 32 and g_key < 127 {
+                    view_find[n] = g_key
+                    txt.chrout(g_key)
                     n++
                 }
             }
@@ -316,9 +354,9 @@ xviewer {
 
     sub view_notify(str m) {
         ; brief footer message (auto-dismissed by the next footer repaint)
-        main.blank_span(0, 78, main.SCR_BOT)
+        blank_span(0, 78, SCR_BOT)
         txt.chrout($12)
-        txt.plot(0, main.SCR_BOT)
+        txt.plot(0, SCR_BOT)
         txt.print(m)
         txt.chrout($92)
         sys.wait(75)
@@ -355,28 +393,16 @@ xviewer {
         }
     }
 
-    sub view_file() {
-        if xfiles.ft_count == 0
-            return
-        ; too big for the 64 KB pager? briefly say so, then open it in X16 Edit instead
-        if xfiles.get_blocks(main.file_cursor) > VIEW_MAX_BLOCKS {
-            main.msg_begin()
-            txt.print("file too large to view - opening in editor")
-            txt.chrout($92)
-            sys.wait(90)
-            main.op_edit()
-            return
-        }
-        xfiles.get_name(main.file_cursor, main.namebuf)
-        xtree.build_path(main.cur_dir, main.pathbuf)
-        diskio.chdir(main.pathbuf)
+    ; ---------- main view loop ----------
+
+    sub view_run() {
         ; clear once on entry and draw the static header bar (row 0); per-page renders
         ; only repaint the body + footer, so the header doesn't flicker.
         txt.clear_screen()
         txt.chrout($12)
         txt.plot(0, 0)
         txt.print("VIEW: ")
-        main.print_trunc(main.namebuf, 60)
+        print_trunc(namebuf, 60)
         txt.chrout($92)
         view_hex = false
         view_off = 0
@@ -392,9 +418,9 @@ xviewer {
             else
                 nxt = view_render(view_pages[view_page], true)
             ; footer bar (only this row is repainted per page)
-            main.blank_span(0, 78, main.SCR_BOT)
+            blank_span(0, 78, SCR_BOT)
             txt.chrout($12)
-            txt.plot(0, main.SCR_BOT)
+            txt.plot(0, SCR_BOT)
             if view_hex {
                 txt.print(" PgDn/Up T:top H:text F:find N:next Q:quit  $")
                 put_hex16(view_off)
@@ -406,10 +432,10 @@ xviewer {
                 txt.print(" (END)")
             txt.chrout($92)
 
-            main.g_key = main.wait_key()
-            if main.g_key >= $c1 and main.g_key <= $da
-                main.g_key -= $80
-            when main.g_key {
+            g_key = wait_key()
+            if g_key >= $c1 and g_key <= $da
+                g_key -= $80
+            when g_key {
                 27, 3, 'q' -> return
                 2 -> {                          ; PgDn: next page
                     if not view_eof {

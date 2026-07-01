@@ -15,7 +15,6 @@
 %import xtree
 %import xfiles
 %import xscan
-%import xviewer
 %import hlprs
 %import emudbg
 %zeropage basicsafe
@@ -530,8 +529,8 @@ main {
                 }
             }
             'v' -> {
-                xviewer.view_file()
-                dirty_full = true               ; viewer used the whole screen
+                op_edit()                       ; internal viewer pulled (now a standalone
+                dirty_full = true               ; tview.prg); View opens X16 Edit like E
             }
             'e' -> {
                 op_edit()
