@@ -77,12 +77,10 @@ main {
     const ubyte SC_JT = sc:'┬'
     const ubyte SC_JB = sc:'┴'
 
-    ; bottom-menu key glyphs. The X16 (Commodore) charset has no CP437, so the
-    ; original  cp437:"◄╛"  Enter/return symbol is rebuilt from the native
-    ; left-arrow + corner ("←┘": come down, turn left, arrowhead), and the up-arrow
-    ; is the native ↑. PETSCII-encoded so txt.print streams them straight out.
-    str CR_STR       = petscii:"←┘"     ; Enter / carriage-return key
-    str UP_ARROW_STR = petscii:"↑"      ; cursor up-arrow
+    ; Menu/footer key glyphs are typed straight into the petscii:"" strings that draw them
+    ; (the X16 has no CP437): ←=$5f + ┘=$fd form the ENTER/return symbol "←┘"; ↑=$5e is the
+    ; up-arrow. Colour is likewise embedded (\x9e=accent \x05=fg) - see the memory note on
+    ; embedded PETSCII colour codes. No named glyph consts needed any more.
 
     ubyte focus
     ubyte tree_cursor, tree_top
@@ -144,11 +142,11 @@ main {
 
     ; shared text-input history (XTreeGold): the last HIST_N accepted entries,
     ; newest first. UP-arrow in any input pops up a scrollable picker.
-    const ubyte HIST_N = 15
+    const ubyte HIST_N = 10
     const ubyte HIST_W = 50                 ; bytes per slot (<=49 chars + NUL)
     uword hist_buf = memory("inputhist", HIST_N * HIST_W, 0)
     ubyte hist_count                        ; 0..HIST_N, slot 0 = most recent
-    str his_fname = "?" * 20                ; scratch: "<category>.his"
+    str his_fname = "?" * 16                ; scratch: "<category>.his" (longest ~13 chars)
 
     sub start() {
         ; XFMGR2 depends on R49+ Kernal behaviour (notably the X16 Edit ROM API used by
@@ -222,7 +220,11 @@ main {
                             dirty_cmd = true        ; restore the menu the prompt covered
                         }
                         9    -> change_focus(FOCUS_FILE - focus)   ; TAB toggles pane
-                        29   -> change_focus(FOCUS_FILE)           ; cursor-right
+                        29   -> {                                  ; cursor-right: enter files,
+                            change_focus(FOCUS_FILE)               ; but only if the folder has
+                            if focus == FOCUS_FILE and xfiles.ft_count == 0
+                                change_focus(FOCUS_TREE)           ; files - an empty one stays in the tree
+                        }
                         157  -> change_focus(FOCUS_TREE)           ; cursor-left
                         else -> {
                             if focus == FOCUS_TREE
@@ -364,13 +366,16 @@ main {
     sub handle_alt(ubyte letter) {
         ; ALT-key commands
         when letter {
-            's' -> {                        ; Alt-S: cycle the file sort order
-                op_sort()
+            's' -> {                        ; Alt-S: cycle the file sort order (file pane only)
+                if focus == FOCUS_FILE
+                    op_sort()
             }
-            'x' -> {                        ; Alt-X: execute / run the selected file
-                op_execute()
-                if not run_exit
-                    dirty_full = true       ; cancelled: repaint the screen
+            'x' -> {                        ; Alt-X: execute / run the selected file (file pane only)
+                if focus == FOCUS_FILE {
+                    op_execute()
+                    if not run_exit
+                        dirty_full = true   ; cancelled: repaint the screen
+                }
             }
             'q' -> {                        ; Alt-Q: quit, leaving the shell in THIS dir
                 if confirm_quit_here() {
@@ -387,6 +392,12 @@ main {
             'r' -> {                        ; Alt-R: release (un-log) the current folder
                 op_release()
                 dirty_full = true           ; tree rows vanished + flash may cover the menu
+            }
+            'p' -> {                        ; Alt-P: prune (dir pane only) - delete the subtree
+                if focus == FOCUS_TREE {
+                    op_prune()
+                    dirty_full = true       ; confirm + banner covered the screen
+                }
             }
             else -> { }
         }
@@ -462,13 +473,16 @@ main {
                 dirty_status = true
                 dirty_cmd = true        ; prompt was drawn over the menu
             }
-            'p' -> {
-                op_prune()
-                dirty_full = true       ; confirm prompt + result message covered the screen
+            'r' -> {                    ; R: rename the selected directory
+                op_rename_dir()
+                dirty_tree = true
+                dirty_files = true
+                dirty_status = true
+                dirty_cmd = true        ; prompt was drawn over the menu
             }
-            134 -> {                    ; F3: re-read (relog) this directory's sub-folders
-                op_relog()
-                dirty_full = true
+            'd' -> {                    ; D: delete the selected folder (empty folders only)
+                op_delete_dir()
+                dirty_full = true       ; confirm / result flash covered the screen
             }
             'a' -> {                    ; A: about (replaces the old '?')
                 show_about()
@@ -535,6 +549,7 @@ main {
             }
             'c' -> {
                 op_copymove(false)
+                dirty_tree = true               ; a copy can create a new dest folder in the tree
                 dirty_files = true
                 dirty_status = true
                 dirty_cmd = true
@@ -822,44 +837,12 @@ main {
     sub menu_plain_items() {
         ; the no-modifier commands, context-sensitive (tree vs file pane)
         if focus == FOCUS_TREE {
-            txt.color(COL_ACCENT)
-            txt.print(CR_STR)
-            txt.color(COL_FG)
-            txt.print("log  m")
-            hk('K')
-            txt.print("dir  ")
-            hk('P')
-            txt.print("rune  ")
-            txt.color(COL_ACCENT)
-            txt.print("TAB")
-            txt.color(COL_FG)
-            txt.print(" files  ")
-            txt.color(COL_ACCENT)
-            txt.print("F3")
-            txt.color(COL_FG)
-            txt.print(" relog")
+            ; embedded-colour string (\x9e=accent \x05=fg; ←┘=ENTER glyph) - see memory note
+            txt.print(petscii:"\x9e←┘\x05log  m\x9eK\x05dir  \x9eR\x05ename  \x9eD\x05elete  \x9eTAB\x05 files")
             txt.plot(74, CMDROW1)       ; About pinned to the far right of row 1 (key: A)
-            hk('A')
-            txt.print("bout")
+            txt.print(petscii:"\x9eA\x05bout")
         } else {
-            hk('T')
-            txt.print("ag ")
-            hk('U')
-            txt.print("ntag ")
-            hk('V')
-            txt.print("iew ")
-            hk('E')
-            txt.print("dit ")
-            hk('C')
-            txt.print("opy ")
-            hk('M')
-            txt.print("ove ")
-            hk('F')
-            txt.print("ilespec ")
-            hk('R')
-            txt.print("ename ")
-            hk('D')
-            txt.print("elete")
+            txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eV\x05iew \x9eE\x05dit \x9eC\x05opy \x9eM\x05ove \x9eF\x05ilespec \x9eR\x05ename \x9eD\x05elete")
         }
     }
 
@@ -867,43 +850,27 @@ main {
         ; CTRL batch / global commands, styled like the MENU/ALT rows: the trigger
         ; letter is highlighted inline. Delete is shown as "<key> Del" because its
         ; CTRL key differs by environment (Ctrl-X emulator / Ctrl-D hardware).
-        hk('T')
-        txt.print("ag  ")
-        hk('U')
-        txt.print("ntag  ")
-        hk('I')
-        txt.print("nvert  ")
-        hk('G')
-        txt.print("lobal  ")            ; Ctrl-G = ShowAll (global tagged view)
-        hk('C')
-        txt.print("opy  ")
-        txt.chrout('m')
-        hk('O')
-        txt.print("ve  ")               ; Ctrl-O = Move
-        hk('W')
-        txt.print("ildcard  ")          ; Ctrl-W = tag by spec
+        ; one embedded-colour string; keys: T ag, U ntag, I nvert, G lobal(ShowAll),
+        ; C opy, m O ve(Ctrl-O), W ildcard. Del stays a call (del_char is runtime-chosen).
+        txt.print(petscii:"\x9eT\x05ag  \x9eU\x05ntag  \x9eI\x05nvert  \x9eG\x05lobal  \x9eC\x05opy  m\x9eO\x05ve  \x9eW\x05ildcard  ")
         hk(del_char)
         txt.print(" Del")               ; Ctrl-X (emu) / Ctrl-D (hw)
     }
 
     sub menu_alt_items() {
-        ; ALT commands
-        txt.print("e")
-        hk('X')
-        txt.print("ecute  ")
-        hk('S')
-        txt.print("ort: ")
-        when xfiles.sort_mode {
-            1 -> txt.print("ext")
-            2 -> txt.print("size")
-            else -> txt.print("name")
+        ; ALT commands. eXecute + Sort are file-only, so the dir panel drops them and
+        ; shows relog + prune + release (Quit-here sits at the far right of row 2 for both).
+        if focus == FOCUS_TREE {
+            txt.print(petscii:"\x9eF3\x05 relog  \x9eP\x05rune  \x9eR\x05elease")
+        } else {
+            txt.print(petscii:"e\x9eX\x05ecute  \x9eS\x05ort: ")
+            when xfiles.sort_mode {
+                1 -> txt.print("ext")
+                2 -> txt.print("size")
+                else -> txt.print("name")
+            }
+            txt.print(petscii:"\x9e  F3\x05 relog  \x9eR\x05elease")
         }
-        txt.color(COL_ACCENT)
-        txt.print("  F3")
-        txt.color(COL_FG)
-        txt.print(" relog  ")
-        hk('R')
-        txt.print("elease")
     }
 
     sub draw_commands() {
@@ -933,39 +900,32 @@ main {
         txt.plot(TREE_TEXT, CMDROW2)
         txt.color(COL_FG)
         if menu_mode == 0 {
-            if focus == FOCUS_FILE {            ; the DIR column has no CTRL/ALT commands, so
-                txt.print("hold ")             ; it shows no "hold CTRL/ALT" hint at all
-                txt.color(COL_ACCENT)
-                txt.print("CTRL")
-                txt.color(COL_FG)
-                txt.print(" or ")
-                txt.color(COL_ACCENT)
-                txt.print("ALT")
-                txt.color(COL_FG)
-                txt.print(" for more commands")
-            } else {                            ; tree pane: what Enter does here
-                txt.color(COL_ACCENT)
-                txt.print(CR_STR)
-                txt.color(COL_FG)
-                txt.print("open/log a folder")
-            }
-        } else {
-            txt.print("release to return to the MENU")
+            ; both panes expose CTRL/ALT commands (Alt-Q quit-here, Alt-F3 relog,
+            ; Alt-R release, Alt-S sort...), so both show the same hint.
+            ; current colour is COL_FG here, so "hold " needs no leading code
+            txt.print(petscii:"hold \x9eCTRL\x05 or \x9eALT\x05 for more commands")
         }
         ; Quit pinned to the far right of row 2 on every menu. In the ALT menu it is the
         ; "Quit-here" variant (Alt-Q quits to the CURRENT dir); elsewhere it's plain Quit.
         if menu_mode == 2 {
             txt.plot(70, CMDROW2)
-            hk('Q')
-            txt.print("uit-here")
+            txt.print(petscii:"\x9eQ\x05uit-here")
         } else {
             txt.plot(75, CMDROW2)
-            hk('Q')
-            txt.print("uit")
+            txt.print(petscii:"\x9eQ\x05uit")
         }
     }
 
     ; ---------- file operations ----------
+
+    sub clamp_file_cursor() {
+        ; keep file_cursor within the current file list (0 when the list is empty).
+        ; factored out of the ~8 ops that rebuild the file index (relog/copy/move/etc.)
+        if xfiles.ft_count == 0
+            file_cursor = 0
+        else if file_cursor >= xfiles.ft_count
+            file_cursor = xfiles.ft_count - 1
+    }
 
     sub op_delete() {
         if xfiles.ft_count == 0
@@ -981,10 +941,7 @@ main {
             diskio.delete(namebuf)
             xfiles.hide(file_cursor, cur_dir)       ; drop from the cached view
             void xfiles.build_index(cur_dir)
-            if xfiles.ft_count == 0
-                file_cursor = 0
-            else if file_cursor >= xfiles.ft_count
-                file_cursor = xfiles.ft_count - 1
+            clamp_file_cursor()
         }
     }
 
@@ -1009,10 +966,7 @@ main {
                 }
             }
             void xfiles.build_index(cur_dir)
-            if xfiles.ft_count == 0
-                file_cursor = 0
-            else if file_cursor >= xfiles.ft_count
-                file_cursor = xfiles.ft_count - 1
+            clamp_file_cursor()
         }
     }
 
@@ -1041,7 +995,7 @@ main {
             flash("can't prune the drive root")
             return
         }
-        if not input_line("PRUNE - type 'prune' to confirm:", inputbuf, 49, "prune", false)
+        if not input_line("PRUNE - type 'prune' to confirm:", inputbuf, 49, "", false)
             return
         if strings.compare(inputbuf, "prune") != 0 {
             flash("not confirmed - prune cancelled")
@@ -1072,6 +1026,76 @@ main {
         } else {
             flash("prune failed (partial) - rescan the dir")
         }
+    }
+
+    sub op_delete_dir() {
+        ; D (tree col): delete the selected directory, but ONLY if it is empty. rmdir on
+        ; CMDR-DOS / hostfs refuses a non-empty directory, so we let it enforce emptiness;
+        ; use Prune (Alt-P) to delete a whole non-empty subtree.
+        ubyte idx = cur_dir
+        if idx == 0 {
+            flash("can't delete the drive root")
+            return
+        }
+        void strings.copy(xtree.name_ptr(idx), namebuf)     ; stable copy of the dir name
+        msg_begin()
+        txt.print("Delete empty folder ")
+        print_trunc(namebuf, 24)
+        txt.print("?  (Y/N) ")
+        if not yes_no()
+            return
+        ubyte parent = xtree.d_parent[idx]
+        ubyte uprow = tree_cursor                           ; land one row up once it vanishes
+        if uprow != 0
+            uprow--
+        xtree.build_path(parent, pathbuf)                   ; parent dir (absolute, trailing '/')
+        diskio.chdir(pathbuf)
+        diskio.rmdir(namebuf)
+        if diskio.status_code() != 0 {
+            flash("folder not empty - use Prune for a tree")
+            return
+        }
+        xtree.unlink(idx)                                   ; gone on disk -> drop it from the tree
+        xtree.rebuild_visible()
+        if uprow >= xtree.vis_count
+            uprow = xtree.vis_count - 1
+        tree_cursor = uprow
+        if tree_cursor < tree_top
+            tree_top = tree_cursor
+        select_dir(xtree.vis_idx[uprow])
+        flash("folder deleted")
+    }
+
+    sub op_rename_dir() {
+        ; R (tree col): rename the selected directory, on disk and in the tree.
+        ubyte idx = cur_dir
+        if idx == 0 {
+            flash("can't rename the drive root")
+            return
+        }
+        void strings.copy(xtree.name_ptr(idx), namebuf)     ; stable copy of the old name
+        if not input_line("Rename dir to:", inputbuf, 49, "rename", false)
+            return
+        if strings.length(inputbuf) == 0
+            return
+        if strings.compare_nocase(inputbuf, namebuf) == 0 {
+            flash("same name (case is ignored on this disk)")
+            return                                          ; unchanged, incl. case-only (Foo==foo)
+        }
+        ; a scanned parent lists ALL its sub-dirs, so a name clash is a visible sibling
+        ubyte parent = xtree.d_parent[idx]
+        ubyte sib = xtree.d_first_child[parent]
+        while sib != xtree.NONE {
+            if sib != idx and strings.compare_nocase(xtree.name_ptr(sib), inputbuf) == 0 {
+                flash("a folder named that already exists")
+                return
+            }
+            sib = xtree.d_next_sibling[sib]
+        }
+        xtree.build_path(parent, pathbuf)                   ; parent dir (absolute, trailing '/')
+        diskio.chdir(pathbuf)
+        diskio.rename(namebuf, inputbuf)                    ; r:new=old on the renamed sub-dir
+        xtree.rename_node(idx, inputbuf)                    ; keep the tree's name in sync
     }
 
     sub last_dot(str s) -> ubyte {
@@ -1180,10 +1204,7 @@ main {
         }
         ; keep the cursor on the same row (don't chase the file to its new sorted slot,
         ; which made it look like the bottom file got renamed)
-        if xfiles.ft_count == 0
-            file_cursor = 0
-        else if file_cursor >= xfiles.ft_count
-            file_cursor = xfiles.ft_count - 1
+        clamp_file_cursor()
     }
 
     sub ensure_slash(str s) {
@@ -1225,6 +1246,62 @@ main {
         return ok
     }
 
+    sub dir_exists(str path) -> bool {
+        ; true if `path` is a directory we can cd into. chdir, then read the DOS status:
+        ; code 0 == the cd landed (dir is there). status_code() is already linked (xscan
+        ; uses it after rmdir), so this adds no new machinery.
+        diskio.chdir(path)
+        return diskio.status_code() == 0
+    }
+
+    sub make_last_dir(str fullpath) {
+        ; create the final segment of an absolute dir path (with trailing '/') inside its
+        ; parent, which is assumed to exist. Splits into pathbuf(parent) + namebuf(leaf).
+        ubyte e = lsb(strings.length(fullpath))
+        if e != 0 and fullpath[e-1] == '/'
+            e--                                 ; e = one past the leaf (drop trailing '/')
+        ubyte s = e
+        while s != 0 and fullpath[s-1] != '/'
+            s--                                 ; s = first char of the leaf segment
+        ubyte k = 0
+        ubyte i = s
+        while i < e {
+            namebuf[k] = fullpath[i]            ; leaf -> namebuf
+            k++
+            i++
+        }
+        namebuf[k] = 0
+        i = 0
+        while i < s {
+            pathbuf[i] = fullpath[i]            ; parent (keeps trailing '/') -> pathbuf
+            i++
+        }
+        pathbuf[i] = 0
+        diskio.chdir(pathbuf)
+        diskio.mkdir(namebuf)
+        ; show the new folder in the tree right away (if its parent is a logged node),
+        ; mirroring op_mkdir - otherwise a freshly-created copy/move target never appears
+        ubyte par = find_dir_by_path(pathbuf)
+        if par != xtree.NONE and xtree.d_flags[par] & xtree.FL_SCANNED != 0 {
+            void xtree.add_child(par, namebuf)
+            xtree.d_flags[par] |= xtree.FL_EXPANDED
+            xtree.rebuild_visible()
+        }
+    }
+
+    sub ensure_dest_dir(str path) -> bool {
+        ; make sure the copy/move destination exists; if not, offer to create it.
+        ; returns false only if it is missing AND the user declines (caller then aborts).
+        if dir_exists(path)
+            return true
+        msg_begin()
+        txt.print("Dest dir missing. Create it?  (Y/N) ")
+        if not yes_no()
+            return false
+        make_last_dir(path)
+        return true
+    }
+
     sub op_copymove(bool is_move) {
         if xfiles.ft_count == 0
             return
@@ -1255,6 +1332,8 @@ main {
             flash("source and dest are the same dir")
             return
         }
+        if not ensure_dest_dir(cm_ddir)         ; offer to create a missing destination
+            return
 
         uword done = 0
         uword failed = 0
@@ -1289,25 +1368,9 @@ main {
                 void xfiles.build_index(cur_dir)
         }
 
-        if file_cursor >= xfiles.ft_count and xfiles.ft_count != 0
-            file_cursor = xfiles.ft_count - 1
-        else if xfiles.ft_count == 0
-            file_cursor = 0
+        clamp_file_cursor()
 
-        msg_begin()
-        if is_move
-            txt.print("Moved ")
-        else
-            txt.print("Copied ")
-        txt.print_uw(done)
-        if failed != 0 {
-            txt.print(", ")
-            txt.print_uw(failed)
-            txt.print(" failed")
-        }
-        txt.print("  -- key --")
-        txt.chrout($92)
-        void wait_key()
+        banner_copymove(is_move, done, failed)
     }
 
     sub find_dir_by_path(str p) -> ubyte {
@@ -1328,10 +1391,7 @@ main {
         xfiles.set_spec(inputbuf)
         void xfiles.build_index(cur_dir)
         file_top = 0
-        if xfiles.ft_count == 0
-            file_cursor = 0
-        else if file_cursor >= xfiles.ft_count
-            file_cursor = xfiles.ft_count - 1
+        clamp_file_cursor()
     }
 
     sub op_tag_by_spec() {
@@ -1382,6 +1442,8 @@ main {
             void strings.append(cm_ddir, inputbuf)
         }
         ensure_slash(cm_ddir)
+        if not ensure_dest_dir(cm_ddir)         ; offer to create a missing destination
+            return
 
         uword done = 0
         uword failed = 0
@@ -1413,25 +1475,9 @@ main {
                 void xscan.refresh_files(dd)
         }
         void xfiles.build_index(cur_dir)
-        if xfiles.ft_count == 0
-            file_cursor = 0
-        else if file_cursor >= xfiles.ft_count
-            file_cursor = xfiles.ft_count - 1
+        clamp_file_cursor()
 
-        msg_begin()
-        if is_move
-            txt.print("Moved ")
-        else
-            txt.print("Copied ")
-        txt.print_uw(done)
-        if failed != 0 {
-            txt.print(", ")
-            txt.print_uw(failed)
-            txt.print(" skipped")
-        }
-        txt.print("  -- key --")
-        txt.chrout($92)
-        void wait_key()
+        banner_copymove(is_move, done, failed)
     }
 
     sub op_sort() {
@@ -1440,19 +1486,15 @@ main {
         if xfiles.sort_mode > 2
             xfiles.sort_mode = 0
         void xfiles.build_index(cur_dir)
-        if xfiles.ft_count == 0
-            file_cursor = 0
-        else if file_cursor >= xfiles.ft_count
-            file_cursor = xfiles.ft_count - 1
-        ; brief banner so the new order is obvious even with 0/1 files in the pane
-        msg_begin()
-        txt.print("Sort order: ")
+        clamp_file_cursor()
+        ; brief 2-line centered banner so the new order is obvious even with 0/1 files
+        banner_open()
+        banner_line(CMDROW1, "Sort order:")
         when xfiles.sort_mode {
-            1 -> txt.print("extension")
-            2 -> txt.print("size")
-            else -> txt.print("name")
+            1 -> banner_line(CMDROW2, "extension")
+            2 -> banner_line(CMDROW2, "size")
+            else -> banner_line(CMDROW2, "name")
         }
-        txt.chrout($92)
         sys.wait(45)                ; ~0.75s, then the menu repaints over it
         dirty_files = true
         dirty_cmd = true            ; the ALT menu shows the active sort mode
@@ -1463,6 +1505,9 @@ main {
         ; gets relogged follows the focused pane: on the DIRECTORY column we re-scan the
         ; sub-folders (picking up new directories); on the FILE column we re-read files.
         ; A first-time (unlogged) directory always gets a full scan (folders + files).
+        diskio.chdir(xtree.base_path)           ; relog from ROOT: reset the CWD so a stale one
+                                                ; (left by copy/move/prune) can't misdirect the
+                                                ; build_path chdir the re-read does next
         if xtree.d_flags[cur_dir] & xtree.FL_SCANNED == 0 {
             void xscan.scan_dir(cur_dir)
             if xtree.has_kids(cur_dir)
@@ -1476,8 +1521,10 @@ main {
                 xtree.d_flags[cur_dir] |= xtree.FL_EXPANDED
             xtree.rebuild_visible()
             set_tree_cursor_to(cur_dir)
-            msg_begin()
-            txt.print("relogged folders  +")
+            banner_open()
+            banner_line(CMDROW1, "relogged folders")
+            banner_num(CMDROW2, 5 + uw_digits(added))       ; "+<n> new"
+            txt.print("+")
             txt.print_uw(added)
             txt.print(" new")
             txt.chrout($92)
@@ -1492,16 +1539,14 @@ main {
         if xfiles.ft_count != 0
             for k in 0 to xfiles.ft_count-1
                 cur_blocks += xfiles.get_blocks(k)
-        if xfiles.ft_count == 0
-            file_cursor = 0
-        else if file_cursor >= xfiles.ft_count
-            file_cursor = xfiles.ft_count - 1
-        msg_begin()
-        txt.print("relogged ")
+        clamp_file_cursor()
+        banner_open()
+        banner_line(CMDROW1, "relogged")
+        banner_num(CMDROW2, 8 + uw_digits(xfiles.ft_count))     ; "<n> file(s)"
         txt.print_uw(xfiles.ft_count)
         txt.print(" file(s)")
         txt.chrout($92)
-        sys.wait(90)               ; show the banner ~2 seconds, then auto-dismiss
+        sys.wait(90)               ; show the 2-line banner ~2 seconds, then auto-dismiss
     }
 
     sub op_edit() {
@@ -1652,7 +1697,15 @@ main {
         repeat {
             ubyte rows = hist_count
             ubyte boxtop = 25 - rows
-            draw_box(PX0, boxtop, PX1, boxtop+rows+1, " recent (Up/Dn Enter Esc) ")
+            draw_box(PX0, boxtop, PX1, boxtop+rows+1, "")
+            ; centered " Recent " title on the top border
+            txt.plot(PX0 + 1 + (PX1 - PX0 - 1 - 8) / 2, boxtop)       ; " Recent " = 8 chars
+            txt.color(COL_TITLE)
+            txt.print(" Recent ")
+            ; key hints in a centered footer on the bottom border, as ONE embedded-colour
+            ; string (\x9e=accent, \x05=fg; ←┘=ENTER glyph). Visible length = 21.
+            txt.plot(PX0 + 1 + (PX1 - PX0 - 1 - 21) / 2, boxtop+rows+1)
+            txt.print(petscii:"\x9e ←┘\x05 Select  \x9eESC\x05 Exit ")
             ubyte p
             for p in 0 to rows-1 {
                 ubyte slot = rows - 1 - p        ; oldest at top, newest at the bottom
@@ -1792,6 +1845,79 @@ main {
         void wait_key()
     }
 
+    ; ---- 2-line centered completion banner (used after relog / sort etc.) ----
+    sub banner_open() {
+        ; paint a 2-row reverse-video banner across BOTH command rows (cols 1..78),
+        ; ready for centered text. The caller repaints the menu over it afterwards.
+        ubyte r
+        ubyte c
+        for r in CMDROW1 to CMDROW2 {
+            txt.plot(1, r)
+            txt.chrout($12)                 ; reverse on
+            for c in 1 to 78
+                txt.spc()
+        }
+        txt.chrout($92)                     ; reverse off
+    }
+
+    sub banner_line(ubyte row, str s) {
+        ; print a static string centered (reverse video) on a banner row
+        ubyte slen = lsb(strings.length(s))
+        txt.plot(1 + (78 - slen) / 2, row)
+        txt.chrout($12)
+        txt.print(s)
+        txt.chrout($92)
+    }
+
+    sub banner_num(ubyte row, ubyte width) {
+        ; centre a `width`-wide reverse-video field on `row` and turn reverse on; the
+        ; caller then prints exactly `width` chars (incl. a number) and a closing $92.
+        txt.plot(1 + (78 - width) / 2, row)
+        txt.chrout($12)
+    }
+
+    sub uw_digits(uword v) -> ubyte {
+        ; decimal digit count of v, for sizing a centered line that contains a number
+        ubyte d = 1
+        while v >= 10 {
+            v /= 10
+            d++
+        }
+        return d
+    }
+
+    sub banner_copymove(bool is_move, uword done, uword failed) {
+        ; 2-line centered banner summarising a copy/move, auto-dismiss like the relog one
+        banner_open()
+        if failed == 0 {
+            if is_move
+                banner_line(CMDROW1, "Moved")
+            else
+                banner_line(CMDROW1, "Copied")
+            banner_num(CMDROW2, 8 + uw_digits(done))        ; "<n> file(s)"
+            txt.print_uw(done)
+            txt.print(" file(s)")
+            txt.chrout($92)
+            sys.wait(120)
+        } else {
+            ubyte vl = 7                                     ; "Copied "
+            if is_move
+                vl = 6                                       ; "Moved "
+            banner_num(CMDROW1, vl + uw_digits(done))
+            if is_move
+                txt.print("Moved ")
+            else
+                txt.print("Copied ")
+            txt.print_uw(done)
+            txt.chrout($92)
+            banner_num(CMDROW2, 7 + uw_digits(failed))       ; "<n> failed"
+            txt.print_uw(failed)
+            txt.print(" failed")
+            txt.chrout($92)
+            sys.wait(200)                                     ; linger a little on problems
+        }
+    }
+
     sub edit_render(uword destptr, ubyte n, ubyte curpos, ubyte fieldcol) {
         ; repaint the editable field (fieldcol..78) and show a block cursor. The whole
         ; field is cleared and reprinted each keystroke, so inserts/deletes never leave
@@ -1842,28 +1968,13 @@ main {
         draw_box(BX0, BY0, BX1, BY1, "")
         txt.plot(BX0 + 1 + (BIW - 18) / 2, BY0)     ; " pick a directory " = 18 chars
         txt.color(COL_TITLE)
-        txt.print(" pick a directory ")
+        txt.print(" Pick a directory ")
         txt.color(COL_FG)
-        txt.plot(BX0 + 1 + (BIW - 46) / 2, BY1)     ; footer hint below = 46 chars
-        txt.color(COL_ACCENT)
-        txt.print("Up/Dn")
-        txt.color(COL_FG)
-        txt.print(" move  ")
-        txt.color(COL_ACCENT)
-        txt.print(">")
-        txt.color(COL_FG)
-        txt.print("expand ")
-        txt.color(COL_ACCENT)
-        txt.print("<")
-        txt.color(COL_FG)
-        txt.print("collapse  ")
-        txt.color(COL_ACCENT)
-        txt.print("Enter")
-        txt.color(COL_FG)
-        txt.print(" pick  ")
-        txt.color(COL_ACCENT)
-        txt.print("Esc")
-        txt.color(COL_FG)
+        ; footer (40 visible chars) as ONE embedded-colour string instead of 8 colour + 8
+        ; print calls. In-string PETSCII codes: \x9e = COL_ACCENT (yellow), \x05 = COL_FG
+        ; (white); ←┘ is the ENTER glyph. Ends white so the list rows below inherit COL_FG.
+        txt.plot(BX0 + 1 + (BIW - 40) / 2, BY1)
+        txt.print(petscii:"\x9e >\x05Expand \x9e<\x05Collapse  \x9e←┘\x05Select  \x9eEsc\x05 Exit ")
         repeat {
             ; repaint only the interior list rows (blank each first so longer prior names
             ; don't leave a tail behind when scrolling)
@@ -1938,27 +2049,16 @@ main {
         }
     }
 
-    sub prompt_hint(bool dirpick) {
-        ; key help on the second command row, shown under any text prompt
+    sub prompt_hint(bool usehist, bool dirpick) {
+        ; key help on the second command row, shown under any text prompt. Each hint is one
+        ; embedded-colour string (\x9e=accent \x05=fg; ↑=up-arrow, ←┘=ENTER glyph) instead of
+        ; separate colour+print calls; every segment ends fg so the next starts clean.
         txt.plot(TREE_TEXT, CMDROW2)
-        txt.color(COL_ACCENT)
-        txt.print(UP_ARROW_STR)
-        txt.color(COL_FG)
-        txt.print("=history  ")
-        if dirpick {
-            txt.color(COL_ACCENT)
-            txt.print("F2")
-            txt.color(COL_FG)
-            txt.print("=dir tree  ")
-        }
-        txt.color(COL_ACCENT)
-        txt.print(CR_STR)
-        txt.color(COL_FG)
-        txt.print("=OK  ")
-        txt.color(COL_ACCENT)
-        txt.print("ESC")
-        txt.color(COL_FG)
-        txt.print("=cancel")
+        if usehist
+            txt.print(petscii:"\x9e↑\x05=history  ")
+        if dirpick
+            txt.print(petscii:"\x9eF2\x05=dir tree  ")
+        txt.print(petscii:"\x9e←┘\x05=OK  \x9eESC\x05=cancel")
     }
 
     sub input_line(str prompt, str dest, ubyte maxlen, str histname, bool dirpick) -> bool {
@@ -1966,13 +2066,15 @@ main {
         ; the char to the left, printable keys insert at the cursor, Up recalls history,
         ; F2 (when dirpick) picks a directory from the tree, Enter accepts, Esc cancels.
         ; `histname` selects the history category file.
-        hist_load(histname)
+        bool usehist = strings.length(histname) != 0    ; empty histname -> no history UI
+        if usehist
+            hist_load(histname)
         hlprs.clear_section(1, CMDROW1, 78, 2, (COL_BG << 4) | COL_FG)
         txt.color(COL_ACCENT)
         txt.plot(1, MSGROW)
         txt.print(prompt)
         txt.color(COL_FG)
-        prompt_hint(dirpick)
+        prompt_hint(usehist, dirpick)
         ubyte fieldcol = 2 + lsb(strings.length(prompt))
         ubyte n = 0
         ubyte curpos = 0
@@ -1984,7 +2086,7 @@ main {
             when g_key {
                 13 -> {                      ; Enter -> accept (if non-empty)
                     dest[n] = 0
-                    if n != 0 {
+                    if n != 0 and usehist {
                         hist_store(dest)
                         hist_save(histname)
                     }
@@ -2012,7 +2114,7 @@ main {
                     }
                 }
                 145 -> {                      ; up-arrow -> recall from history
-                    if hist_count != 0 {
+                    if usehist and hist_count != 0 {
                         ubyte r = hist_popup(dest, maxlen)
                         ; the picker drew over the panes; repaint, then re-show the prompt
                         full_redraw()
@@ -2022,7 +2124,7 @@ main {
                         txt.plot(1, MSGROW)
                         txt.print(prompt)
                         txt.color(COL_FG)
-                        prompt_hint(dirpick)
+                        prompt_hint(usehist, dirpick)
                         if r != 255 {
                             n = r
                             curpos = n
@@ -2039,7 +2141,7 @@ main {
                         txt.plot(1, MSGROW)
                         txt.print(prompt)
                         txt.color(COL_FG)
-                        prompt_hint(dirpick)
+                        prompt_hint(usehist, dirpick)
                         if picked != xtree.NONE {
                             xtree.build_path(picked, pathbuf)
                             str_copy_cap(pathbuf, dest, maxlen)
@@ -2198,12 +2300,13 @@ main {
             ; the next keypress is dispatched as a CTRL or ALT command (see main loop)
             ubyte hold = cx16.kbdbuf_get_modifiers()
             ubyte want = 0
-            if focus == FOCUS_FILE {            ; CTRL/ALT commands act on files - the DIR
-                if (hold & MOD_CTRL) != 0       ; column has none, so it always stays on the
-                    want = 1                    ; plain MENU regardless of the held modifier
-                else if (hold & MOD_ALT) != 0
-                    want = 2
-            }
+            ; CTRL/ALT command menus work from BOTH panes: the DIR column now has ALT ops
+            ; (Alt-Q quit-here, Alt-F3 relog, Alt-R release) and the CTRL tag/copy/move ops
+            ; act on the highlighted dir's files - matching the "hold CTRL or ALT" hint.
+            if (hold & MOD_CTRL) != 0
+                want = 1
+            else if (hold & MOD_ALT) != 0
+                want = 2
             if want != menu_mode {
                 menu_mode = want
                 draw_commands()
@@ -2364,7 +2467,7 @@ main {
         aboutln(13, "(c)2026 sadLogic")
         txt.plot(HX0 + 1 + (BIW - 15) / 2, HY1-1)   ; centered " press any key " (15 chars)
         txt.color(COL_ACCENT)
-        txt.print(" press any key ")
+        txt.print(" Press any key ")
         txt.color(COL_FG)
         void wait_key()
     }

@@ -16,7 +16,7 @@ xtree {
     %option ignore_unused
 
     const ubyte NONE     = 255
-    const ubyte DIR_MAX  = 192          ; max directories logged (< NONE)
+    const ubyte DIR_MAX  = 128          ; max directories logged (< NONE); capped to save ~512 B main RAM
     const uword DNAME_SZ = 3072         ; bytes of directory-name storage
     const ubyte MAXDEPTH = 16           ; deepest path we build
 
@@ -160,6 +160,18 @@ xtree {
 
     sub name_ptr(ubyte idx) -> str {
         return dname_buf + d_name_off[idx]
+    }
+
+    sub rename_node(ubyte idx, str newname) {
+        ; change a directory node's stored name. Fits the old slot -> overwrite in place;
+        ; longer -> append a fresh copy to the name arena (the old bytes leak, like unlink()).
+        if strings.length(newname) <= strings.length(name_ptr(idx)) {
+            void strings.copy(newname, name_ptr(idx))       ; fits: overwrite in place
+        } else {
+            uword noff = dname_store(newname)               ; longer: append (old bytes leak)
+            if noff != $ffff
+                d_name_off[idx] = noff
+        }
     }
 
     sub new_node(str name, ubyte parent) -> ubyte {

@@ -19,8 +19,8 @@ xscan {
     const ubyte PRUNE_MAXDEPTH = 24         ; abort if we descend deeper than this
     str pr_cur  = "?" * 100                 ; path of the directory currently being examined
     str pr_par  = "?" * 100                 ; path of its parent (where the rmdir is issued)
-    str pr_leaf = "?" * 40                  ; last path segment (the dir name to rmdir)
-    str pr_sub  = "?" * 40                  ; first subdirectory found while descending
+    str pr_leaf = "?" * 40                  ; last path segment to rmdir / next subdir while descending
+    str pr_file = "?" * 40                  ; last filename deleted during a leaf's file sweep (loop guard)
 
     sub scan_dir(ubyte dir_idx) -> bool {
         if xtree.d_flags[dir_idx] & xtree.FL_SCANNED != 0
@@ -130,6 +130,38 @@ xscan {
         return found
     }
 
+    sub delete_all_files(str dirpath) {
+        ; Delete every (non-dir) file in dirpath. The emulator's HOSTFS ignores a wildcard
+        ; scratch ("s:*" removes only ONE match), so enumerate and delete each by name.
+        ; diskio allows one listing at a time, so per pass: list, grab the first file, close
+        ; the listing, delete it, repeat until none. `path` holds the name (free mid-prune);
+        ; pr_file remembers the last name so a file that refuses to delete can't spin forever.
+        pr_file[0] = 0
+        repeat {
+            diskio.chdir(dirpath)
+            if not diskio.lf_start_list("*")
+                return
+            bool got = false
+            while diskio.lf_next_entry() {
+                if diskio.list_filename[0] == '.'
+                    continue                        ; skip . / .. / hidden
+                if diskio.list_filetype == "dir"
+                    continue                        ; leave subdirs for the prune descent
+                void strings.copy(diskio.list_filename, path)
+                got = true
+                break
+            }
+            diskio.lf_end_list()
+            if not got
+                return                              ; no files left in this directory
+            if strings.compare(path, pr_file) == 0
+                return                              ; same file reappeared -> can't delete it; bail
+            void strings.copy(path, pr_file)
+            diskio.chdir(dirpath)
+            diskio.delete(path)
+        }
+    }
+
     sub prune(str parent_path, str name) -> bool {
         ; Recursively delete <parent_path><name>/ and EVERYTHING under it, then the
         ; directory itself. parent_path is absolute and ends with '/'.
@@ -149,10 +181,9 @@ xscan {
             bool descended = false
             ubyte guard = 0
             repeat {
-                if not first_subdir(pr_cur, pr_sub)
-                    break                               ; pr_cur is a leaf directory
+                if not first_subdir(pr_cur, pr_leaf)    ; subdir name goes straight into pr_leaf
+                    break                               ; (untouched if none) pr_cur is a leaf dir
                 void strings.copy(pr_cur, pr_par)       ; its parent is the current dir
-                void strings.copy(pr_sub, pr_leaf)
                 join_path(pr_par, pr_leaf, pr_cur)      ; descend into the subdirectory
                 descended = true
                 guard++
@@ -160,8 +191,7 @@ xscan {
                     return false                        ; too deep / path too long
             }
             ; leaf = pr_cur, its parent = pr_par, its name = pr_leaf
-            diskio.chdir(pr_cur)
-            diskio.delete("*")                          ; scratch every file in the leaf
+            delete_all_files(pr_cur)                    ; scratch every file in the leaf (by name)
             diskio.chdir(pr_par)
             diskio.rmdir(pr_leaf)
             if diskio.status_code() != 0
