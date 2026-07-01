@@ -19,3 +19,4 @@
 - [User tests in emulator themselves](user-tests-in-emulator-themselves.md) — build & launch, then report; don't drive the GUI to verify
 - [RAM savings menu](xfmgr-ram-savings-menu.md) — verified ~2.9 KB of held main-RAM savings + the 3 overflow bugs already fixed
 - [Memory is git-tracked](memory-is-git-tracked.md) — this memory folder is a junction into the repo (docs/memory)
+- [Drop viewer for RAM](xfmgr-drop-viewer-ram.md) — measured: pulling xviewer (View→X16 Edit) frees ~3.1 KB, biggest single reclaim
