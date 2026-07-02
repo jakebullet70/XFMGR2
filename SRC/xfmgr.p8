@@ -563,10 +563,30 @@ main {
                     change_focus(FOCUS_FILE)        ; logged, no subdirs: drill into the file pane
                 }
             }
-            157 -> {                     ; left: collapse the expanded dir (like ENTER's collapse)
+            157, '-' -> {                ; left / '-': collapse the expanded dir (like ENTER's collapse)
                 if xtree.has_kids(cur_dir) and xtree.is_expanded(cur_dir) {
                     xtree.toggle_expand(cur_dir)
                     set_tree_cursor_to(cur_dir)
+                    dirty_tree = true
+                    dirty_files = true
+                    dirty_status = true
+                }
+            }
+            '+' -> {                     ; '+': log / expand the dir (like ENTER's expand, never collapses)
+                ubyte pidx = cur_dir
+                if xtree.d_flags[pidx] & xtree.FL_SCANNED == 0 {
+                    void xscan.scan_dir(pidx)       ; not logged yet: log it
+                    if xtree.has_kids(pidx)
+                        xtree.d_flags[pidx] |= xtree.FL_EXPANDED
+                    xtree.rebuild_visible()
+                    set_tree_cursor_to(pidx)
+                    select_dir(pidx)
+                    dirty_tree = true
+                    dirty_files = true
+                    dirty_status = true
+                } else if xtree.has_kids(pidx) and not xtree.is_expanded(pidx) {
+                    xtree.toggle_expand(pidx)       ; logged, collapsed, has subdirs: expand
+                    set_tree_cursor_to(pidx)
                     dirty_tree = true
                     dirty_files = true
                     dirty_status = true
