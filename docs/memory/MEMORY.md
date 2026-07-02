@@ -24,3 +24,4 @@
 - [%jmptable init-vars gotcha](prog8-jmptable-init-vars-gotcha.md) — initialized vars shove the jump table off its fixed offset; use uninit BSS arrays
 - [Prog8 long type limits](prog8-long-type-limits.md) — long[] caps at 64 elems; array index must be a byte; narrowing needs `as`
 - [docs/ reference tree](xfmgr-docs-reference-tree.md) — repo vendors prog8 stdlib, X16 manuals, examples, agent skills; ProgB docs too
+- [Filename literals must be lowercase](prog8-filename-literals-lowercase.md) — uppercase source A-Z encodes to $C1-DA and the FS won't match; use lowercase
