@@ -140,7 +140,8 @@ main {
 
     ; shared "press any key" footer text (Prog8 has no const str; this str is never
     ; written). Reused by the About box and the 2-line completion banners.
-    str PRESS_ANY_KEY = " Press any key "
+    str MSG_PRESS_ANY_KEY = " Press any key "
+    str MSG_ERR_COMMA     = "Can't rename: comma in name"   ; shared by both rename paths (file + dir)
 
     ; copy/move scratch: source & dest directory paths, and full file paths
     str cm_sdir = "?" * 80
@@ -168,6 +169,15 @@ main {
     extsub @bank 2 $A000 = tview_init()
     extsub @bank 2 $A003 = view_file(uword nameptr @R0)
     bool viewer_ok                          ; tview.bin loaded OK -> V uses the banked viewer
+
+    ; --- banked misc-utility overlay (miscutil) ---
+    ; miscutil.p8 is a second %output library blob loaded into reserved HIRAM bank 3 at
+    ; startup; it holds self-contained helpers moved out of main RAM (currently the wildcard
+    ; rename expander). $A000 = init; $A003 = wildcard_expand(orig @R0, pat @R1, out @R2).
+    const ubyte MISC_BANK = 3
+    extsub @bank 3 $A000 = miscutil_init()
+    extsub @bank 3 $A003 = wildcard_expand(uword origptr @R0, uword patptr @R1, uword outptr @R2)
+    bool misc_ok                            ; miscutil.bin loaded OK
 
     sub start() {
         ; XFMGR2 depends on R49+ Kernal behaviour (notably the X16 Edit ROM API used by
@@ -208,6 +218,13 @@ main {
         cx16.pop_rambank()
         if viewer_ok
             tview_init()                ; extsub @bank 2: clears the overlay's in-bank BSS ONCE
+
+        ; load the miscutil overlay into its reserved bank (MISC_BANK) the same way
+        cx16.push_rambank(MISC_BANK)
+        misc_ok = diskio.loadlib("miscutil.bin", $a000) != 0
+        cx16.pop_rambank()
+        if misc_ok
+            miscutil_init()             ; extsub @bank 3: clears the overlay's in-bank BSS ONCE
 
         xarena.reset()
         xfiles.reset()
@@ -1239,82 +1256,23 @@ main {
             }
             sib = xtree.d_next_sibling[sib]
         }
+        ; a comma in either name breaks the "r:new=old" DOS command (comma = separator)
+        if strings.contains(inputbuf, ',') or strings.contains(namebuf, ',') {
+            flash(MSG_ERR_COMMA)
+            return
+        }
         xtree.build_path(parent, pathbuf)                   ; parent dir (absolute, trailing '/')
         diskio.chdir(pathbuf)
         diskio.rename(namebuf, inputbuf)                    ; r:new=old on the renamed sub-dir
+        if diskio.status_code() != 0 {
+            flash("rename failed")                          ; DOS refused it - don't desync the tree
+            return
+        }
         xtree.rename_node(idx, inputbuf)                    ; keep the tree's name in sync
     }
 
-    sub last_dot(str s) -> ubyte {
-        ; index of the last '.' in s, or 255 if none
-        ubyte i = lsb(strings.length(s))
-        while i != 0 {
-            i--
-            if s[i] == '.'
-                return i
-        }
-        return 255
-    }
-
-    sub merge_seg(str pat, ubyte ps, ubyte pe, str orig, ubyte os, ubyte oe, str out, ubyte outpos) -> ubyte {
-        ; merge one filename segment: pattern pat[ps..pe) against orig[os..oe), writing
-        ; into out from outpos. '*' copies the rest of the original segment, '?' copies
-        ; one original char, any other char is literal (and consumes one original char).
-        ubyte pi = ps
-        ubyte oi = os
-        while pi < pe {
-            ubyte pc = pat[pi]
-            if pc == '*' {
-                while oi < oe {
-                    out[outpos] = orig[oi]
-                    outpos++
-                    oi++
-                }
-                return outpos                    ; '*' ends this segment
-            } else if pc == '?' {
-                if oi < oe {
-                    out[outpos] = orig[oi]
-                    outpos++
-                    oi++
-                }
-                pi++
-            } else {
-                out[outpos] = pc
-                outpos++
-                if oi < oe
-                    oi++
-                pi++
-            }
-        }
-        return outpos
-    }
-
-    sub wildcard_name(str orig, str pat, str out) {
-        ; expand a DOS/XTree-style rename pattern (pat) against the original name (orig)
-        ; into out, e.g. orig "test.dat" + pat "*.tmp" -> "test.tmp". Base and extension
-        ; (split at the last '.') are merged independently.
-        ubyte olen = lsb(strings.length(orig))
-        ubyte plen = lsb(strings.length(pat))
-        ubyte pd = last_dot(pat)
-        ubyte pos
-        if pd == 255 {
-            ; no '.' in the pattern: treat the whole name as a single segment
-            pos = merge_seg(pat, 0, plen, orig, 0, olen, out, 0)
-        } else {
-            ubyte obase_e = olen
-            ubyte oext_s = olen
-            ubyte od = last_dot(orig)
-            if od != 255 {
-                obase_e = od
-                oext_s = od + 1
-            }
-            pos = merge_seg(pat, 0, pd, orig, 0, obase_e, out, 0)
-            out[pos] = '.'
-            pos++
-            pos = merge_seg(pat, pd+1, plen, orig, oext_s, olen, out, pos)
-        }
-        out[pos] = 0
-    }
+    ; wildcard rename expansion (last_dot / merge_seg / wildcard_name) now lives in the
+    ; miscutil.p8 bank-3 overlay, called via the wildcard_expand extsub. See op_rename.
 
     sub op_rename() {
         if xfiles.ft_count == 0
@@ -1322,9 +1280,18 @@ main {
         xfiles.get_name(file_cursor, namebuf)       ; old name
         if not input_line("Rename to (* ? ok):", inputbuf, 49, "rename", false)
             return
+        ; Reject commas on the RAW typed input, BEFORE wildcard expansion: in a no-dot pattern
+        ; like "*,dat" the '*' swallows the whole segment (comma included), so a post-expansion
+        ; check would miss it. CMDR-DOS RENAME is "r:new=old" - a comma in either name is a
+        ; command separator and would fail silently. (To change an extension, use a dot: "*.dat".)
+        if strings.contains(inputbuf, ',') or strings.contains(namebuf, ',') {
+            flash(MSG_ERR_COMMA)
+            return
+        }
         ; if the typed name uses wildcards, merge them with the old name in place
-        if strings.contains(inputbuf, '*') or strings.contains(inputbuf, '?') {
-            wildcard_name(namebuf, inputbuf, cm_dst)
+        ; (banked: the expander lives in the miscutil overlay, called via extsub @bank 3)
+        if misc_ok and (strings.contains(inputbuf, '*') or strings.contains(inputbuf, '?')) {
+            wildcard_expand(&namebuf, &inputbuf, &cm_dst)
             void strings.copy(cm_dst, inputbuf)
         }
         xtree.build_path(cur_dir, pathbuf)
@@ -1339,6 +1306,13 @@ main {
             }
         }
         diskio.rename(namebuf, inputbuf)
+        if diskio.status_code() != 0 {
+            ; the DOS rename failed (e.g. a comma/other separator in the on-disk name that the
+            ; "r:new=old" command can't express) - report it instead of silently syncing the
+            ; display to a name that isn't actually on disk
+            flash("rename failed")
+            return
+        }
         if strings.length(inputbuf) <= xfiles.name_cap(file_cursor) {
             ; new name fits the existing record slot: overwrite in place (keeps tags)
             void xfiles.rename_inplace(file_cursor, inputbuf)
@@ -1665,7 +1639,7 @@ main {
         void strings.append(cm_dst, " file(s)")
         box_open()
         box_center(CMDROW1, cm_dst)
-        box_center(CMDROW2, PRESS_ANY_KEY)
+        box_center(CMDROW2, MSG_PRESS_ANY_KEY)
         void wait_key()
         box_close()
     }
@@ -2115,7 +2089,7 @@ main {
     sub flash(str m) {
         box_open()
         box_center(CMDROW1, m)
-        box_center(CMDROW2, PRESS_ANY_KEY)
+        box_center(CMDROW2, MSG_PRESS_ANY_KEY)
         void wait_key()
         box_close()
     }
@@ -2248,7 +2222,7 @@ main {
         }
         box_open()
         box_center(CMDROW1, cm_dst)
-        box_center(CMDROW2, PRESS_ANY_KEY)
+        box_center(CMDROW2, MSG_PRESS_ANY_KEY)
         void wait_key()
         box_close()
     }
@@ -2836,9 +2810,9 @@ main {
         txt.print(" banks")
         aboutln(10, "Written in Prog8")
         aboutln(11, "(c)2025-26 sadLogic")
-        txt.plot(about_col(lsb(strings.length(PRESS_ANY_KEY))), ABOUT_BOTTOM-1)   ; centered "Press any key"
+        txt.plot(about_col(lsb(strings.length(MSG_PRESS_ANY_KEY))), ABOUT_BOTTOM-1)   ; centered "Press any key"
         txt.color(shared.CLR_ACCENT)
-        txt.print(PRESS_ANY_KEY)
+        txt.print(MSG_PRESS_ANY_KEY)
         txt.color(shared.CLR_FG)
         void wait_key()
     }

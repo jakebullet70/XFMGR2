@@ -23,6 +23,8 @@ IF NOT EXIST "%RUNDIR%" MKDIR "%RUNDIR%"
 COPY /Y "%~dp0xfmgr.prg" "%RUNDIR%\xfmgr.prg" >NUL
 REM stage the tview viewer overlay (loaded into HIRAM bank 2 at runtime) alongside it
 COPY /Y "%~dp0tview.bin" "%RUNDIR%\tview.bin" >NUL
+REM stage the miscutil overlay (loaded into HIRAM bank 3 at runtime)
+COPY /Y "%~dp0miscutil.bin" "%RUNDIR%\miscutil.bin" >NUL
 
 REM 3) launch with the clean folder as the host filesystem root (no AUTOBOOT.X16
 REM    there), so the emulator boots straight into xfmgr.prg.
