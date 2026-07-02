@@ -15,10 +15,20 @@
 %import textio
 %import diskio
 %import strings
-%zeropage basicsafe
+; --- loadable-library overlay: headerless blob loaded at $A000 into a HIRAM bank and
+;     called via `extsub @bank`. %output library => no zeropage / no sysinit / jmp start
+;     entry; %memtop hard-fails the build if the overlay outgrows the $A000-$BFFF window.
+%address $A000
+%memtop  $C000
+%output  library
+%zeropage dontuse
 
 main {
     %option ignore_unused
+
+    ; Jump table so callable entry offsets stay fixed across rebuilds. The compiler prepends
+    ; `jmp start` at $A000 (library init), so: $A000 = start (init), $A003 = view_file.
+    %jmptable ( main.view_file )
 
     const ubyte SCREEN_MODE = $01      ; 80x30 text (matches XFMGR)
     const ubyte VTOP   = 1             ; first text row (row 0 = header)
@@ -30,7 +40,6 @@ main {
     ubyte[256] viewbuf                 ; read buffer (viewer reads up to 250 bytes/call)
     str namebuf = "?" * 80             ; the file to view
     ubyte g_key                        ; last key read
-    ubyte saved_mode                   ; screen mode to restore on exit
 
     ; --- viewer state ---
     ; file offset of the top of each visited page, so paging can go both forward and
@@ -46,15 +55,16 @@ main {
     uword view_match                   ; offset of the last search hit
 
     sub start() {
-        ; TODO: receive this from the caller. Hardcoded for now so the program is testable
-        ; standalone (XFMGR's run\ folder ships a README.TXT).
-        void strings.copy("README.TXT", namebuf)
+        ; library init entrypoint ($A000). The compiler emits the BSS-clear here; this must
+        ; do NO UI or system init (the caller/XFMGR owns the screen). Call ONCE after load.
+    }
 
-        saved_mode, cx16.r0L, cx16.r0H = cx16.get_screen_mode()
-        cx16.set_screen_mode(SCREEN_MODE)
+    sub view_file(uword nameptr @R0) {
+        ; real entry ($A003 via the jmptable). Copy the filename FIRST - diskio/strings
+        ; calls clobber cx16.r0-r3, so consume the @R0 pointer before anything else.
+        ; The caller keeps XFMGR in screen mode $01 and repaints after we return.
+        void strings.copy(nameptr, namebuf)
         view_run()
-        cx16.set_screen_mode(saved_mode)
-        txt.clear_screen()
     }
 
     ; ---------- shared helpers (ported from XFMGR's main module) ----------

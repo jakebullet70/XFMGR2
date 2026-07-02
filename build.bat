@@ -33,4 +33,13 @@ IF NOT "%ERR%"=="0" ( ENDLOCAL & EXIT /B %ERR% )
 REM --- memory-stats block parsed from the segment map ---
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0memstats.ps1" -Log "%BUILDLOG%" -Prg "%PRGFILE%"
 
+REM --- companion build: the tview viewer overlay (%output library -> headerless tview.bin at
+REM     $A000, loaded into HIRAM bank 2 at runtime and called via extsub @bank). Only when
+REM     building the app itself. %memtop $C000 in tview.p8 fails the build if it outgrows the bank.
+IF /I "%SRC%"=="xfmgr.p8" (
+    java -jar "%~dp0prog8c-12.2.1-all.jar" -target cx16 -out "%~dp0." "%SRCDIR%\tview.p8" > "%TEMP%\tview_build.txt" 2>&1
+    IF ERRORLEVEL 1 ( TYPE "%TEMP%\tview_build.txt" & ECHO *** tview overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
+    ECHO tview overlay: tview.bin built ^($A000 HIRAM bank overlay^).
+)
+
 ENDLOCAL & EXIT /B 0

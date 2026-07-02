@@ -168,6 +168,15 @@ main {
     ubyte hist_count                        ; 0..HIST_N, slot 0 = most recent
     str his_fname = "?" * 16                ; scratch: "<category>.his" (longest ~13 chars)
 
+    ; --- banked file viewer (tview) overlay ---
+    ; tview.p8 is compiled as a %output library headerless blob (org $A000) and loaded into
+    ; reserved HIRAM bank 2 (VIEW_BANK) at startup. extsub @bank wraps each call in JSRFAR,
+    ; mapping the bank around it. $A000 = library init (jmp start); $A003 = view_file entry.
+    const ubyte VIEW_BANK = 2
+    extsub @bank 2 $A000 = tview_init()
+    extsub @bank 2 $A003 = view_file(uword nameptr @R0)
+    bool viewer_ok                          ; tview.bin loaded OK -> V uses the banked viewer
+
     sub start() {
         ; XFMGR2 depends on R49+ Kernal behaviour (notably the X16 Edit ROM API used by
         ; the E command). Refuse to run on older or pre-release ROMs instead of booting
@@ -199,6 +208,14 @@ main {
         ; remember where we were launched from before any diskio call clobbers the
         ; shared buffer curdir() points into
         void strings.copy(diskio.curdir(), pathbuf)
+
+        ; load the tview viewer overlay into its reserved bank (VIEW_BANK) at $A000, from the
+        ; launch dir (cwd, where run.bat stages tview.bin), then run its one-time library init.
+        cx16.push_rambank(VIEW_BANK)
+        viewer_ok = diskio.loadlib("tview.bin", $a000) != 0
+        cx16.pop_rambank()
+        if viewer_ok
+            tview_init()                ; extsub @bank 2: clears the overlay's in-bank BSS ONCE
 
         xarena.reset()
         xfiles.reset()
@@ -601,9 +618,18 @@ main {
                     dirty_status = true
                 }
             }
-            'v' -> {
-                op_edit()                       ; internal viewer pulled (now a standalone
-                dirty_full = true               ; tview.prg); View opens X16 Edit like E
+            'v' -> {                            ; View: run the banked tview overlay
+                if xfiles.ft_count != 0 {
+                    if viewer_ok {
+                        xfiles.get_name(file_cursor, namebuf)
+                        xtree.build_path(cur_dir, pathbuf)
+                        diskio.chdir(pathbuf)   ; so tview's f_open(namebuf) resolves
+                        view_file(&namebuf)     ; extsub @bank 2: JSRFAR into the overlay; returns on Q/ESC
+                    } else {
+                        op_edit()               ; overlay missing -> fall back to X16 Edit
+                    }
+                    dirty_full = true           ; viewer/editor took the screen; repaint
+                }
             }
             'e' -> {
                 op_edit()
