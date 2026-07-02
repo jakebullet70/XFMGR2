@@ -2,6 +2,13 @@ sys {
     ; the sys functions shared across ALL compiler targets (including the custom defined ones)
     %option merge, no_symbol_prefixing, ignore_unused
 
+    asmsub die(ubyte code @A, str message @XY) {
+        ; -- kill the program by jumping into the debugger/monitor (if available). Status code is in register A, a pointer to the death message is in X,Y.
+        %asm {{
+            brk     ; program died, status code in A, message pointer in X,Y
+            ; !notreached!
+        }}
+    }
 
     asmsub save_prog8_internals() {
         %asm {{
@@ -52,17 +59,6 @@ save_SCRATCH_PTR	.word  ?
             lda  save_prog8_internals.save_SCRATCH_PTR+1
             sta  P8ZP_SCRATCH_PTR+1
             rts
-        }}
-    }
-
-    asmsub internal_stringcopy(str source @R0, str target @AY) clobbers (A,Y) {
-        ; Called when the compiler wants to assign a string value to another string.
-        %asm {{
-		sta  P8ZP_SCRATCH_W1
-		sty  P8ZP_SCRATCH_W1+1
-		lda  cx16.r0
-		ldy  cx16.r0+1
-		jmp  prog8_lib.strcpy
         }}
     }
 

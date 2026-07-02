@@ -270,19 +270,6 @@ sub clampf(float value, float minimum, float maximum) -> float {
     return minimum
 }
 
-inline asmsub push(float value @FAC1) {
-    %asm {{
-        jsr  floats.pushFAC1
-    }}
-}
-
-inline asmsub pop() -> float @FAC1 {
-    %asm {{
-        clc
-        jsr  floats.popFAC
-    }}
-}
-
 sub lerp(float v0, float v1, float t) -> float {
     ; Linear interpolation (LERP)
     ; Precise method, which guarantees v = v1 when t = 1.
@@ -306,7 +293,7 @@ sub interpolate(float v, float inputMin, float inputMax, float outputMin, float 
 }
 
     asmsub internal_long_AY_to_FAC() {
-        ; Used by the compiler to cast a long to a a float in FAC
+        ; Used by the compiler to cast a long to a float in FAC
         ; convert the long pointed to by AY into a float and store it in FAC
         %asm {{
             sta  cx16.r1L
@@ -320,8 +307,8 @@ sub interpolate(float v, float inputMin, float inputMax, float outputMin, float 
         }}
     }
 
-    sub internal_long_R1_to_float_AY() {
-        ; Used by the compiler to cast a long to a a float variable:
+    private sub internal_long_R1_to_float_AY() {
+        ; Used by the compiler to cast a long to a float variable:
         ; make the float pointed to by AY equal to the long pointed to by R1  (as float)
         %asm {{
             sta  cx16.r0L
@@ -360,7 +347,7 @@ sub interpolate(float v, float inputMin, float inputMax, float outputMin, float 
         return
     }
 
-    sub internal_get_vptr_highest_bit_pos(^^ubyte vptr) -> ubyte {
+    private sub internal_get_vptr_highest_bit_pos(^^ubyte vptr) -> ubyte {
         ; note: separate subroutine not nested in internal_long_R1_to_float_AY so that 64tass can optimize it out if not used
         if vptr[3]==0
             if vptr[2]==0
@@ -372,7 +359,7 @@ sub interpolate(float v, float inputMin, float inputMax, float outputMin, float 
         else return 24+highest_bit_in_byte(vptr[3])
     }
 
-    asmsub highest_bit_in_byte(ubyte value @A) -> ubyte @Y {
+    private asmsub highest_bit_in_byte(ubyte value @A) -> ubyte @Y {
         ; note: separate subroutine not nested in internal_get_vptr_highest_bit_pos so that 64tass can optimize it out if not used
         %asm {{
             ldy  #0

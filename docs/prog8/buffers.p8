@@ -1,6 +1,8 @@
 ; **experimental** buffer data structures, API subject to change!!
 
+
 %option ignore_unused
+
 
 smallringbuffer {
     ; -- A ringbuffer (FIFO queue) that occupies 256 bytes in memory.
@@ -23,15 +25,16 @@ smallringbuffer {
     }
 
     sub free() -> ubyte {
-        return 255-fill
+        return 255 - fill
     }
 
     sub isfull() -> bool {
-        return fill>=254
+        ; returns true if less than 2 bytes of space remaining (to allow putw)
+        return fill >= 254
     }
 
     sub isempty() -> bool {
-        return fill<=1
+        return fill == 0
     }
 
     sub put(ubyte value) {
@@ -72,7 +75,7 @@ smallringbuffer {
 smallstack {
     ; -- A small stack (LIFO) that uses just 256 bytes and is independent of the CPU stack. Stack is growing downward from the top of the buffer.
     ;    You can store and retrieve bytes and words. There are no guards against stack over/underflow.
-    ; note: for a "small stack"  (256 bytes size) you might also perhaps just use the CPU stack via sys.push[w] / sys.pop[w].
+    ; note: for a "small stack"  (256 bytes size) you might also perhaps just use the CPU stack via push[w] / pop[w].
 
     ubyte[256] buffer
     ubyte sp = 255
@@ -90,20 +93,21 @@ smallstack {
     }
 
     sub isfull() -> bool {
-        return sp==0
+        ; returns true if less than 2 bytes of space remaining (to allow push_w)
+        return sp <= 1
     }
 
     sub isempty() -> bool {
-        return sp==255
+        return sp == 255
     }
 
-    sub push(ubyte value) {
+    sub push_b(ubyte value) {
         ; -- put a byte on the stack
         buffer[sp] = value
         sp--
     }
 
-    sub pushw(uword value) {
+    sub push_w(uword value) {
         ; -- put a word on the stack (lsb first then msb)
         buffer[sp] = lsb(value)
         sp--
@@ -111,13 +115,13 @@ smallstack {
         sp--
     }
 
-    sub pop() -> ubyte {
+    sub pop_b() -> ubyte {
         ; -- pops a byte off the stack
         sp++
         return buffer[sp]
     }
 
-    sub popw() -> uword {
+    sub pop_w() -> uword {
         ; -- pops a word off the stack.
         sp++
         cx16.r0H = buffer[sp]
@@ -132,76 +136,56 @@ stack {
     ; -- A stack (LIFO) that uses a block of 8 KB of memory. Growing downward from the top of the buffer.
     ;    You can store and retrieve bytes and words. There are no guards against stack over/underflow.
 
-    uword sp
-    ubyte bank
+    uword sp = 8191
+    uword buffer_ptr = memory("buffers_stack", 8192, 0)
 
-    sub init(ubyte rambank) {
-        ; -- initialize the stack, must be called before use. Supply the HIRAM bank to use as buffer space.
-        sp = $bfff
-        bank = rambank
+    sub init() {
+        sp = 8191
     }
 
     sub size() -> uword {
-        return $bfff-sp
+        return 8191-sp
     }
 
     sub free() -> uword {
-        return sp-$a000
+        return sp
     }
 
     sub isfull() -> bool {
-        return sp<=$a001
+        ; returns true if less than 2 bytes of space remaining (to allow push_w)
+        return sp == 0 or sp > 8191
     }
 
     sub isempty() -> bool {
-        return sp==$bfff
+        return sp == 8191
     }
 
-    sub push(ubyte value) {
+    sub push_b(ubyte value) {
         ; -- put a byte on the stack
-        sys.push(cx16.getrambank())
-        cx16.rambank(bank)
-
-        @(sp) = value
+        buffer_ptr[sp] = value
         sp--
-
-        cx16.rambank(sys.pop())
     }
 
-    sub pushw(uword value) {
+    sub push_w(uword value) {
         ; -- put a word on the stack (lsb first then msb)
-        sys.push(cx16.getrambank())
-        cx16.rambank(bank)
-
-        @(sp) = lsb(value)
+        buffer_ptr[sp] = lsb(value)
         sp--
-        @(sp) = msb(value)
+        buffer_ptr[sp] = msb(value)
         sp--
-
-        cx16.rambank(sys.pop())
     }
 
-    sub pop() -> ubyte {
+    sub pop_b() -> ubyte {
         ; -- pops a byte off the stack
-        sys.push(cx16.getrambank())
-        cx16.rambank(bank)
-
         sp++
-        cx16.r0L = @(sp)
-        cx16.rambank(sys.pop())
-        return cx16.r0L
+        return buffer_ptr[sp]
     }
 
-    sub popw() -> uword {
+    sub pop_w() -> uword {
         ; -- pops a word off the stack.
-        sys.push(cx16.getrambank())
-        cx16.rambank(bank)
-
         sp++
-        cx16.r0H = @(sp)
+        cx16.r0H = buffer_ptr[sp]
         sp++
-        cx16.r0L = @(sp)
-        cx16.rambank(sys.pop())
+        cx16.r0L = buffer_ptr[sp]
         return cx16.r0
     }
 }
@@ -211,15 +195,14 @@ ringbuffer {
     ; -- A ringbuffer (FIFO queue) that uses a block of 8 KB of memory.
     ;    You can store and retrieve bytes and words too. No guards against buffer under/overflow.
 
-    uword fill, head, tail
-    ubyte bank = 255        ; set via init()
+    uword fill = 0
+    uword head = 0
+    uword tail = 8191
+    uword buffer_ptr = memory("buffers_ringbuffer", 8192, 0)
 
-    sub init(ubyte rambank) {
-        ; -- initialize the ringbuffer, must be called before use. Supply the HIRAM bank to use as buffer space.
-        head = $a000
-        tail = $bfff
-        fill = 0
-        bank = rambank
+    sub init() {
+        head = fill = 0
+        tail = 8191
     }
 
     sub size() -> uword {
@@ -227,76 +210,61 @@ ringbuffer {
     }
 
     sub free() -> uword {
-        return $1fff-fill
+        return 8192-fill
     }
 
     sub isempty() -> bool {
-        return fill<=1
+        return fill == 0
     }
 
     sub isfull() -> bool {
-        return fill>=8191
+        ; returns true if less than 2 bytes of space remaining (to allow putw)
+        return fill >= 8191
     }
 
     sub put(ubyte value) {
         ; -- store a byte in the buffer
-        sys.push(cx16.getrambank())
-        cx16.rambank(bank)
-
-        @(head) = value
-        fill++
+        buffer_ptr[head] = value
         inc_head()
-        cx16.rambank(sys.pop())
+        fill++
     }
 
     sub putw(uword value) {
         ; -- store a word in the buffer
-        sys.push(cx16.getrambank())
-        cx16.rambank(bank)
-
-        pokew(head, value)
         fill += 2
+        buffer_ptr[head] = lsb(value)
         inc_head()
+        buffer_ptr[head] = msb(value)
         inc_head()
-        cx16.rambank(sys.pop())
     }
 
     sub get() -> ubyte {
         ; -- retrieves a byte from the buffer
-        sys.push(cx16.getrambank())
-        cx16.rambank(bank)
-
         fill--
         inc_tail()
-        cx16.r0L= @(tail)
-        cx16.rambank(sys.pop())
-        return cx16.r0L
+        return buffer_ptr[tail]
     }
 
     sub getw() -> uword {
         ; -- retrieves a word from the buffer
-        sys.push(cx16.getrambank())
-        cx16.rambank(bank)
-
         fill -= 2
         inc_tail()
-        cx16.r0L = @(tail)
+        cx16.r0L = buffer_ptr[tail]
         inc_tail()
-        cx16.r0H = @(tail)
-        cx16.rambank(sys.pop())
+        cx16.r0H = buffer_ptr[tail]
         return cx16.r0
     }
 
     sub inc_head() {
         head++
-        if msb(head)==$c0
-            head=$a000
+        if msb(head)==$20
+            head=0
     }
 
     sub inc_tail() {
         tail++
-        if msb(tail)==$c0
-            tail=$a000
+        if msb(tail)==$20
+            tail=0
     }
 }
 

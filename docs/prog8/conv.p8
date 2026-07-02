@@ -651,6 +651,30 @@ _try_iso
     }}
 }
 
+sub  str2long(str string) -> long {
+    ; -- convert a decimal string (terminated with a zero byte) into a long. Clobbers R0
+    long result = 0
+    bool @nozp negative = string[0] == '-'
+    if negative or string[0]=='+'
+        string++
+    alias digit_char = cx16.r0L
+    repeat {
+        digit_char = @(string)
+        if digit_char in '0' to '9' {
+            result = (result<<1) + (result<<3)  ; multiply by 10
+            result += digit_char - '0'  ; add digit
+        } else {
+            break   ; Invalid character, stop processing
+        }
+        string++
+    }
+
+    if negative
+        return -result
+    else
+        return result
+}
+
 asmsub  bin2uword(str string @AY) -> uword @AY {
 	; -- binary string (with or without '%') to uword.
 	;    stops parsing at the first character that's not a 0 or 1. (except leading %)
@@ -918,25 +942,6 @@ _hex_digits	.text "0123456789abcdef"	; can probably be reused for other stuff as
 	}}
 }
 
-asmsub  internal_uword2hex  (uword value @AY) clobbers(A,Y)  {
-	; ---- convert 16 bit uword in A/Y into 4-character hexadecimal string 'uword2hex.output' (0-terminated)
-	%asm {{
-		sta  P8ZP_SCRATCH_REG
-		tya
-		jsr  ubyte2hex
-		sta  output
-		sty  output+1
-		lda  P8ZP_SCRATCH_REG
-		jsr  ubyte2hex
-		sta  output+2
-		sty  output+3
-		rts
-		.section BSS
-output		.fill 5      ; 0-terminated output buffer (to make printing easier)
-		.send BSS
-		; !notreached!
-	}}
-}
 
     ubyte[16]  @shared string_out       ; internal result buffer for the string conversion routines (note: uses uninitialized ARRAY instead of STR, to force it to be allocated in BSS area so it's ROM-compatible)
 

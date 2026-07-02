@@ -105,6 +105,7 @@ _sinecosR8	.char  trunc(127.0 * sin(range(180+45) * rad(360.0/180.0)))
         ; -- return random number uniformly distributed from 0 to n-1
         ;    NOTE: does not work for code in ROM, use randrange_rom instead for that
         ; why this works: https://www.youtube.com/watch?v=3DvlLUWTNMY&t=347s
+        ; Uses cx16.r0 as temporary
         cx16.r0 = math.rnd() * (n as uword)
         return cx16.r0H
     }
@@ -113,6 +114,7 @@ _sinecosR8	.char  trunc(127.0 * sin(range(180+45) * rad(360.0/180.0)))
         ; -- return random number uniformly distributed from 0 to n-1
         ;    NOTE: works for code in ROM, make sure you have initialized the seed using rndseed_rom
         ; why this works: https://www.youtube.com/watch?v=3DvlLUWTNMY&t=347s
+        ; Uses cx16.r0 as temporary
         cx16.r0 = math.rnd_rom() * (n as uword)
         return cx16.r0H
     }
@@ -177,6 +179,7 @@ _sinecosR8	.char  trunc(127.0 * sin(range(180+45) * rad(360.0/180.0)))
     }
 
     asmsub log2w(uword value @AY) -> ubyte @Y {
+        ; Clobbers cx16.r0
         %asm {{
             sta  P8ZP_SCRATCH_W1
             sty  P8ZP_SCRATCH_W1+1
@@ -212,7 +215,7 @@ _sinecosR8	.char  trunc(127.0 * sin(range(180+45) * rad(360.0/180.0)))
         ;     some simpler multiplications will be optimized away into faster routines. These will not set the upper 16 bits at all!
         ;   - THE RESULT IS ONLY VALID IF THE MULTIPLICATION WAS DONE WITH UWORD ARGUMENTS (or two positive WORD arguments)
         ;     as soon as a negative word value (or 2) was used in the multiplication, these upper 16 bits are not valid!!
-        ;     Suggestion (if you are on the Commander X16): use verafx.muls() to get a hardware accelerated 32 bit signed multplication.
+        ;     Suggestion (if you are on the Commander X16): use verafx.muls() to get a hardware accelerated 32 bit signed multiplication.
         %asm {{
             lda  prog8_math.multiply_words.result+2
             ldy  prog8_math.multiply_words.result+3
@@ -267,6 +270,7 @@ asmsub direction_qd(ubyte quadrant @A, ubyte xdelta @X, ubyte ydelta @Y) -> ubyt
     ;  .reg:x @in  x_delta Delta for x direction.
     ;  .reg:y @in  y_delta Delta for y direction.
     ; Returns A as the direction (0-23).
+    ; Clobbers cx16.r0 through cx16.r5 (used as temporary variables).
 
     %asm {{
 x_delta = cx16.r0L
@@ -385,9 +389,10 @@ _quadrant_region_to_direction:
 
 asmsub atan2(ubyte x1 @R0, ubyte y1 @R1, ubyte x2 @R2, ubyte y2 @R3) -> ubyte @A {
     ;; Calculate the angle, in a 256-degree circle, between two points into A.
-    ;; The points (x1, y1) and (x2, y2) have to use *unsigned coordinates only* from the positive quadrant in the carthesian plane!
+    ;; The points (x1, y1) and (x2, y2) have to use *unsigned coordinates only* from the positive quadrant in the cartesian plane!
     ;; http://codebase64.net/doku.php?id=base:8bit_atan2_8-bit_angle
     ;; This uses 2 large lookup tables so uses a lot of memory but is super fast.
+    ;; Clobbers cx16.r0 through cx16.r4 (r0-r3 are input params, r4 is temporary).
 
     %asm {{
 
@@ -531,6 +536,7 @@ log2_tab
 
     asmsub diffw(uword w1 @R0, uword w2 @AY) -> uword @AY {
         ; -- returns the (absolute) difference, or distance, between the two words
+        ;    clobbers cx16.r0 (used as input and temporary)
         %asm {{
             sec
             sbc  cx16.r0L
@@ -553,58 +559,72 @@ log2_tab
         }}
     }
 
-    sub crc16(^^ubyte data, uword length) -> uword {
-        ; calculates the CRC16 (XMODEM) checksum of the buffer. Clobbers R14 and R15.
+    sub crc16(^^ubyte data, uword length, uword initvalue, uword xorout) -> uword {
+        ; Calculates the CRC16 checksum of the buffer. You provide the initial start value and the final value that is xored with the result.
+        ; For XMODEM type checksum, use initvalue=0 and xorout=0.
+        ; For IBM-3740 type checksum, use initvalue=$ffff and xorout=0. (this is then equivalent to the cx16.memory_crc routine).
+        ; Clobbers R14 and R15.
         ; There are also "streaming" crc16_start/update/end routines below, that allow you to calculate crc16 for data that doesn't fit in a single memory block.
+        cx16.r15 = initvalue
         cx16.r14 = data
-        crc16_start()
         repeat length {
             crc16_update(@(cx16.r14))
             cx16.r14++
         }
-        return crc16_end()
+        return cx16.r15 ^ xorout
     }
 
-    sub crc16_start() {
+    sub crc16_start(uword initvalue) {
         ; start the "streaming" crc16
         ; note: tracks the crc16 checksum in cx16.r15!
         ;       if your code uses that, it must save/restore it before calling this routine
-        cx16.r15 = 0
+        cx16.r15 = initvalue
     }
 
     asmsub crc16_update(ubyte value @A) {
         ; update the "streaming" crc16 with next byte value
         ; note: tracks the crc16 checksum in cx16.r15!
         ;       if your code uses that, it must save/restore it before calling this routine
+        ; note: this routine doesn't use a lookup table to speed up the calculation, so it is not particularly fast.
         %asm {{
-            eor  cx16.r15H
-            sta  cx16.r15H
-            ldy  #8
--           asl  cx16.r15L
-            rol  cx16.r15H
-            bcc  +
-            lda  cx16.r15H
-            eor  #$10
-            sta  cx16.r15H
-            lda  cx16.r15L
-            eor  #$21
-            sta  cx16.r15L
-+           dey
-            bne  -
-            rts
+        ; code is from: http://www.6502.org/source/integers/crc-more.html
+crclo   = cx16.r15L          ; current value of CRC
+crchi   = cx16.r15H
+
+        eor crchi       ; a contained the data
+        sta crchi       ; xor it into high byte
+        lsr             ; right shift a 4 bits
+        lsr             ; to make top of x^12 term
+        lsr             ; ($1...)
+        lsr
+        tax             ; save it
+        asl             ; then make top of x^5 term
+        eor crclo       ; and xor that with low byte
+        sta crclo       ; and save
+        txa             ; restore partial term
+        eor crchi       ; and update high byte
+        sta crchi       ; and save
+        asl             ; left shift three
+        asl             ; the rest of the terms
+        asl             ; have feedback from x^12
+        tax             ; save bottom of x^12
+        asl             ; left shift two more
+        asl             ; watch the carry flag
+        eor crchi       ; bottom of x^5 ($..2.)
+        tay             ; save high byte
+        txa             ; fetch temp value
+        rol             ; bottom of x^12, middle of x^5!
+        eor crclo       ; finally update low byte
+        sta crchi       ; then swap high and low bytes
+        sty crclo
+        rts
+
         }}
-; orignal prog8 code was:
-;        cx16.r15H ^= value
-;        repeat 8 {
-;            cx16.r15<<=1
-;            if_cs
-;                cx16.r15 ^= $1021
-;        }
     }
 
-    sub crc16_end() -> uword {
+    sub crc16_end(uword xorout) -> uword {
         ; finalize the "streaming" crc16, returns resulting crc16 value
-        return cx16.r15
+        return cx16.r15 ^ xorout
     }
 
     sub crc32(^^ubyte data, uword length) -> long {
@@ -669,12 +689,7 @@ log2_tab
 ;        }
     }
 
-    sub crc32_end() -> long {
-        ; finalize the "streaming" crc32 and returns the result
-        return crc32_end_result()
-    }
-
-    asmsub crc32_end_result() -> long @R14R15 {
+    asmsub crc32_end() -> long @R14R15 {
         ; finalize the "streaming" crc32
         ; returns the result value in cx16.r15 (high word) and r14 (low word)
         %asm {{
