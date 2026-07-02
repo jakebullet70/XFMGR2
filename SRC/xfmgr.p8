@@ -286,7 +286,12 @@ main {
                             if focus == FOCUS_FILE and xfiles.ft_count == 0
                                 change_focus(FOCUS_TREE)           ; files - an empty one stays in the tree
                         }
-                        157  -> change_focus(FOCUS_TREE)           ; cursor-left
+                        157  -> {                                  ; cursor-left
+                            if focus == FOCUS_TREE
+                                handle_tree(157)                   ; in the tree: collapse expanded dir
+                            else
+                                change_focus(FOCUS_TREE)           ; in the files: hop back to the tree
+                        }
                         else -> {
                             if focus == FOCUS_TREE
                                 handle_tree(g_key)
@@ -556,6 +561,15 @@ main {
                     dirty_status = true
                 } else {
                     change_focus(FOCUS_FILE)        ; logged, no subdirs: drill into the file pane
+                }
+            }
+            157 -> {                     ; left: collapse the expanded dir (like ENTER's collapse)
+                if xtree.has_kids(cur_dir) and xtree.is_expanded(cur_dir) {
+                    xtree.toggle_expand(cur_dir)
+                    set_tree_cursor_to(cur_dir)
+                    dirty_tree = true
+                    dirty_files = true
+                    dirty_status = true
                 }
             }
             'k' -> {
