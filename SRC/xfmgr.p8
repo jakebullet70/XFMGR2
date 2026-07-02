@@ -625,6 +625,8 @@ main {
                         xtree.build_path(cur_dir, pathbuf)
                         diskio.chdir(pathbuf)   ; so tview's f_open(namebuf) resolves
                         view_file(&namebuf)     ; extsub @bank 2: JSRFAR into the overlay; returns on Q/ESC
+                        txt.color2(CLR_FG, CLR_BG)   ; viewer left the text colour blue; restore app theme
+                                                     ; (full_redraw's blanks use the current colour)
                     } else {
                         op_edit()               ; overlay missing -> fall back to X16 Edit
                     }

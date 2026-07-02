@@ -36,9 +36,21 @@ main {
     const ubyte VWIDTH = 79            ; wrap column (keep off col 79 to avoid auto-scroll)
     const ubyte SCR_BOT = 29           ; footer row
 
+    ; status-bar theme: our standard blue bar with white text (matches HILITE / box_header
+    ; in the base app); hotkey letters shown in the accent colour like the base menus.
+    const ubyte BAR_BG  = 14           ; light-blue bar background
+    const ubyte BAR_FG  = 1            ; white bar text
+    const ubyte BAR_KEY = 7            ; accent (yellow) - highlighted hotkey letters
+    const ubyte CONTENT_BG = 11        ; content area bg: dark gray (matches base app CLR_BG)
+
     ; --- shared scratch (in XFMGR these lived in the main module) ---
+    ; NOTE: these MUST stay uninitialized (no "= ..."). %jmptable relies on `jmp view_file`
+    ; landing at $A003 (right after the compiler's `jmp start` at $A000). prog8 emits a
+    ; block's INITIALIZED variables inline BEFORE its code/jumptable, which would shove the
+    ; jump table down and make extsub $A003 call into the data. Uninitialized vars go to the
+    ; relocated BSS section at the tail instead, keeping the jump table at $A003.
     ubyte[256] viewbuf                 ; read buffer (viewer reads up to 250 bytes/call)
-    str namebuf = "?" * 80             ; the file to view
+    ubyte[81] namebuf                  ; the file to view (80 chars + NUL); filled per call
     ubyte g_key                        ; last key read
 
     ; --- viewer state ---
@@ -50,7 +62,7 @@ main {
     uword view_off                     ; hex-mode current page top offset
     ubyte view_page                    ; text-mode current page index
     ubyte view_known                   ; text-mode highest page index with a known offset
-    str view_find = "?" * 33           ; in-file search term (<= 32 chars)
+    ubyte[34] view_find                ; in-file search term (<= 32 chars + NUL); uninit -> BSS
     uword view_next                    ; offset to resume "find next" from
     uword view_match                   ; offset of the last search hit
 
@@ -74,6 +86,25 @@ main {
         ubyte c
         for c in col0 to col1
             txt.spc()
+    }
+
+    sub bar_fill(ubyte row) {
+        ; paint a full-width status bar (cols 0..79) in our standard blue. Uses setchr/setclr
+        ; (direct, no cursor move) so it can safely fill col 79 / the bottom row without the
+        ; auto-scroll that chrout would cause there. Leaves the cursor colour at white-on-blue.
+        ubyte c
+        for c in 0 to 79 {
+            txt.setchr(c, row, sc:' ')
+            txt.setclr(c, row, (BAR_BG << 4) | BAR_FG)   ; $e1 = blue bg / white fg
+        }
+        txt.color2(BAR_FG, BAR_BG)
+    }
+
+    sub bar_key(str s) {
+        ; print a highlighted hotkey (accent on blue), then revert to white-on-blue text
+        txt.color2(BAR_KEY, BAR_BG)
+        txt.print(s)
+        txt.color2(BAR_FG, BAR_BG)
     }
 
     sub print_trunc(str s, ubyte maxlen) {
@@ -102,6 +133,7 @@ main {
         view_eof = false
         ubyte br
         if draw {
+            txt.color2(BAR_FG, CONTENT_BG)  ; content: white on gray
             for br in VTOP to VTOP + VROWS - 1
                 blank_span(0, 78, br)
         }
@@ -208,6 +240,7 @@ main {
         ; offset and set view_eof at end-of-file. Header/footer untouched (no flicker).
         view_eof = false
         ubyte br
+        txt.color2(BAR_FG, CONTENT_BG)     ; content: white on gray
         for br in VTOP to VTOP + VROWS - 1
             blank_span(0, 78, br)
         if not diskio.f_open(namebuf) {
@@ -326,11 +359,9 @@ main {
 
     sub view_read_find() -> bool {
         ; read a search term on the footer row; false if cancelled or empty
-        blank_span(0, 78, SCR_BOT)
-        txt.chrout($12)
+        bar_fill(SCR_BOT)
         txt.plot(0, SCR_BOT)
         txt.print(" Find: ")
-        txt.chrout($92)
         ubyte n = 0
         view_find[0] = 0
         txt.plot(7, SCR_BOT)
@@ -364,11 +395,9 @@ main {
 
     sub view_notify(str m) {
         ; brief footer message (auto-dismissed by the next footer repaint)
-        blank_span(0, 78, SCR_BOT)
-        txt.chrout($12)
+        bar_fill(SCR_BOT)
         txt.plot(0, SCR_BOT)
         txt.print(m)
-        txt.chrout($92)
         sys.wait(75)
     }
 
@@ -408,12 +437,12 @@ main {
     sub view_run() {
         ; clear once on entry and draw the static header bar (row 0); per-page renders
         ; only repaint the body + footer, so the header doesn't flicker.
+        txt.color2(BAR_FG, CONTENT_BG)     ; content bg = gray (header bar drawn over row 0 next)
         txt.clear_screen()
-        txt.chrout($12)
+        bar_fill(0)                        ; full-width blue header bar
         txt.plot(0, 0)
-        txt.print("VIEW: ")
+        txt.print(" VIEW: ")
         print_trunc(namebuf, 60)
-        txt.chrout($92)
         view_hex = false
         view_off = 0
         view_page = 0
@@ -427,20 +456,33 @@ main {
                 nxt = view_render_hex(view_off)
             else
                 nxt = view_render(view_pages[view_page], true)
-            ; footer bar (only this row is repainted per page)
-            blank_span(0, 78, SCR_BOT)
-            txt.chrout($12)
+            ; footer status bar (repainted per page): full-width blue, white text, accent keys
+            bar_fill(SCR_BOT)
             txt.plot(0, SCR_BOT)
+            txt.spc()
+            bar_key("PgDn/Up")
+            txt.spc()
+            bar_key("T")
+            txt.print(":top ")
+            bar_key("H")
+            if view_hex
+                txt.print(":text ")
+            else
+                txt.print(":hex ")
+            bar_key("F")
+            txt.print(":find ")
+            bar_key("N")
+            txt.print(":next ")
+            bar_key("Q")
             if view_hex {
-                txt.print(" PgDn/Up T:top H:text F:find N:next Q:quit  $")
+                txt.print(":quit   $")
                 put_hex16(view_off)
             } else {
-                txt.print(" PgDn/Up T:top H:hex F:find N:next Q:quit  pg ")
+                txt.print(":quit   pg ")
                 txt.print_uw(view_page + 1)
             }
             if view_eof
                 txt.print(" (END)")
-            txt.chrout($92)
 
             g_key = wait_key()
             if g_key >= $c1 and g_key <= $da
