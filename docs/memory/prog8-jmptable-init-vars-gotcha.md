@@ -28,3 +28,13 @@ anywhere a `str` param is expected (decays to a uword pointer). Layout then is t
 be anywhere, but the 3 bytes at `$A003` must be `jmp <that sub>` (confirm `p8s_start` = `$A006`,
 proving `$A003-$A005` is the table entry). See [[x16-launch-program-dynamic-keyboard]] and the
 overlay design in [[xfmgr-drop-viewer-ram]].
+
+**`memory()` slab in an overlay (same trap, subtler):** a big buffer (>256 bytes, prog8's array
+cap) must be a `memory()` slab, but `uword hist_buf = memory("name", 500, 0)` is an INITIALIZED
+var — it emits the 2-byte slab address inline before the jump table and shifts every offset.
+Fix: declare `uword hist_buf` UNINITIALIZED and assign it in `start()`:
+`hist_buf = memory("name", 500, 0)`. The reservation is compile-time; the runtime assignment of
+that constant costs nothing inline. (miscutil's 500 B input-history ring, added alongside prune.)
+Also, each `@R0/@R1` entry param must be captured into a local at the very top of the sub before
+any `strings.*`/`diskio.*` call (which clobber `cx16.r0-r3`) — prog8 warns "reusing R0-R15 as
+parameters risks overwriting"; the capture makes it safe. See [[xfmgr-run-utils-and-return]].
