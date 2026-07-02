@@ -160,6 +160,10 @@ main {
         ubyte col = 0
         bool prev_cr = false
         bool full = false
+        ; found-text highlight: bytes [view_match, view_match+plen) are drawn in the find colour
+        ubyte plen = lsb(strings.length(view_find))
+        uword mend = view_match + plen
+        bool hl = false
         if draw
             txt.plot(0, VTOP)
         repeat {
@@ -192,8 +196,17 @@ main {
                 } else {
                     if ch < 32 or ch > 126
                         ch = '.'
-                    if draw
+                    if draw {
+                        bool inmatch = plen != 0 and consumed-1 >= view_match and consumed-1 < mend
+                        if inmatch != hl {
+                            if inmatch
+                                txt.color2(shared.FIND_FG, shared.FIND_BG)
+                            else
+                                txt.color2(shared.BAR_FG, shared.CONTENT_BG)
+                            hl = inmatch
+                        }
                         txt.chrout(ch)
+                    }
                     col++
                     if col >= VWIDTH {
                         row++
@@ -210,6 +223,8 @@ main {
             if full
                 break
         }
+        if draw and hl
+            txt.color2(shared.BAR_FG, shared.CONTENT_BG)   ; leave the content colour clean
         diskio.f_close()
         return consumed
     }
@@ -311,6 +326,10 @@ main {
         ubyte plen = lsb(strings.length(view_find))
         if plen == 0
             return false
+        ; scanning the whole file can take a moment on big files - show progress
+        bar_fill(SCR_BOT)
+        txt.plot(0, SCR_BOT)
+        txt.print(" Working...")
         if not diskio.f_open(namebuf)
             return false
         uword toskip = from
@@ -368,8 +387,10 @@ main {
                 view_find[n] = 0
                 return n != 0
             }
-            if g_key == 27 or g_key == 3
+            if g_key == 27 or g_key == 3 {
+                view_find[0] = 0            ; cancelled -> no active search term (hides the hint)
                 return false
+            }
             if g_key == 20 {                    ; backspace
                 if n != 0 {
                     n--
@@ -528,6 +549,12 @@ main {
             txt.print("ext ")
             bar_key("Q")
             txt.print("uit")
+            ; Space=find-next hint, shown only while a search term is active (view_find non-empty)
+            if view_find[0] != 0 {
+                txt.print("   (")
+                bar_key("Space")
+                txt.print(":Next)")
+            }
             ; right-justify the position indicator (page/offset [+ END]) against the right edge.
             ; w = width of what we print; start col 79-w ends it at col 78 - never col 79, which
             ; would auto-scroll the bottom row.
@@ -603,18 +630,15 @@ main {
                         view_hex = true
                     }
                 }
-                'f' -> {                        ; find: prompt, search from current top
+                'f' -> {                        ; find: prompt, ALWAYS search from the top of the file
                     if view_read_find() {
-                        uword sfrom = view_off
-                        if not view_hex
-                            sfrom = view_pages[view_page]
-                        if view_find_at(sfrom)
+                        if view_find_at(0)
                             view_jump()
                         else
                             view_notify(" not found")
                     }
                 }
-                'n' -> {                        ; find next
+                'n', ' ' -> {                   ; N or Space: find next
                     if view_find_at(view_next)
                         view_jump()
                     else

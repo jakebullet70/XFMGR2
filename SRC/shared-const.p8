@@ -32,4 +32,6 @@ shared {
     const ubyte BAR_FG     = CLR_FG     ; status bar text: white
     const ubyte BAR_KEY    = CLR_BG     ; bottom-menu hotkey letters: dark gray (was yellow/black)
     const ubyte CONTENT_BG = CLR_BG     ; viewer content area: dark gray
+    const ubyte FIND_FG    = BLACK      ; found-text highlight: black text ...
+    const ubyte FIND_BG    = CLR_ACCENT ; ... on yellow, so a search hit stands out on the gray page
 }
