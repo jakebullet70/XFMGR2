@@ -22,3 +22,4 @@
 - [Memory is git-tracked](memory-is-git-tracked.md) — this memory folder is a junction into the repo (docs/memory)
 - [Drop viewer for RAM](xfmgr-drop-viewer-ram.md) — DONE: pulled xviewer (+3.1 KB free); code preserved as standalone SRC/tview.p8, V→X16 Edit
 - [%jmptable init-vars gotcha](prog8-jmptable-init-vars-gotcha.md) — initialized vars shove the jump table off its fixed offset; use uninit BSS arrays
+- [docs/ reference tree](xfmgr-docs-reference-tree.md) — repo vendors prog8 stdlib, X16 manuals, examples, agent skills; ProgB docs too
