@@ -1,16 +1,15 @@
 ; tview - standalone read-only paged text/hex file viewer for the Commander X16.
 ;
 ; Extracted from XFMGR2's internal viewer (was SRC/xviewer.p8) so XFMGR can drop the
-; ~3.1 KB of viewer code and this can grow into a separate, CALLABLE viewer program.
+; ~3.1 KB of viewer code from main RAM. Now built as a %output library overlay that XFMGR
+; loads into a HIRAM bank and calls via `extsub @bank` (see the overlay notes below).
 ;
 ; Controls:  PgDn/PgUp page   T/Home top   H hex<->text   F find   N find-next   Q quit
 ; The pager uses 16-bit file offsets, so it pages within the first 64 KB of a file.
 ;
-; STANDALONE SEED - still TODO before it's a finished callable program:
-;   * Receive the target filename from the caller (XFMGR) instead of the hardcoded
-;     default below. Options: a fixed RAM hand-off area, a tiny param file, or args.
-;   * Decide large-file (>64 KB) behaviour (XFMGR used to bounce those to X16 Edit).
-;   * Optionally restore path handling (chdir into the file's directory).
+; Call contract: the caller (XFMGR) chdir's into the file's directory, keeps the screen in
+; mode $01, then calls view_file(nameptr @R0); the filename is copied in on entry. On return
+; the caller repaints. Known limitation: files > 64 KB only page within their first 64 KB.
 
 %import textio
 %import diskio
@@ -30,7 +29,6 @@ main {
     ; `jmp start` at $A000 (library init), so: $A000 = start (init), $A003 = view_file.
     %jmptable ( main.view_file )
 
-    const ubyte SCREEN_MODE = $01      ; 80x30 text (matches XFMGR)
     const ubyte VTOP   = 1             ; first text row (row 0 = header)
     const ubyte VROWS  = 28            ; text rows 1..28
     const ubyte VWIDTH = 79            ; wrap column (keep off col 79 to avoid auto-scroll)
@@ -460,25 +458,27 @@ main {
             bar_fill(SCR_BOT)
             txt.plot(0, SCR_BOT)
             txt.spc()
-            bar_key("PgDn/Up")
+            bar_key("PgDn/PgUp")
             txt.spc()
             bar_key("T")
-            txt.print(":top ")
-            bar_key("H")
-            if view_hex
-                txt.print(":text ")
-            else
-                txt.print(":hex ")
+            txt.print("op ")
+            if view_hex {
+                bar_key("T")
+                txt.print("ext ")
+            } else {
+                bar_key("H")
+                txt.print("ex ")
+            }
             bar_key("F")
-            txt.print(":find ")
+            txt.print("ind ")
             bar_key("N")
-            txt.print(":next ")
+            txt.print("ext ")
             bar_key("Q")
             if view_hex {
-                txt.print(":quit   $")
+                txt.print("uit   $")
                 put_hex16(view_off)
             } else {
-                txt.print(":quit   pg ")
+                txt.print("uit   pg ")
                 txt.print_uw(view_page + 1)
             }
             if view_eof
