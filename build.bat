@@ -23,7 +23,9 @@ REM the .prg is named after the source (xfmgr.p8 -> xfmgr.prg), written to the r
 FOR %%F IN ("%SRC%") DO SET PRGFILE=%~dp0%%~nF.prg
 
 SET BUILDLOG=%TEMP%\xfmgr_build.txt
-java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\%SRC%" > "%BUILDLOG%" 2>&1
+REM prog8c-12.2.1-all.jar is the active compiler; the older prog8c.jar (12.1.1) is kept
+REM alongside as a fallback - swap the name here to roll back.
+java -jar "%~dp0prog8c-12.2.1-all.jar" -target cx16 -out "%~dp0." "%SRCDIR%\%SRC%" > "%BUILDLOG%" 2>&1
 SET ERR=%ERRORLEVEL%
 TYPE "%BUILDLOG%"
 IF NOT "%ERR%"=="0" ( ENDLOCAL & EXIT /B %ERR% )
