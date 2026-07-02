@@ -136,7 +136,7 @@ main {
     str treeline = "?" * 48             ; composed tree row (connectors + name)
     str sa_line  = "?" * 100            ; composed ShowAll row (path + name)
     ubyte[20] levlast                   ; per-depth: is the ancestor a last child?
-    ubyte[256] viewbuf                  ; file read buffer (viewer / copy / history load)
+    ubyte[256] viewbuf                  ; file read buffer (copy); history load now uses the overlay
 
     ; shared "press any key" footer text (Prog8 has no const str; this str is never
     ; written). Reused by the About box and the 2-line completion banners.
@@ -153,13 +153,13 @@ main {
     ubyte ow_mode                           ; overwrite policy for the current copy/move batch:
                                             ; 0 = ask on each conflict, 1 = overwrite all, 2 = skip all
 
-    ; shared text-input history (XTreeGold): the last HIST_N accepted entries,
-    ; newest first. UP-arrow in any input pops up a scrollable picker.
-    const ubyte HIST_N = 10
-    const ubyte HIST_W = 50                 ; bytes per slot (<=49 chars + NUL)
-    uword hist_buf = memory("inputhist", HIST_N * HIST_W, 0)
-    ubyte hist_count                        ; 0..HIST_N, slot 0 = most recent
-    str his_fname = "?" * 16                ; scratch: "<category>.his" (longest ~13 chars)
+    ; shared text-input history (XTreeGold): the last 10 accepted entries per prompt category,
+    ; newest first. UP-arrow in any input pops up a scrollable picker. The ring buffer + its ops
+    ; (store/load/save) now live in the miscutil overlay (bank 3) to save ~500 B of main RAM -
+    ; see the hist_* extsubs. Main keeps only a cached count (for the "any history?" check and the
+    ; picker geometry) and a one-entry scratch line the picker fills from the overlay via hist_get.
+    ubyte hist_count                        ; cached copy of the overlay's ring count (0..10)
+    ubyte[50] hist_line                     ; picker's receive buffer for one ring entry (<=49 + NUL)
 
     ; --- banked file viewer (tview) overlay ---
     ; tview.p8 is compiled as a %output library headerless blob (org $A000) and loaded into
@@ -173,13 +173,22 @@ main {
     ; --- banked misc-utility overlay (miscutil) ---
     ; miscutil.p8 is a second %output library blob loaded into reserved HIRAM bank 3 at
     ; startup; it holds self-contained helpers moved out of main RAM (the wildcard rename
-    ; expander and the recursive directory-prune engine). $A000 = init;
+    ; expander, the recursive directory-prune engine, and the input-history ring). $A000 = init;
     ; $A003 = wildcard_expand(orig @R0, pat @R1, out @R2);
-    ; $A006 = prune_dir(parent @R0, name @R1) -> ubyte (1=ok, 0=fail).
+    ; $A006 = prune_dir(parent @R0, name @R1) -> ubyte (1=ok, 0=fail);
+    ; $A009 = hist_load(cat @R0, base @R1) -> count; $A00C = hist_store(str @R0) -> count;
+    ; $A00F = hist_save(cat @R0, base @R1); $A012 = hist_get(slot @R0, out @R1).
     const ubyte MISC_BANK = 3
     extsub @bank 3 $A000 = miscutil_init()
     extsub @bank 3 $A003 = wildcard_expand(uword origptr @R0, uword patptr @R1, uword outptr @R2)
     extsub @bank 3 $A006 = prune_dir(uword parptr @R0, uword nameptr @R1) -> ubyte @A
+    ; history ring lives in the overlay; main caches the count returned by load/store. cat/base
+    ; are string pointers (the category name and xtree.base_path); the picker reads slots via
+    ; hist_get into hist_line. If misc_ok is false, input_line skips history entirely.
+    extsub @bank 3 $A009 = hist_load(uword cat @R0, uword base @R1) -> ubyte @A
+    extsub @bank 3 $A00C = hist_store(uword sptr @R0) -> ubyte @A
+    extsub @bank 3 $A00F = hist_save(uword cat @R0, uword base @R1)
+    extsub @bank 3 $A012 = hist_get(ubyte slot @R0, uword outptr @R1)
     bool misc_ok                            ; miscutil.bin loaded OK
 
     sub start() {
@@ -1824,7 +1833,7 @@ main {
         if xarena.high_bank >= xarena.max_bank {
             ; arena has consumed every usable bank - nothing left to hand the editor
             ; (also avoids high_bank+1 wrapping to 0 when high_bank == 255)
-            flash("no free RAM banks for editor")
+            flash("No free RAM banks for editor")
             return
         }
         xfiles.get_name(file_cursor, namebuf)
@@ -1883,10 +1892,10 @@ main {
         ; line straight off the screen. This mirrors AUTOBOOT.BASL's COMP_TO_BASLOAD.
         txt.chrout($93)                     ; clear screen, cursor home (row 0)
         txt.nl()                            ; row 1  (BASIC's "READY." overwrites this)
-        txt.print("running ")
-        txt.print(name)
-        txt.print("...")
-        txt.nl()                            ; row 2
+        ;txt.print("running ")
+        ;txt.print(name)
+        ;txt.print("...")
+        ;txt.nl()                            ; row 2
         txt.print("load")                   ; row 2:  LOAD"name"
         txt.chrout($22)
         txt.print(name)
@@ -1901,46 +1910,8 @@ main {
         cx16.kbdbuf_put($0d)                ; RUN + CR
     }
 
-    ; ---------- shared input history ----------
-
-    sub hist_ptr(ubyte k) -> uword {
-        uword off = k                       ; widen before the multiply (k*50 > 255)
-        off *= HIST_W
-        return hist_buf + off
-    }
-
-    sub hist_store(uword sptr) {
-        ; insert the string at sptr as the newest entry (slot 0), de-duplicating and
-        ; capping at HIST_N. Empty strings are ignored.
-        if @(sptr) == 0
-            return
-        ; if it's already present, drop that older copy (so it moves to the front)
-        ubyte i
-        if hist_count != 0 {
-            for i in 0 to hist_count-1 {
-                if strings.compare(hist_ptr(i), sptr) == 0 {
-                    while i + 1 < hist_count {
-                        void strings.copy(hist_ptr(i+1), hist_ptr(i))
-                        i++
-                    }
-                    hist_count--
-                    break
-                }
-            }
-        }
-        ; shift everything down one slot to free slot 0 (oldest falls off if full)
-        ubyte top = hist_count
-        if top >= HIST_N
-            top = HIST_N - 1
-        while top != 0 {
-            void strings.copy(hist_ptr(top-1), hist_ptr(top))
-            top--
-        }
-        str_copy_cap(sptr, hist_ptr(0), HIST_W - 1)  ; cap: prompts accept up to 79 chars,
-                                                     ; a slot is only HIST_W (50) bytes wide
-        if hist_count < HIST_N
-            hist_count++
-    }
+    ; ---------- shared input history (picker UI; the ring + its ops live in the miscutil
+    ;            overlay, bank 3 - see the hist_* extsubs) ----------
 
     const ubyte HIST_PX0 = 12                   ; Recent-popup box left/right columns
     const ubyte HIST_PX1 = 67
@@ -1981,7 +1952,8 @@ main {
         ubyte p
         for p in 0 to rows-1 {
             ubyte slot = rows - 1 - p        ; oldest at top, newest at the bottom
-            hist_draw_row(boxtop+2+p, hist_ptr(slot), slot == sel)
+            hist_get(slot, &hist_line)       ; pull the entry out of the overlay ring
+            hist_draw_row(boxtop+2+p, &hist_line, slot == sel)
         }
         repeat {
             g_key = wait_key()
@@ -1990,10 +1962,10 @@ main {
             when g_key {
                 27, 3 -> return 255          ; ESC / STOP: cancel
                 13 -> {                      ; Enter: take the selected entry
-                    uword sp = hist_ptr(sel)
+                    hist_get(sel, &hist_line)
                     ubyte j = 0
                     repeat {
-                        c = @(sp + j)
+                        c = hist_line[j]
                         if c == 0 or j >= maxlen
                             break
                         @(destptr + j) = c
@@ -2004,28 +1976,29 @@ main {
                 }
                 145 -> {                     ; up -> older entry (higher slot)
                     if sel + 1 < rows {
-                        hist_draw_row(boxtop+rows+1-sel, hist_ptr(sel), false)
+                        hist_get(sel, &hist_line)
+                        hist_draw_row(boxtop+rows+1-sel, &hist_line, false)
                         sel++
-                        hist_draw_row(boxtop+rows+1-sel, hist_ptr(sel), true)
+                        hist_get(sel, &hist_line)
+                        hist_draw_row(boxtop+rows+1-sel, &hist_line, true)
                     }
                 }
                 17 -> {                      ; down -> newer entry (lower slot)
                     if sel != 0 {
-                        hist_draw_row(boxtop+rows+1-sel, hist_ptr(sel), false)
+                        hist_get(sel, &hist_line)
+                        hist_draw_row(boxtop+rows+1-sel, &hist_line, false)
                         sel--
-                        hist_draw_row(boxtop+rows+1-sel, hist_ptr(sel), true)
+                        hist_get(sel, &hist_line)
+                        hist_draw_row(boxtop+rows+1-sel, &hist_line, true)
                     }
                 }
             }
         }
     }
 
-    ; ---------- per-prompt history persistence (hist/<category>.his) ----------
-    ; Each kind of text prompt (copy, move, rename, mkdir, filespec, ...) keeps its own
-    ; history file under a "hist" directory at the drive root. The in-memory ring holds
-    ; whichever category's prompt is currently open: hist_load() fills it when a prompt
-    ; opens, hist_save() writes it back when an entry is accepted.
-
+    ; per-prompt history persistence (hist/<category>.his under the drive root) now lives in the
+    ; miscutil overlay (hist_load / hist_save extsubs); str_copy_cap stays here (still used by the
+    ; F2 dir-pick and ShowAll).
     sub str_copy_cap(uword src, uword dst, ubyte cap) {
         ; copy a NUL-terminated string src -> dst, never writing more than `cap` chars
         ubyte j = 0
@@ -2038,62 +2011,6 @@ main {
             j++
         }
         @(dst + j) = 0
-    }
-
-    sub his_set_fname(str cat) {
-        ; build "<cat>.his" into his_fname
-        void strings.copy(cat, his_fname)
-        void strings.append(his_fname, ".his")
-    }
-
-    sub hist_enter_hist() {
-        ; make the cwd be <root>/hist, creating hist/ on first use
-        diskio.chdir(xtree.base_path)
-        diskio.mkdir("hist")                ; harmless if it already exists
-        diskio.chdir("hist")
-    }
-
-    sub hist_save(str cat) {
-        ; write the ring (newest first, one entry per line) to hist/<cat>.his
-        his_set_fname(cat)
-        hist_enter_hist()
-        diskio.delete(his_fname)            ; replace any previous file cleanly
-        if diskio.f_open_w(his_fname) {
-            ubyte nl = 13
-            if hist_count != 0 {
-                ubyte i
-                for i in 0 to hist_count-1 {
-                    uword p = hist_ptr(i)
-                    void diskio.f_write(p, strings.length(p))
-                    void diskio.f_write(&nl, 1)
-                }
-            }
-            diskio.f_close_w()
-        }
-        diskio.chdir(xtree.base_path)        ; restore cwd for the next operation
-    }
-
-    sub hist_load(str cat) {
-        ; load hist/<cat>.his into the ring (silently empty if hist/ or file absent)
-        his_set_fname(cat)
-        hist_count = 0
-        diskio.chdir(xtree.base_path)
-        diskio.chdir("hist")                 ; if missing, cwd just stays at root
-        if diskio.f_open(his_fname) {
-            repeat {
-                ubyte ln
-                ubyte st
-                ln, st = diskio.f_readline(&viewbuf)
-                if ln == 0
-                    break                       ; blank line or EOF: stop
-                str_copy_cap(&viewbuf, hist_ptr(hist_count), HIST_W - 1)
-                hist_count++
-                if st != 0 or hist_count >= HIST_N
-                    break
-            }
-            diskio.f_close()
-        }
-        diskio.chdir(xtree.base_path)        ; restore cwd
     }
 
     ; ---------- bottom-line prompts ----------
@@ -2433,9 +2350,9 @@ main {
         ; the char to the left, printable keys insert at the cursor, Up recalls history,
         ; F2 (when dirpick) picks a directory from the tree, Enter accepts, Esc cancels.
         ; `histname` selects the history category file.
-        bool usehist = strings.length(histname) != 0    ; empty histname -> no history UI
+        bool usehist = misc_ok and strings.length(histname) != 0    ; no overlay / empty histname -> no history UI
         if usehist
-            hist_load(histname)
+            hist_count = hist_load(histname, &xtree.base_path)      ; banked ring; cache the returned count
         input_frame(prompt, usehist, dirpick)
         ubyte fieldcol = 2 + lsb(strings.length(prompt))
         ubyte n = 0
@@ -2449,8 +2366,8 @@ main {
                 13 -> {                      ; Enter -> accept (if non-empty)
                     dest[n] = 0
                     if n != 0 and usehist {
-                        hist_store(dest)
-                        hist_save(histname)
+                        hist_count = hist_store(dest)
+                        hist_save(histname, &xtree.base_path)
                     }
                     box_close()
                     return n != 0
