@@ -172,11 +172,14 @@ main {
 
     ; --- banked misc-utility overlay (miscutil) ---
     ; miscutil.p8 is a second %output library blob loaded into reserved HIRAM bank 3 at
-    ; startup; it holds self-contained helpers moved out of main RAM (currently the wildcard
-    ; rename expander). $A000 = init; $A003 = wildcard_expand(orig @R0, pat @R1, out @R2).
+    ; startup; it holds self-contained helpers moved out of main RAM (the wildcard rename
+    ; expander and the recursive directory-prune engine). $A000 = init;
+    ; $A003 = wildcard_expand(orig @R0, pat @R1, out @R2);
+    ; $A006 = prune_dir(parent @R0, name @R1) -> ubyte (1=ok, 0=fail).
     const ubyte MISC_BANK = 3
     extsub @bank 3 $A000 = miscutil_init()
     extsub @bank 3 $A003 = wildcard_expand(uword origptr @R0, uword patptr @R1, uword outptr @R2)
+    extsub @bank 3 $A006 = prune_dir(uword parptr @R0, uword nameptr @R1) -> ubyte @A
     bool misc_ok                            ; miscutil.bin loaded OK
 
     sub start() {
@@ -1149,7 +1152,8 @@ main {
     sub op_prune() {
         ; P (tree col): recursively delete the selected directory and EVERYTHING under it.
         ; Guarded by a typed confirmation - the user must retype the directory's exact name.
-        ; xscan.prune does the disk work; on success we unlink the node from the tree.
+        ; The prune engine (miscutil overlay, bank 3) does the disk work; on success we unlink
+        ; the node from the tree.
         ubyte idx = cur_dir
         if idx == 0 {
             flash("can't prune the drive root")
@@ -1170,7 +1174,9 @@ main {
         box_compose_name("pruning ", namebuf, " ...")   ; transient status; the result box follows
         box_open()
         box_center(CMDROW1, cm_dst)
-        bool ok = xscan.prune(pathbuf, namebuf)
+        bool ok = false
+        if misc_ok
+            ok = prune_dir(&pathbuf, &namebuf) != 0     ; banked engine (miscutil overlay, bank 3)
         diskio.chdir(pathbuf)                           ; restore cwd to the parent
         if ok {
             xtree.unlink(idx)
@@ -1237,11 +1243,13 @@ main {
             flash("can't rename the drive root")
             return
         }
-        void strings.copy(xtree.name_ptr(idx), namebuf)     ; stable copy of the old name
         if not input_line("Rename dir to:", inputbuf, 49, "rename", false)
             return
         if strings.length(inputbuf) == 0
             return
+        ; Capture the old name AFTER input_line (see op_rename): input_line's history/dir-pick
+        ; repaint runs draw_file_row, which overwrites the shared namebuf with the last FILE.
+        void strings.copy(xtree.name_ptr(idx), namebuf)     ; stable copy of the old name
         if strings.compare_nocase(inputbuf, namebuf) == 0 {
             flash("same name (case is ignored on this disk)")
             return                                          ; unchanged, incl. case-only (Foo==foo)
@@ -1277,9 +1285,13 @@ main {
     sub op_rename() {
         if xfiles.ft_count == 0
             return
-        xfiles.get_name(file_cursor, namebuf)       ; old name
         if not input_line("Rename to (* ? ok):", inputbuf, 49, "rename", false)
             return
+        ; Capture the old name AFTER input_line: namebuf is shared scratch that the file-list
+        ; redraw (draw_file_row) overwrites with the LAST file's name, and input_line repaints the
+        ; panes via full_redraw() on history recall (Up) / dir pick (F2). Fetching it here - once
+        ; the prompt is done and file_cursor is final - keeps it the ACTUAL highlighted file.
+        xfiles.get_name(file_cursor, namebuf)       ; old name
         ; Reject commas on the RAW typed input, BEFORE wildcard expansion: in a no-dot pattern
         ; like "*,dat" the '*' swallows the whole segment (comma included), so a post-expansion
         ; check would miss it. CMDR-DOS RENAME is "r:new=old" - a comma in either name is a
