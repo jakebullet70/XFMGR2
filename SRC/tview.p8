@@ -448,6 +448,12 @@ main {
     sub view_bottom() {
         ; jump to the last page. Text: walk the page chain (measuring, no draw) until EOF and
         ; stop on the last page that holds content. Hex: align view_off to the final page.
+        ; This re-reads the whole file, so on a big file it takes a moment - show a "Working"
+        ; note on the footer so the viewer doesn't look hung. It stays up through the scan and
+        ; the final page render, then the main loop's footer repaint clears it.
+        bar_fill(SCR_BOT)
+        txt.plot(0, SCR_BOT)
+        txt.print(" Working...")
         if view_hex {
             uword sz = file_len()
             view_off = 0
