@@ -224,8 +224,13 @@ main {
         ; shared buffer curdir() points into
         void strings.copy(diskio.curdir(), pathbuf)
 
-        ; load the tview viewer overlay into its reserved bank (VIEW_BANK) at $A000, from the
-        ; launch dir (cwd, where run.bat stages tview.bin), then run its one-time library init.
+        ; the .bin overlays are staged in the program's own /XFMGR/ folder (run.bat), which is
+        ; NOT the boot cwd when launched via the root XT loader. Hop into it to load them; if
+        ; there's no XFMGR subdir (dev/direct-run layout) chdir is a no-op and they load from cwd.
+        diskio.chdir("xfmgr")           ; lowercase: prog8 petscii maps a-z -> $41-5A, the bytes the FS matches
+
+        ; load the tview viewer overlay into its reserved bank (VIEW_BANK) at $A000, then run
+        ; its one-time library init.
         cx16.push_rambank(VIEW_BANK)
         viewer_ok = diskio.loadlib("tview.bin", $a000) != 0
         cx16.pop_rambank()
@@ -238,6 +243,8 @@ main {
         cx16.pop_rambank()
         if misc_ok
             miscutil_init()             ; extsub @bank 3: clears the overlay's in-bank BSS ONCE
+
+        diskio.chdir(pathbuf)           ; back to the launch dir so the tree anchors where we started
 
         xarena.reset()
         xfiles.reset()

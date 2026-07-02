@@ -20,16 +20,23 @@ IF ERRORLEVEL 1 GOTO :EOF
 REM 2) stage the fresh .prg into the clean run folder
 SET RUNDIR=%~dp0run
 IF NOT EXIST "%RUNDIR%" MKDIR "%RUNDIR%"
-COPY /Y "%~dp0xfmgr.prg" "%RUNDIR%\xfmgr.prg" >NUL
-REM stage the tview viewer overlay (loaded into HIRAM bank 2 at runtime) alongside it
-COPY /Y "%~dp0tview.bin" "%RUNDIR%\tview.bin" >NUL
+rem 'COPY /Y "%~dp0xfmgr.prg" "%RUNDIR%\xfmgr.prg" >NUL
+rem 'REM stage the tview viewer overlay (loaded into HIRAM bank 2 at runtime) alongside it
+rem 'COPY /Y "%~dp0tview.bin" "%RUNDIR%\tview.bin" >NUL
 REM stage the miscutil overlay (loaded into HIRAM bank 3 at runtime)
-COPY /Y "%~dp0miscutil.bin" "%RUNDIR%\miscutil.bin" >NUL
+rem 'COPY /Y "%~dp0miscutil.bin" "%RUNDIR%\miscutil.bin" >NUL
 
-REM 3) launch with the clean folder as the host filesystem root (no AUTOBOOT.X16
-REM    there), so the emulator boots straight into xfmgr.prg.
+REM 2b) also copy all built files into run\xfmgr
+SET XFMGRDIR=%RUNDIR%\xfmgr
+IF NOT EXIST "%XFMGRDIR%" MKDIR "%XFMGRDIR%"
+COPY /Y "%~dp0xfmgr.prg" "%XFMGRDIR%\xfmgr.prg" >NUL
+COPY /Y "%~dp0tview.bin" "%XFMGRDIR%\tview.bin" >NUL
+COPY /Y "%~dp0miscutil.bin" "%XFMGRDIR%\miscutil.bin" >NUL
+
+REM 3) launch from the run\ root as the host filesystem root (no AUTOBOOT.X16 there),
+REM    running the XT loader stub - it LOADs+RUNs /XFMGR/XFMGR.PRG from the subfolder.
 CALL "%~dp0LOCAL.BAT"
 REM -ram 512 pins the machine to the base 512 KB (banks 0-63) for testing, so the
 REM    runtime bank-count detection and the "of 63 banks" About readout are exercised.
-START "" /D "%RUNDIR%" "%x16%" -fsroot "%RUNDIR%" -ram 512 -prg xfmgr.prg -run -rtc -joy1
+START "" /D "%RUNDIR%" "%x16%" -fsroot "%RUNDIR%" -ram 512 -prg XT -run -rtc -joy1
 ENDLOCAL
