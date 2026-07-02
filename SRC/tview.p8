@@ -14,6 +14,7 @@
 %import textio
 %import diskio
 %import strings
+%import "shared-const"
 ; --- loadable-library overlay: headerless blob loaded at $A000 into a HIRAM bank and
 ;     called via `extsub @bank`. %output library => no zeropage / no sysinit / jmp start
 ;     entry; %memtop hard-fails the build if the overlay outgrows the $A000-$BFFF window.
@@ -33,13 +34,11 @@ main {
     const ubyte VROWS  = 28            ; text rows 1..28
     const ubyte VWIDTH = 79            ; wrap column (keep off col 79 to avoid auto-scroll)
     const ubyte SCR_BOT = 29           ; footer row
+    const uword HEXPAGE = VROWS * 16   ; bytes shown per hex page (VROWS rows x 16 bytes)
 
-    ; status-bar theme: our standard blue bar with white text (matches HILITE / box_header
-    ; in the base app); hotkey letters shown in the accent colour like the base menus.
-    const ubyte BAR_BG  = 14           ; light-blue bar background
-    const ubyte BAR_FG  = 1            ; white bar text
-    const ubyte BAR_KEY = 7            ; accent (yellow) - highlighted hotkey letters
-    const ubyte CONTENT_BG = 11        ; content area bg: dark gray (matches base app CLR_BG)
+    ; status-bar + content colours now live in SRC/shared-const.p8 (block `shared`), shared
+    ; with XFMGR; referenced as shared.* below. Standard blue bar, white text; the bottom-menu
+    ; hotkey highlight is BLACK.
 
     ; --- shared scratch (in XFMGR these lived in the main module) ---
     ; NOTE: these MUST stay uninitialized (no "= ..."). %jmptable relies on `jmp view_file`
@@ -93,16 +92,16 @@ main {
         ubyte c
         for c in 0 to 79 {
             txt.setchr(c, row, sc:' ')
-            txt.setclr(c, row, (BAR_BG << 4) | BAR_FG)   ; $e1 = blue bg / white fg
+            txt.setclr(c, row, (shared.BAR_BG << 4) | shared.BAR_FG)   ; $e1 = blue bg / white fg
         }
-        txt.color2(BAR_FG, BAR_BG)
+        txt.color2(shared.BAR_FG, shared.BAR_BG)
     }
 
     sub bar_key(str s) {
         ; print a highlighted hotkey (accent on blue), then revert to white-on-blue text
-        txt.color2(BAR_KEY, BAR_BG)
+        txt.color2(shared.BAR_KEY, shared.BAR_BG)
         txt.print(s)
-        txt.color2(BAR_FG, BAR_BG)
+        txt.color2(shared.BAR_FG, shared.BAR_BG)
     }
 
     sub print_trunc(str s, ubyte maxlen) {
@@ -131,7 +130,7 @@ main {
         view_eof = false
         ubyte br
         if draw {
-            txt.color2(BAR_FG, CONTENT_BG)  ; content: white on gray
+            txt.color2(shared.BAR_FG, shared.CONTENT_BG)  ; content: white on gray
             for br in VTOP to VTOP + VROWS - 1
                 blank_span(0, 78, br)
         }
@@ -238,7 +237,7 @@ main {
         ; offset and set view_eof at end-of-file. Header/footer untouched (no flicker).
         view_eof = false
         ubyte br
-        txt.color2(BAR_FG, CONTENT_BG)     ; content: white on gray
+        txt.color2(shared.BAR_FG, shared.CONTENT_BG)     ; content: white on gray
         for br in VTOP to VTOP + VROWS - 1
             blank_span(0, 78, br)
         if not diskio.f_open(namebuf) {
@@ -430,12 +429,58 @@ main {
         }
     }
 
+    sub file_len() -> uword {
+        ; total file size in bytes, as a 16-bit value (wraps past 64 KB - the viewer only
+        ; pages within the first 64 KB anyway). Used to land hex mode on the last page.
+        if not diskio.f_open(namebuf)
+            return 0
+        uword total = 0
+        repeat {
+            uword n = diskio.f_read(&viewbuf, 250)
+            if n == 0
+                break
+            total += n
+        }
+        diskio.f_close()
+        return total
+    }
+
+    sub view_bottom() {
+        ; jump to the last page. Text: walk the page chain (measuring, no draw) until EOF and
+        ; stop on the last page that holds content. Hex: align view_off to the final page.
+        if view_hex {
+            uword sz = file_len()
+            view_off = 0
+            while sz - view_off > HEXPAGE
+                view_off += HEXPAGE
+        } else {
+            view_pages[0] = 0
+            view_page = 0
+            view_known = 0
+            uword nxt
+            repeat {
+                nxt = view_render(view_pages[view_page], false)
+                if view_eof {
+                    ; an empty trailing page (prev page ended exactly on a boundary) -> back up
+                    if nxt == view_pages[view_page] and view_page != 0
+                        view_page--
+                    break
+                }
+                if view_page + 1 >= 100
+                    break
+                view_pages[view_page+1] = nxt
+                view_known = view_page + 1
+                view_page++
+            }
+        }
+    }
+
     ; ---------- main view loop ----------
 
     sub view_run() {
         ; clear once on entry and draw the static header bar (row 0); per-page renders
         ; only repaint the body + footer, so the header doesn't flicker.
-        txt.color2(BAR_FG, CONTENT_BG)     ; content bg = gray (header bar drawn over row 0 next)
+        txt.color2(shared.BAR_FG, shared.CONTENT_BG)     ; content bg = gray (header bar drawn over row 0 next)
         txt.clear_screen()
         bar_fill(0)                        ; full-width blue header bar
         txt.plot(0, 0)
@@ -458,10 +503,12 @@ main {
             bar_fill(SCR_BOT)
             txt.plot(0, SCR_BOT)
             txt.spc()
-            bar_key("PgDn/PgUp")
+            bar_key("PgDn/PgUp   ")
             txt.spc()
             bar_key("T")
             txt.print("op ")
+            bar_key("B")
+            txt.print("ottom ")
             if view_hex {
                 bar_key("T")
                 txt.print("ext ")
@@ -474,11 +521,29 @@ main {
             bar_key("N")
             txt.print("ext ")
             bar_key("Q")
+            txt.print("uit")
+            ; right-justify the position indicator (page/offset [+ END]) against the right edge.
+            ; w = width of what we print; start col 79-w ends it at col 78 - never col 79, which
+            ; would auto-scroll the bottom row.
+            ubyte w
             if view_hex {
-                txt.print("uit   $")
+                w = 5                        ; "$" + 4 hex digits
+            } else {
+                ubyte pg = view_page + 1     ; pages shown 1-based (index 0..99 -> 1..100)
+                w = 4                        ; "pg " + 1 digit
+                if pg >= 10
+                    w = 5
+                if pg >= 100
+                    w = 6
+            }
+            if view_eof
+                w += 6                       ; " (END)"
+            txt.plot(79 - w, SCR_BOT)
+            if view_hex {
+                txt.chrout('$')
                 put_hex16(view_off)
             } else {
-                txt.print("uit   pg ")
+                txt.print("Pg:")
                 txt.print_uw(view_page + 1)
             }
             if view_eof
@@ -520,6 +585,7 @@ main {
                     else
                         view_page = 0
                 }
+                'b' -> view_bottom()            ; B: jump to the last page
                 'h' -> {                        ; toggle hex / text, keeping position
                     if view_hex {
                         view_pages[0] = view_off

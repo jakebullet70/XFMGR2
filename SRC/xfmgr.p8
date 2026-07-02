@@ -17,6 +17,7 @@
 %import xscan
 %import hlprs
 %import emudbg
+%import "shared-const"
 %zeropage basicsafe
 %option no_sysinit
 
@@ -54,17 +55,8 @@ main {
     const ubyte FOCUS_TREE = 0
     const ubyte FOCUS_FILE = 1
 
-    ; selection bar colors (high nibble = bg, low nibble = fg)
-    ; (X16 default 16-color: 1=white 6=blue 7=yellow 11=dark gray 14=light blue 0=black)
-    const ubyte CLR_FG    = 1           ; body text: white
-    const ubyte CLR_BG    = 11          ; field: dark gray
-    const ubyte CLR_ACCENT = 7          ; hotkey letters: yellow
-    const ubyte CLR_TITLE  = 14         ; window / box titles: light blue (matches borders)
-    const ubyte CLR_BOX   = $be         ; frame / box borders: light blue on dark gray (bg nibble = CLR_BG)
-    const ubyte HILITE    = $e1         ; focused selection bar: light-blue bg, white text
-    const ubyte CLR_TAGROW = $e1        ; tagged file row: blue bg, white text
-    const ubyte OW_BLACK  = $10         ; overwrite box: black text on white bg (bg=1 white, fg=0 black)
-    const ubyte OW_KEY    = $1e         ; overwrite box: light-blue key on white bg (fg=14)
+    ; selection bar / box colors now live in SRC/shared-const.p8 (block `shared`),
+    ; shared with the tview overlay. Referenced below as shared.CLR_FG, shared.HILITE, etc.
 
     ; box-drawing SCREENCODES (drawn with setchr so the cursor never moves / scrolls)
     const ubyte SC_TL = sc:'┌'
@@ -202,7 +194,7 @@ main {
             del_char = 'D'
         }
         txt.lowercase()
-        txt.color2(CLR_FG, CLR_BG)               ; white text on a blue field
+        txt.color2(shared.CLR_FG, shared.CLR_BG)               ; white text on a blue field
         txt.clear_screen()
 
         ; remember where we were launched from before any diskio call clobbers the
@@ -625,7 +617,7 @@ main {
                         xtree.build_path(cur_dir, pathbuf)
                         diskio.chdir(pathbuf)   ; so tview's f_open(namebuf) resolves
                         view_file(&namebuf)     ; extsub @bank 2: JSRFAR into the overlay; returns on Q/ESC
-                        txt.color2(CLR_FG, CLR_BG)   ; viewer left the text colour blue; restore app theme
+                        txt.color2(shared.CLR_FG, shared.CLR_BG)   ; viewer left the text colour blue; restore app theme
                                                      ; (full_redraw's blanks use the current colour)
                     } else {
                         op_edit()               ; overlay missing -> fall back to X16 Edit
@@ -695,16 +687,16 @@ main {
         ; a horizontal frame line with a junction at the vertical divider.
         ; setchr writes straight to the screen matrix - no cursor move, no scroll.
         txt.setchr(0, row, lc)
-        txt.setclr(0, row, CLR_BOX)
+        txt.setclr(0, row, shared.CLR_BOX)
         for g_ndx in 1 to 78 {
             if g_ndx == SPLIT
                 txt.setchr(g_ndx, row, jc)
             else
                 txt.setchr(g_ndx, row, SC_H)
-            txt.setclr(g_ndx, row, CLR_BOX)
+            txt.setclr(g_ndx, row, shared.CLR_BOX)
         }
         txt.setchr(79, row, rc)
-        txt.setclr(79, row, CLR_BOX)
+        txt.setclr(79, row, shared.CLR_BOX)
     }
 
     sub draw_frame() {
@@ -719,23 +711,23 @@ main {
         txt.setchr(79, CMDROW1, SC_V)
         txt.setchr(0, CMDROW2, SC_V)
         txt.setchr(79, CMDROW2, SC_V)
-        txt.setclr(0, HDRROW, CLR_BOX)
-        txt.setclr(79, HDRROW, CLR_BOX)
-        txt.setclr(0, CMDROW1, CLR_BOX)
-        txt.setclr(79, CMDROW1, CLR_BOX)
-        txt.setclr(0, CMDROW2, CLR_BOX)
-        txt.setclr(79, CMDROW2, CLR_BOX)
+        txt.setclr(0, HDRROW, shared.CLR_BOX)
+        txt.setclr(79, HDRROW, shared.CLR_BOX)
+        txt.setclr(0, CMDROW1, shared.CLR_BOX)
+        txt.setclr(79, CMDROW1, shared.CLR_BOX)
+        txt.setclr(0, CMDROW2, shared.CLR_BOX)
+        txt.setclr(79, CMDROW2, shared.CLR_BOX)
         ; side + middle borders down the content area
         for g_ndx in PANE_TOP to PANE_BOT {
             txt.setchr(0, g_ndx, SC_V)
             txt.setchr(SPLIT, g_ndx, SC_V)
             txt.setchr(79, g_ndx, SC_V)
-            txt.setclr(0, g_ndx, CLR_BOX)
-            txt.setclr(SPLIT, g_ndx, CLR_BOX)
-            txt.setclr(79, g_ndx, CLR_BOX)
+            txt.setclr(0, g_ndx, shared.CLR_BOX)
+            txt.setclr(SPLIT, g_ndx, shared.CLR_BOX)
+            txt.setclr(79, g_ndx, shared.CLR_BOX)
         }
         ; window titles embedded in the divider line
-        txt.color(CLR_TITLE)
+        txt.color(shared.CLR_TITLE)
         txt.plot(TREE_TEXT, 2)
         txt.print(" DIRECTORY ")
         txt.plot(FILE_TEXT, 2)
@@ -745,7 +737,7 @@ main {
         ; program title embedded in the top border
         txt.plot(2, 0)
         txt.print(" XFMGR2 ")
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
     }
 
     sub draw_status() {
@@ -781,7 +773,7 @@ main {
             build_tree_line(idx)
             txt.print(treeline)
             if i == tree_cursor and focus == FOCUS_TREE
-                hilite_row(TREE_MARK, TREE_BAR_R, srow, HILITE)
+                hilite_row(TREE_MARK, TREE_BAR_R, srow, shared.HILITE)
         }
     }
 
@@ -887,20 +879,20 @@ main {
 
     sub draw_file_header() {
         blank_span(FILE_MARK, FILE_BAR_R, FILE_HDR)
-        txt.color(CLR_ACCENT)
+        txt.color(shared.CLR_ACCENT)
         txt.plot(FILE_TEXT, FILE_HDR)
         txt.print("Name")
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
         ; "(Total blocks: N)" centered in the file pane, between the Name and Size labels
         void strings.copy("(Total blocks: ", cm_dst)
         box_append_uw(cur_blocks)
         void strings.append(cm_dst, ")")
         txt.plot(FILE_TEXT + (FILE_BAR_R - FILE_TEXT + 1 - lsb(strings.length(cm_dst))) / 2, FILE_HDR)
         txt.print(cm_dst)
-        txt.color(CLR_ACCENT)
+        txt.color(shared.CLR_ACCENT)
         txt.plot(FILE_SIZE, FILE_HDR)
         txt.print("Size")
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
     }
 
     sub draw_file_row(ubyte i) {
@@ -924,7 +916,7 @@ main {
             ; tagged files are flagged by the '*' marker only - the row keeps the
             ; normal colours (no bar). The focused selection bar still wins on the cursor.
             if i == file_cursor and focus == FOCUS_FILE
-                hilite_row(FILE_MARK, FILE_BAR_R, srow, HILITE)
+                hilite_row(FILE_MARK, FILE_BAR_R, srow, shared.HILITE)
         }
     }
 
@@ -975,9 +967,9 @@ main {
 
     sub hk(ubyte c) {
         ; print a hotkey letter highlighted in the accent colour (yellow)
-        txt.color(CLR_ACCENT)
+        txt.color(shared.CLR_ACCENT)
         txt.chrout(c)
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
     }
 
     sub menu_plain_items() {
@@ -1030,31 +1022,31 @@ main {
         ;   MENU (none) / CTRL / ALT.  Row 2 is a hint about the modifiers.
         blank_span(1, 78, CMDROW1)
         txt.plot(TREE_TEXT, CMDROW1)
-        txt.color(CLR_ACCENT)
+        txt.color(shared.CLR_ACCENT)
         when menu_mode {
             1 -> {
                 txt.print("CTRL: ")
-                txt.color(CLR_FG)
+                txt.color(shared.CLR_FG)
                 menu_ctrl_items()
             }
             2 -> {
                 txt.print("ALT:  ")
-                txt.color(CLR_FG)
+                txt.color(shared.CLR_FG)
                 menu_alt_items()
             }
             else -> {
                 txt.print("MENU: ")
-                txt.color(CLR_FG)
+                txt.color(shared.CLR_FG)
                 menu_plain_items()
             }
         }
         blank_span(1, 78, CMDROW2)
         txt.plot(TREE_TEXT, CMDROW2)
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
         if menu_mode == 0 {
             ; both panes expose CTRL/ALT commands (Alt-Q quit-here, Alt-F3 relog,
             ; Alt-R release, Alt-S sort...), so both show the same hint.
-            ; current colour is CLR_FG here, so "hold " needs no leading code
+            ; current colour is shared.CLR_FG here, so "hold " needs no leading code
             txt.print(petscii:"hold \x9eCTRL\x05 or \x9eALT\x05 for more commands")
         }
         ; Quit pinned to the far right of row 2 on every menu. In the ALT menu it is the
@@ -1860,8 +1852,8 @@ main {
             firstbank, xarena.max_bank, namebuf,    ; last bank = this machine's real top bank
             mkword(%00000011, strings.length(namebuf)),   ; opts: auto-indent + word-wrap
             mkword(80, 4),                                 ; wrap col 80, tab stop 4
-            mkword((CLR_BG << 4) | CLR_FG, diskio.drivenumber),   ; normal: white on dark-gray (app theme), drive
-            mkword(HILITE, HILITE))                        ; header / status: light-blue bar (app accent)
+            mkword((shared.CLR_BG << 4) | shared.CLR_FG, diskio.drivenumber),   ; normal: white on dark-gray (app theme), drive
+            mkword(shared.HILITE, shared.HILITE))                        ; header / status: light-blue bar (app accent)
         cx16.rombank(oldrom)
         sys.disable_caseswitch()
         diskio.chdir(pathbuf)                   ; X16Edit can change dir; restore ours
@@ -1971,12 +1963,12 @@ main {
         ; (re)draw a single history row: clear it, print the entry, highlight if selected.
         ; Matches how draw_box's box_row + the list loop paint a base row, so an
         ; unselected redraw is pixel-identical to the original (resets any bar colour).
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
         blank_span(HIST_PX0+1, HIST_PX1-1, srow)
         txt.plot(HIST_PX0+2, srow)
         print_trunc(textptr, HIST_PX1-HIST_PX0-3)
         if selected
-            hilite_row(HIST_PX0+1, HIST_PX1-1, srow, HILITE)
+            hilite_row(HIST_PX0+1, HIST_PX1-1, srow, shared.HILITE)
     }
 
     sub hist_popup(uword destptr, ubyte maxlen) -> ubyte {
@@ -2145,10 +2137,10 @@ main {
         for r in DIVBOT to SCR_BOT {         ; outer stays local; inner leaf loop uses g_ndx
             for g_ndx in 0 to 79 {
                 txt.setchr(g_ndx, r, sc:' ')
-                txt.setclr(g_ndx, r, OW_BLACK)
+                txt.setclr(g_ndx, r, shared.OW_BLACK)
             }
         }
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
     }
 
     sub box_close() {
@@ -2159,11 +2151,11 @@ main {
         ; print s centered on row, then force that row black-on-white
         txt.plot((80 - lsb(strings.length(s))) / 2, row)
         txt.print(s)
-        hilite_row(0, 79, row, OW_BLACK)
+        hilite_row(0, 79, row, shared.OW_BLACK)
     }
 
     sub box_key(ubyte col, ubyte row) {
-        txt.setclr(col, row, OW_KEY)        ; recolour one hotkey cell light blue
+        txt.setclr(col, row, shared.OW_KEY)        ; recolour one hotkey cell light blue
     }
 
     sub box_compose_name(str prefix, str name, str suffix) {
@@ -2267,7 +2259,7 @@ main {
         ; deletes never leave stale characters behind.
         for g_ndx in fieldcol to 78 {
             txt.setchr(g_ndx, MSGROW, sc:' ')
-            txt.setclr(g_ndx, MSGROW, OW_BLACK)
+            txt.setclr(g_ndx, MSGROW, shared.OW_BLACK)
         }
         txt.plot(fieldcol, MSGROW)
         ubyte width = 79 - fieldcol           ; cells available fieldcol..78
@@ -2277,11 +2269,11 @@ main {
         if shown != 0
             for g_ndx in 0 to shown-1
                 txt.chrout(@(destptr + g_ndx))
-        hilite_row(fieldcol, 78, MSGROW, OW_BLACK)   ; force the field black-on-white
+        hilite_row(fieldcol, 78, MSGROW, shared.OW_BLACK)   ; force the field black-on-white
         ubyte cc = fieldcol + curpos
         if cc > 78
             cc = 78
-        txt.setclr(cc, MSGROW, HILITE)       ; light-blue block cursor (visible on white)
+        txt.setclr(cc, MSGROW, shared.HILITE)       ; light-blue block cursor (visible on white)
     }
 
     sub pick_find(ubyte idx) -> ubyte {
@@ -2304,7 +2296,7 @@ main {
         ; a selection bar if it is the cursor entry. Same draw path as the full repaint, so
         ; a non-cursor redraw exactly restores the base row (blank_span resets any bar colour).
         ubyte srow = PICK_Y0 + 2 + row
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
         blank_span(PICK_X0+1, PICK_X1-1, srow)
         ubyte i = top + row
         if i < xtree.vis_count {
@@ -2324,7 +2316,7 @@ main {
             txt.spc()
             print_trunc(xtree.name_ptr(idx), 40)
             if i == cur
-                hilite_row(PICK_X0+1, PICK_X1-1, srow, HILITE)
+                hilite_row(PICK_X0+1, PICK_X1-1, srow, shared.HILITE)
         }
     }
 
@@ -2350,8 +2342,8 @@ main {
         draw_box(PICK_X0, PICK_Y0, PICK_X1, PICK_Y1, "")
         box_header(PICK_X0, PICK_X1, PICK_Y0, " Pick a directory ")
         ; footer (40 visible chars) as ONE embedded-colour string instead of 8 colour + 8
-        ; print calls. In-string PETSCII codes: \x9e = CLR_ACCENT (yellow), \x05 = CLR_FG
-        ; (white); ←┘ is the ENTER glyph. Ends white so the list rows below inherit CLR_FG.
+        ; print calls. In-string PETSCII codes: \x9e = shared.CLR_ACCENT (yellow), \x05 = shared.CLR_FG
+        ; (white); ←┘ is the ENTER glyph. Ends white so the list rows below inherit shared.CLR_FG.
         txt.plot(PICK_X0 + 1 + (BIW - 40) / 2, PICK_Y1)
         txt.print(petscii:"\x9e >\x05Expand \x9e<\x05Collapse  \x9e←┘\x05Select  \x9eEsc\x05 Exit ")
         pick_draw_all(cur, top)                         ; initial full list
@@ -2423,10 +2415,10 @@ main {
         ubyte ll = lsb(strings.length(label))
         if kl != 0
             for g_ndx in col to col + kl - 1
-                txt.setclr(g_ndx, CMDROW2, OW_KEY)
+                txt.setclr(g_ndx, CMDROW2, shared.OW_KEY)
         if ll != 0
             for g_ndx in col + kl to col + kl + ll - 1
-                txt.setclr(g_ndx, CMDROW2, OW_BLACK)
+                txt.setclr(g_ndx, CMDROW2, shared.OW_BLACK)
         return col + kl + ll
     }
 
@@ -2446,7 +2438,7 @@ main {
         box_open()
         txt.plot(1, MSGROW)
         txt.print(prompt)
-        hilite_row(0, 79, MSGROW, OW_BLACK)
+        hilite_row(0, 79, MSGROW, shared.OW_BLACK)
         prompt_hint(usehist, dirpick)
     }
 
@@ -2574,49 +2566,49 @@ main {
     }
 
     sub box_row(ubyte x0, ubyte x1, ubyte row) {
-        ; one framed, empty interior row: side borders + blank middle (in CLR_FG, which
+        ; one framed, empty interior row: side borders + blank middle (in shared.CLR_FG, which
         ; also resets any leftover selection-bar colour on the row)
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
         txt.setchr(x0, row, SC_V)
         txt.setchr(x1, row, SC_V)
         blank_span(x0+1, x1-1, row)
-        txt.setclr(x0, row, CLR_BOX)
-        txt.setclr(x1, row, CLR_BOX)
+        txt.setclr(x0, row, shared.CLR_BOX)
+        txt.setclr(x1, row, shared.CLR_BOX)
     }
 
     sub draw_box(ubyte x0, ubyte y0, ubyte x1, ubyte y1, str title) {
         ; draw a framed, shadowed, titled popup window. Interior rows are cleared (via
         ; box_row) so the caller just prints content into them. An empty title draws none.
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
         txt.setchr(x0, y0, SC_TL)
         txt.setchr(x1, y0, SC_TR)
         txt.setchr(x0, y1, SC_BL)
         txt.setchr(x1, y1, SC_BR)
-        txt.setclr(x0, y0, CLR_BOX)
-        txt.setclr(x1, y0, CLR_BOX)
-        txt.setclr(x0, y1, CLR_BOX)
-        txt.setclr(x1, y1, CLR_BOX)
+        txt.setclr(x0, y0, shared.CLR_BOX)
+        txt.setclr(x1, y0, shared.CLR_BOX)
+        txt.setclr(x0, y1, shared.CLR_BOX)
+        txt.setclr(x1, y1, shared.CLR_BOX)
         for g_ndx in x0+1 to x1-1 {
             txt.setchr(g_ndx, y0, SC_H)
             txt.setchr(g_ndx, y1, SC_H)
-            txt.setclr(g_ndx, y0, CLR_BOX)
-            txt.setclr(g_ndx, y1, CLR_BOX)
+            txt.setclr(g_ndx, y0, shared.CLR_BOX)
+            txt.setclr(g_ndx, y1, shared.CLR_BOX)
         }
         for g_ndx in y0+1 to y1-1            ; box_row uses a LOCAL counter, so g_ndx survives
             box_row(x0, x1, g_ndx)
         box_shadow(x0, y0, x1, y1)
         if title[0] != 0 {
-            txt.color(CLR_TITLE)
+            txt.color(shared.CLR_TITLE)
             txt.plot(x0+2, y0)
             txt.print(title)
-            txt.color(CLR_FG)
+            txt.color(shared.CLR_FG)
         }
     }
 
     sub box_header(ubyte x0, ubyte x1, ubyte y0, str title) {
         ; solid blue title bar spanning the full top border (between the corners), with the
         ; title centered in white. Blank the border line to spaces, print the title, then
-        ; recolour the whole span to white-on-blue ($e1 = bg 14 / fg 1, same as HILITE).
+        ; recolour the whole span to white-on-blue ($e1 = bg 14 / fg 1, same as shared.HILITE).
         for g_ndx in x0+1 to x1-1
             txt.setchr(g_ndx, y0, sc:' ')
         ubyte tlen = lsb(strings.length(title))
@@ -2624,7 +2616,7 @@ main {
         txt.print(title)
         for g_ndx in x0+1 to x1-1
             txt.setclr(g_ndx, y0, $e1)
-        txt.color(CLR_FG)               ; body text below prints white again
+        txt.color(shared.CLR_FG)               ; body text below prints white again
     }
 
     sub print_trunc(str s, ubyte maxlen) {
@@ -2737,12 +2729,12 @@ main {
         ubyte cursor = 0
         txt.clear_screen()
         repeat {
-            txt.color(CLR_ACCENT)
+            txt.color(shared.CLR_ACCENT)
             txt.plot(2, 0)
             txt.print("SHOWALL - tagged files: ")
             txt.print_uw(xfiles.sa_count)
             txt.print("    ")
-            txt.color(CLR_FG)
+            txt.color(shared.CLR_FG)
             ubyte row
             for row in 0 to SA_VIS-1 {
                 ubyte srow = SA_TOP + row
@@ -2763,13 +2755,13 @@ main {
                     txt.plot(73, srow)
                     txt.print_uw(xfiles.sa_blocks(i))
                     if i == cursor
-                        hilite_row(0, 78, srow, HILITE)
+                        hilite_row(0, 78, srow, shared.HILITE)
                 }
             }
             txt.plot(2, 29)
-            txt.color(CLR_ACCENT)
+            txt.color(shared.CLR_ACCENT)
             txt.print("up/dn  U untag  C copy  M move  ESC/Q exit")
-            txt.color(CLR_FG)
+            txt.color(shared.CLR_FG)
 
             g_key = wait_key()
             if g_key >= $c1 and g_key <= $da
@@ -2845,9 +2837,9 @@ main {
         aboutln(10, "Written in Prog8")
         aboutln(11, "(c)2025-26 sadLogic")
         txt.plot(about_col(lsb(strings.length(PRESS_ANY_KEY))), ABOUT_BOTTOM-1)   ; centered "Press any key"
-        txt.color(CLR_ACCENT)
+        txt.color(shared.CLR_ACCENT)
         txt.print(PRESS_ANY_KEY)
-        txt.color(CLR_FG)
+        txt.color(shared.CLR_FG)
         void wait_key()
     }
 }
