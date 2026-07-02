@@ -5,11 +5,13 @@
 ; loads into a HIRAM bank and calls via `extsub @bank` (see the overlay notes below).
 ;
 ; Controls:  PgDn/PgUp page   T/Home top   H hex<->text   F find   N find-next   Q quit
-; The pager uses 16-bit file offsets, so it pages within the first 64 KB of a file.
+; The pager uses 32-bit (long) file offsets: hex mode reaches any offset; text mode caches up
+; to 64 page-tops (~140 KB of dense content) for backward paging.
 ;
 ; Call contract: the caller (XFMGR) chdir's into the file's directory, keeps the screen in
 ; mode $01, then calls view_file(nameptr @R0); the filename is copied in on entry. On return
-; the caller repaints. Known limitation: files > 64 KB only page within their first 64 KB.
+; the caller repaints. Text mode caches 64 page-tops (backward paging spans ~140 KB of dense
+; content); hex mode reaches any offset in the file.
 
 %import textio
 %import diskio
@@ -51,17 +53,26 @@ main {
     ubyte g_key                        ; last key read
 
     ; --- viewer state ---
-    ; file offset of the top of each visited page, so paging can go both forward and
-    ; backward by re-reading from a known offset (offsets are 16-bit -> first 64 KB only).
-    uword[100] view_pages
+    ; file offset of the top of each visited page, so paging can go both forward and backward by
+    ; re-reading from a known offset. 32-bit (long) offsets; prog8 caps long arrays at 64, so text
+    ; mode caches up to 64 page-tops (~140 KB of dense content). Hex mode uses a single long -> no cap.
+    long[64] view_pages
     bool view_eof                      ; the last rendered page reached end-of-file
     bool view_hex                      ; viewer showing hex dump (vs text)
-    uword view_off                     ; hex-mode current page top offset
+    long view_off                      ; hex-mode current page top offset
     ubyte view_page                    ; text-mode current page index
     ubyte view_known                   ; text-mode highest page index with a known offset
     ubyte[34] view_find                ; in-file search term (<= 32 chars + NUL); uninit -> BSS
-    uword view_next                    ; offset to resume "find next" from
-    uword view_match                   ; offset of the last search hit
+    long view_next                     ; offset to resume "find next" from
+    long view_match                    ; offset of the last search hit
+    ubyte saved_page                   ; text page stashed across a hex excursion (H toggle)
+    long hex_entry_off                 ; view_off on entering hex; unchanged on return -> restore saved_page
+
+    ; --- ZSM header breakout (parsed music-file view) ---
+    ; is_zsm/zsm_hdr MUST stay uninitialized (no "= ...") like the buffers above, so they land in
+    ; the relocated BSS tail and don't shove the jmptable off $A003. zsm_detect() sets them.
+    bool is_zsm                        ; current file starts with the ZSM 'zm' magic
+    ubyte[16] zsm_hdr                  ; the 16 raw header bytes, read once per file
 
     sub start() {
         ; library init entrypoint ($A000). The compiler emits the BSS-clear here; this must
@@ -73,7 +84,24 @@ main {
         ; calls clobber cx16.r0-r3, so consume the @R0 pointer before anything else.
         ; The caller keeps XFMGR in screen mode $01 and repaints after we return.
         void strings.copy(nameptr, namebuf)
+        zsm_detect()                    ; set is_zsm + fill zsm_hdr before the view loop
         view_run()
+    }
+
+    sub zsm_detect() {
+        ; Read the first 16 bytes of namebuf into zsm_hdr and set is_zsm if the file starts with
+        ; the ZSM magic (0x7A 0x6D = "zm"). A file that won't open or is shorter than 16 bytes is
+        ; treated as non-ZSM. Hex literals (not 'z'/'m') dodge any PETSCII/ASCII source ambiguity.
+        is_zsm = false
+        ubyte i
+        for i in 0 to 15                ; deterministic bytes even on a short read
+            zsm_hdr[i] = 0
+        if not diskio.f_open(namebuf)
+            return
+        ubyte got = lsb(diskio.f_read(&zsm_hdr, 16))
+        diskio.f_close()
+        if got >= 16 and zsm_hdr[0] == $7a and zsm_hdr[1] == $6d
+            is_zsm = true
     }
 
     ; ---------- shared helpers (ported from XFMGR's main module) ----------
@@ -120,9 +148,20 @@ main {
         }
     }
 
+    sub scr_of(ubyte b) -> ubyte {
+        ; ASCII (already clamped to $20..$7E) -> screen code for setchr, which writes the screen
+        ; matrix directly (no PETSCII interpretation -> no control-code scroll). $20-$3F stay put;
+        ; $40-$5F subtract $40; $60-$7E subtract $20.
+        if b < $40
+            return b
+        if b < $60
+            return b - $40
+        return b - $20
+    }
+
     ; ---------- text page render ----------
 
-    sub view_render(uword start_off, bool draw) -> uword {
+    sub view_render(long start_off, bool draw) -> long {
         ; Walk one page of text starting at byte offset start_off; return the offset where
         ; the next page begins, and set view_eof if end-of-file was reached on this page.
         ; When draw is false this only MEASURES the page (no screen output) - used to rebuild
@@ -143,29 +182,31 @@ main {
             view_eof = true
             return start_off
         }
-        ; skip to start_off by reading and discarding
-        uword toskip = start_off
+        ; skip to start_off by reading and discarding; remember the last skipped byte so a CR/LF
+        ; line ending straddling the page boundary is handled (see the prev_cr priming below)
+        long toskip = start_off
+        ubyte lastskip = 0
         while toskip != 0 {
             uword want = 250
-            if toskip < want
-                want = toskip
+            if toskip < 250
+                want = toskip as uword
             uword got = diskio.f_read(&viewbuf, want)
             if got == 0
                 break
+            lastskip = viewbuf[lsb(got) - 1]
             toskip -= got
         }
 
-        uword consumed = start_off
+        long consumed = start_off
         ubyte row = 0
         ubyte col = 0
-        bool prev_cr = false
+        ; if the previous page ended on a CR, a leading LF here is that CR/LF pair's tail - prime
+        ; prev_cr so it is swallowed instead of drawing a blank first content line
+        bool prev_cr = lastskip == 13
         bool full = false
-        ; found-text highlight: bytes [view_match, view_match+plen) are drawn in the find colour
+        ; found-text highlight: bytes [view_match, view_match+plen) get the find colour via setclr
         ubyte plen = lsb(strings.length(view_find))
-        uword mend = view_match + plen
-        bool hl = false
-        if draw
-            txt.plot(0, VTOP)
+        long mend = view_match + plen
         repeat {
             uword n = diskio.f_read(&viewbuf, 250)
             if n == 0 {
@@ -191,21 +232,16 @@ main {
                         full = true
                         break
                     }
-                    if draw
-                        txt.plot(0, VTOP + row)
                 } else {
                     if ch < 32 or ch > 126
                         ch = '.'
                     if draw {
-                        bool inmatch = plen != 0 and consumed-1 >= view_match and consumed-1 < mend
-                        if inmatch != hl {
-                            if inmatch
-                                txt.color2(shared.FIND_FG, shared.FIND_BG)
-                            else
-                                txt.color2(shared.BAR_FG, shared.CONTENT_BG)
-                            hl = inmatch
-                        }
-                        txt.chrout(ch)
+                        ; setchr writes the screen code straight to VRAM - no PETSCII control-code
+                        ; interpretation, so no byte value can scroll the view. setclr paints only
+                        ; the find-highlight cells; the rest keep the blanked content colour.
+                        txt.setchr(col, VTOP + row, scr_of(ch))
+                        if plen != 0 and consumed-1 >= view_match and consumed-1 < mend
+                            txt.setclr(col, VTOP + row, (shared.FIND_BG << 4) | shared.FIND_FG)
                     }
                     col++
                     if col >= VWIDTH {
@@ -215,16 +251,12 @@ main {
                             full = true
                             break
                         }
-                        if draw
-                            txt.plot(0, VTOP + row)
                     }
                 }
             }
             if full
                 break
         }
-        if draw and hl
-            txt.color2(shared.BAR_FG, shared.CONTENT_BG)   ; leave the content colour clean
         diskio.f_close()
         return consumed
     }
@@ -247,7 +279,14 @@ main {
         put_hex8(lsb(w))
     }
 
-    sub view_render_hex(uword start_off) -> uword {
+    sub put_hex24(long v) {
+        ; 6 hex digits (24-bit) - enough for any X16 file offset (< 16 MB)
+        put_hex8((v >> 16) as ubyte)
+        put_hex8((v >> 8) as ubyte)
+        put_hex8(v as ubyte)
+    }
+
+    sub view_render_hex(long start_off) -> long {
         ; draw one hex page (VROWS rows of 16 bytes) from start_off; return the next page
         ; offset and set view_eof at end-of-file. Header/footer untouched (no flicker).
         view_eof = false
@@ -261,17 +300,17 @@ main {
             view_eof = true
             return start_off
         }
-        uword toskip = start_off
+        long toskip = start_off
         while toskip != 0 {
             uword want = 250
-            if toskip < want
-                want = toskip
+            if toskip < 250
+                want = toskip as uword
             uword got = diskio.f_read(&viewbuf, want)
             if got == 0
                 break
             toskip -= got
         }
-        uword off = start_off
+        long off = start_off
         ubyte row = 0
         repeat {
             ubyte cnt = lsb(diskio.f_read(&viewbuf, 16))
@@ -280,7 +319,7 @@ main {
                 break
             }
             txt.plot(0, VTOP + row)
-            put_hex16(off)
+            put_hex24(off)
             txt.print(": ")
             ubyte i
             for i in 0 to 15 {
@@ -296,7 +335,7 @@ main {
                 ubyte ch = viewbuf[i]
                 if ch < 32 or ch > 126
                     ch = '.'
-                txt.chrout(ch)
+                txt.setchr(57 + i, VTOP + row, scr_of(ch))   ; ascii col = 57 (6+2+48+1); setchr, not chrout
             }
             off += cnt
             row++
@@ -311,6 +350,82 @@ main {
         return off
     }
 
+    sub popcount(ubyte v) -> ubyte {
+        ; count the 1-bits in v (used for the FM/PSG "N voices" from the channel masks)
+        ubyte n = 0
+        while v != 0 {
+            n += v & 1
+            v >>= 1
+        }
+        return n
+    }
+
+    sub view_render_zsm() -> long {
+        ; Draw a single-screen "header breakout" of the parsed 16-byte ZSM header already captured
+        ; in zsm_hdr[]. A static page: set view_eof so the paging keys are no-ops (PgDn is guarded
+        ; by 'if not view_eof'; PgUp/Top land back here). The return value is unused.
+        view_eof = true
+        ubyte br
+        txt.color2(shared.BAR_FG, shared.CONTENT_BG)     ; content: white on gray (matches the other renderers)
+        for br in VTOP to VTOP + VROWS - 1
+            blank_span(0, 78, br)
+
+        txt.plot(2, VTOP + 0)
+        txt.print("ZSM music file - parsed header")
+
+        txt.plot(2, VTOP + 2)
+        txt.print("Version .......... ")
+        txt.print_ub(zsm_hdr[2])
+
+        txt.plot(2, VTOP + 3)
+        txt.print("Tick rate ........ ")
+        txt.print_uw(mkword(zsm_hdr[13], zsm_hdr[12]))   ; LE 16-bit at 0x0c..0d
+        txt.print(" Hz")
+
+        txt.plot(2, VTOP + 4)
+        txt.print("Loop point ....... ")
+        if zsm_hdr[3] == 0 and zsm_hdr[4] == 0 and zsm_hdr[5] == 0 {
+            txt.print("none")
+        } else {
+            txt.print("yes  ($")
+            put_hex8(zsm_hdr[5])                          ; high->low so the hex reads big-endian
+            put_hex8(zsm_hdr[4])
+            put_hex8(zsm_hdr[3])
+            txt.chrout(')')
+        }
+
+        txt.plot(2, VTOP + 5)
+        txt.print("PCM data ......... ")
+        if zsm_hdr[6] == 0 and zsm_hdr[7] == 0 and zsm_hdr[8] == 0 {
+            txt.print("none")
+        } else {
+            txt.print("yes  ($")
+            put_hex8(zsm_hdr[8])
+            put_hex8(zsm_hdr[7])
+            put_hex8(zsm_hdr[6])
+            txt.chrout(')')
+        }
+
+        txt.plot(2, VTOP + 6)
+        txt.print("FM voices (YM) ... ")
+        txt.print_ub(popcount(zsm_hdr[9]))
+        txt.print("  (mask $")
+        put_hex8(zsm_hdr[9])
+        txt.chrout(')')
+
+        txt.plot(2, VTOP + 7)
+        txt.print("PSG voices (VERA)  ")
+        txt.print_ub(popcount(zsm_hdr[10]) + popcount(zsm_hdr[11]))
+        txt.print("  (mask $")
+        put_hex8(zsm_hdr[11])                             ; high byte first
+        put_hex8(zsm_hdr[10])
+        txt.chrout(')')
+
+        txt.plot(2, VTOP + 9)
+        txt.print("Press H for raw hex bytes.")
+        return 0
+    }
+
     ; ---------- search ----------
 
     sub view_fold(ubyte b) -> ubyte {
@@ -320,7 +435,7 @@ main {
         return b
     }
 
-    sub view_find_at(uword from) -> bool {
+    sub view_find_at(long from) -> bool {
         ; scan the file from byte offset `from` for view_find (case-insensitive). On a hit
         ; set view_match and return true; else false. Naive matcher (fine for short terms).
         ubyte plen = lsb(strings.length(view_find))
@@ -332,17 +447,17 @@ main {
         txt.print(" Working...")
         if not diskio.f_open(namebuf)
             return false
-        uword toskip = from
+        long toskip = from
         while toskip != 0 {
             uword want = 250
-            if toskip < want
-                want = toskip
+            if toskip < 250
+                want = toskip as uword
             uword got = diskio.f_read(&viewbuf, want)
             if got == 0
                 break
             toskip -= got
         }
-        uword pos = from
+        long pos = from
         ubyte mi = 0
         bool found = false
         repeat {
@@ -423,13 +538,13 @@ main {
         ; point the current view (hex or text) at the last search hit
         view_next = view_match + 1
         if view_hex {
-            view_off = view_match & $fff0
+            view_off = view_match - (view_match & 15)   ; align down to the 16-byte hex row
         } else {
             view_seek_page(view_match)
         }
     }
 
-    sub view_seek_page(uword target) {
+    sub view_seek_page(long target) {
         ; Rebuild the text page chain from the top of the file up to the page that contains
         ; byte offset `target`, leaving view_page on that page. This keeps every earlier page
         ; known, so PgUp still scrolls back above a search hit (instead of dead-ending).
@@ -437,12 +552,12 @@ main {
         view_page = 0
         view_known = 0
         repeat {
-            uword nxt = view_render(view_pages[view_page], false)
+            long nxt = view_render(view_pages[view_page], false)
             if view_eof
                 break
             if target < nxt
                 break
-            if view_page + 1 >= 100
+            if view_page + 1 >= 64
                 break
             view_pages[view_page+1] = nxt
             view_known = view_page + 1
@@ -450,12 +565,11 @@ main {
         }
     }
 
-    sub file_len() -> uword {
-        ; total file size in bytes, as a 16-bit value (wraps past 64 KB - the viewer only
-        ; pages within the first 64 KB anyway). Used to land hex mode on the last page.
+    sub file_len() -> long {
+        ; total file size in bytes (32-bit). Used to land hex mode on the last page.
         if not diskio.f_open(namebuf)
             return 0
-        uword total = 0
+        long total = 0
         repeat {
             uword n = diskio.f_read(&viewbuf, 250)
             if n == 0
@@ -476,7 +590,7 @@ main {
         txt.plot(0, SCR_BOT)
         txt.print(" Working...")
         if view_hex {
-            uword sz = file_len()
+            long sz = file_len()
             view_off = 0
             while sz - view_off > HEXPAGE
                 view_off += HEXPAGE
@@ -484,7 +598,7 @@ main {
             view_pages[0] = 0
             view_page = 0
             view_known = 0
-            uword nxt
+            long nxt
             repeat {
                 nxt = view_render(view_pages[view_page], false)
                 if view_eof {
@@ -493,7 +607,7 @@ main {
                         view_page--
                     break
                 }
-                if view_page + 1 >= 100
+                if view_page + 1 >= 64
                     break
                 view_pages[view_page+1] = nxt
                 view_known = view_page + 1
@@ -521,9 +635,11 @@ main {
         view_find[0] = 0
         view_pages[0] = 0
         repeat {
-            uword nxt
+            long nxt
             if view_hex
                 nxt = view_render_hex(view_off)
+            else if is_zsm
+                nxt = view_render_zsm()         ; ZSM file: parsed header breakout (static page)
             else
                 nxt = view_render(view_pages[view_page], true)
             ; footer status bar (repainted per page): full-width blue, white text, accent keys
@@ -536,13 +652,11 @@ main {
             txt.print("op ")
             bar_key("B")
             txt.print("ottom ")
-            if view_hex {
-                bar_key("T")
-                txt.print("ext ")
-            } else {
-                bar_key("H")
-                txt.print("ex ")
-            }
+            bar_key("H")                    ; H toggles hex<->text in BOTH directions (T is Top!)
+            if view_hex
+                txt.print(" text ")         ; in hex mode, H returns to text
+            else
+                txt.print("ex ")            ; in text mode, H shows hex
             bar_key("F")
             txt.print("ind ")
             bar_key("N")
@@ -558,9 +672,12 @@ main {
             ; right-justify the position indicator (page/offset [+ END]) against the right edge.
             ; w = width of what we print; start col 79-w ends it at col 78 - never col 79, which
             ; would auto-scroll the bottom row.
+            bool zsm_text = is_zsm and not view_hex     ; showing the parsed ZSM breakout page
             ubyte w
             if view_hex {
-                w = 5                        ; "$" + 4 hex digits
+                w = 7                        ; "$" + 6 hex digits
+            } else if zsm_text {
+                w = 5                        ; "[ZSM]"
             } else {
                 ubyte pg = view_page + 1     ; pages shown 1-based (index 0..99 -> 1..100)
                 w = 4                        ; "pg " + 1 digit
@@ -569,17 +686,19 @@ main {
                 if pg >= 100
                     w = 6
             }
-            if view_eof
-                w += 6                       ; " (END)"
+            if view_eof and not zsm_text
+                w += 6                       ; " (END)" - meaningless for the one-screen breakout
             txt.plot(79 - w, SCR_BOT)
             if view_hex {
                 txt.chrout('$')
-                put_hex16(view_off)
+                put_hex24(view_off)
+            } else if zsm_text {
+                txt.print("[ZSM]")
             } else {
                 txt.print("Pg:")
                 txt.print_uw(view_page + 1)
             }
-            if view_eof
+            if view_eof and not zsm_text
                 txt.print(" (END)")
 
             g_key = wait_key()
@@ -592,7 +711,7 @@ main {
                         if view_hex {
                             view_off += VROWS * 16
                         } else if view_page >= view_known {
-                            if view_page + 1 < 100 {
+                            if view_page + 1 < 64 {
                                 view_pages[view_page+1] = nxt
                                 view_known = view_page + 1
                                 view_page++
@@ -618,15 +737,27 @@ main {
                     else
                         view_page = 0
                 }
-                'b' -> view_bottom()            ; B: jump to the last page
+                'b' -> {                        ; B: jump to the last page
+                    if not (is_zsm and not view_hex)    ; the ZSM breakout is a single static page
+                        view_bottom()
+                }
                 'h' -> {                        ; toggle hex / text, keeping position
                     if view_hex {
-                        view_pages[0] = view_off
-                        view_page = 0
-                        view_known = 0
+                        ; hex -> text. If the hex offset is untouched since we entered hex, restore
+                        ; the exact text page (correct page number + PgUp history preserved). If the
+                        ; user paged around in hex, recompute the text page holding the current offset.
                         view_hex = false
+                        if view_off == hex_entry_off
+                            view_page = saved_page
+                        else
+                            view_seek_page(view_off)
                     } else {
-                        view_off = view_pages[view_page] & $fff0
+                        ; text -> hex. Stash the page so a straight there-and-back is exact; align the
+                        ; offset down to the 16-byte hex row for display and remember it as the anchor.
+                        saved_page = view_page
+                        view_off = view_pages[view_page]
+                        view_off = view_off - (view_off & 15)
+                        hex_entry_off = view_off
                         view_hex = true
                     }
                 }

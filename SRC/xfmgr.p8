@@ -136,7 +136,8 @@ main {
     str treeline = "?" * 48             ; composed tree row (connectors + name)
     str sa_line  = "?" * 100            ; composed ShowAll row (path + name)
     ubyte[20] levlast                   ; per-depth: is the ancestor a last child?
-    ubyte[256] viewbuf                  ; file read buffer (copy); history load now uses the overlay
+    ubyte[256] viewbuf                  ; main-RAM read buffer for the file-copy command
+                                        ; (tview has its own bank-2 read buffer; not shared any more)
 
     ; shared "press any key" footer text (Prog8 has no const str; this str is never
     ; written). Reused by the About box and the 2-line completion banners.
@@ -645,7 +646,7 @@ main {
                         xfiles.get_name(file_cursor, namebuf)
                         xtree.build_path(cur_dir, pathbuf)
                         diskio.chdir(pathbuf)   ; so tview's f_open(namebuf) resolves
-                        view_file(&namebuf)     ; extsub @bank 2: JSRFAR into the overlay; returns on Q/ESC
+                        view_file(&namebuf)             ; tview reads via its own bank-2 buffer (returns on Q/ESC)
                         txt.color2(shared.CLR_FG, shared.CLR_BG)   ; viewer left the text colour blue; restore app theme
                                                      ; (full_redraw's blanks use the current colour)
                     } else {
