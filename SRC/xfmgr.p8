@@ -216,6 +216,9 @@ main {
     extsub @bank 4 $A01E = ui_draw_box(ubyte x0 @R0, ubyte y0 @R1, ubyte x1 @R2, ubyte y1 @R3)
     extsub @bank 4 $A021 = ui_box_header(ubyte x0 @R0, ubyte x1 @R1, ubyte y0 @R2, uword titleptr @R3)
     extsub @bank 4 $A024 = ui_show_about(ubyte high_bank @R0, ubyte max_bank @R1)
+    ; the bottom command menu (all its label strings) draws here too; main passes the state it
+    ; depends on (menu_mode / focus / del_char / sort_mode) since the overlay can't see globals.
+    extsub @bank 4 $A027 = ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3)
     bool ui_ok                              ; uiutil.bin loaded OK -> dialogs use the overlay
 
     sub start() {
@@ -1062,99 +1065,11 @@ main {
         file_cursor_shown = file_cursor
     }
 
-    sub hk(ubyte c) {
-        ; print a hotkey letter highlighted in the accent colour (yellow)
-        txt.color(shared.CLR_ACCENT)
-        txt.chrout(c)
-        txt.color(shared.CLR_FG)
-    }
-
-    sub menu_plain_items() {
-        ; the no-modifier commands, context-sensitive (tree vs file pane)
-        if focus == FOCUS_TREE {
-            ; embedded-colour string (\x9e=accent \x05=fg; ←┘=ENTER glyph) - see memory note
-            txt.print(petscii:"\x9e←┘\x05log  m\x9eK\x05dir  \x9eR\x05ename  \x9eD\x05elete  \x9eTAB\x05 files")
-            txt.plot(74, CMDROW1)       ; About pinned to the far right of row 1 (key: A)
-            txt.print(petscii:"\x9eA\x05bout")
-        } else {
-            txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eV\x05iew \x9eE\x05dit \x9eC\x05opy \x9eM\x05ove \x9eF\x05ilespec \x9eR\x05ename \x9eD\x05elete")
-        }
-    }
-
-    sub menu_ctrl_items() {
-        ; CTRL batch / global commands, acting on the CURRENT directory's file index. Most
-        ; only make sense in the file pane; the dir pane shows just Tag / Untag, which tag
-        ; or untag every file in the highlighted directory (a no-op until it has been logged).
-        ; The trigger letter is highlighted inline; Delete is shown as "<key> Del" because
-        ; its CTRL key differs by environment (Ctrl-X emulator / Ctrl-D hardware).
-        if focus == FOCUS_TREE {
-            txt.print(petscii:"\x9eT\x05ag  \x9eU\x05ntag")
-            return
-        }
-        ; one embedded-colour string; keys: T ag, U ntag, I nvert, G lobal(ShowAll),
-        ; C opy, m O ve(Ctrl-O), W ildcard. Del stays a call (del_char is runtime-chosen).
-        txt.print(petscii:"\x9eT\x05ag  \x9eU\x05ntag  \x9eI\x05nvert  \x9eG\x05lobal  \x9eC\x05opy  m\x9eO\x05ve  \x9eW\x05ildcard  ")
-        hk(del_char)
-        txt.print(" Del")               ; Ctrl-X (emu) / Ctrl-D (hw)
-    }
-
-    sub menu_alt_items() {
-        ; ALT commands. eXecute + Sort are file-only, so the dir panel drops them and
-        ; shows relog + prune + release (Quit-here sits at the far right of row 2 for both).
-        if focus == FOCUS_TREE {
-            txt.print(petscii:"\x9eF3\x05 relog  \x9eP\x05rune  \x9eR\x05elease")
-        } else {
-            txt.print(petscii:"e\x9eX\x05ecute  \x9eS\x05ort: ")
-            when xfiles.sort_mode {
-                1 -> txt.print("ext")
-                2 -> txt.print("size")
-                else -> txt.print("name")
-            }
-            txt.print(petscii:"\x9e  F3\x05 relog  \x9eR\x05elease")
-        }
-    }
-
     sub draw_commands() {
-        ; Row 1 shows the active command menu, chosen by the held modifier:
-        ;   MENU (none) / CTRL / ALT.  Row 2 is a hint about the modifiers.
-        blank_span(1, 78, CMDROW1)
-        txt.plot(TREE_TEXT, CMDROW1)
-        txt.color(shared.CLR_ACCENT)
-        when menu_mode {
-            1 -> {
-                txt.print("CTRL: ")
-                txt.color(shared.CLR_FG)
-                menu_ctrl_items()
-            }
-            2 -> {
-                txt.print("ALT:  ")
-                txt.color(shared.CLR_FG)
-                menu_alt_items()
-            }
-            else -> {
-                txt.print("MENU: ")
-                txt.color(shared.CLR_FG)
-                menu_plain_items()
-            }
-        }
-        blank_span(1, 78, CMDROW2)
-        txt.plot(TREE_TEXT, CMDROW2)
-        txt.color(shared.CLR_FG)
-        if menu_mode == 0 {
-            ; both panes expose CTRL/ALT commands (Alt-Q quit-here, Alt-F3 relog,
-            ; Alt-R release, Alt-S sort...), so both show the same hint.
-            ; current colour is shared.CLR_FG here, so "hold " needs no leading code
-            txt.print(petscii:"hold \x9eCTRL\x05 or \x9eALT\x05 for more commands")
-        }
-        ; Quit pinned to the far right of row 2 on every menu. In the ALT menu it is the
-        ; "Quit-here" variant (Alt-Q quits to the CURRENT dir); elsewhere it's plain Quit.
-        if menu_mode == 2 {
-            txt.plot(70, CMDROW2)
-            txt.print(petscii:"\x9eQ\x05uit-here")
-        } else {
-            txt.plot(75, CMDROW2)
-            txt.print(petscii:"\x9eQ\x05uit")
-        }
+        ; the bottom command menu (rows CMDROW1/CMDROW2) is drawn by the uiutil overlay - all its
+        ; label strings live there now. Pass the state it varies on (the overlay can't see globals).
+        if ui_ok
+            ui_draw_commands(menu_mode, focus, del_char, xfiles.sort_mode)
     }
 
     ; ---------- file operations ----------

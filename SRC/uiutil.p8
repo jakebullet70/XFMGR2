@@ -32,7 +32,7 @@ main {
     ; a module-level initialized var would be emitted before the code and shove the table off its
     ; fixed offsets. cm_dst below is UNINITIALIZED (-> BSS tail); all strings used here are inline
     ; literals inside subs (those are fine - it's only module init-data that moves the table).
-    %jmptable ( main.ui_flash, main.ui_toast, main.ui_ask_yn, main.ui_ask_overwrite, main.ui_ask_confirm_each, main.ui_ask_delete_this, main.ui_banner_copymove, main.ui_banner_delete, main.ui_copy_diag, main.ui_draw_box, main.ui_box_header, main.ui_show_about )
+    %jmptable ( main.ui_flash, main.ui_toast, main.ui_ask_yn, main.ui_ask_overwrite, main.ui_ask_confirm_each, main.ui_ask_delete_this, main.ui_banner_copymove, main.ui_banner_delete, main.ui_copy_diag, main.ui_draw_box, main.ui_box_header, main.ui_show_about, main.ui_draw_commands )
 
     ; bottom-banner layout (must match xfmgr.p8's constants)
     const ubyte DIVBOT   = 26
@@ -41,6 +41,8 @@ main {
     const ubyte MSGROW   = 27
     const ubyte SCR_BOT  = 29
     const ubyte BANNER_LEFT = 2
+    const ubyte TREE_TEXT   = 2          ; menu text left column
+    const ubyte FOCUS_TREE  = 0          ; focus values (match xfmgr.p8)
 
     ; box-drawing screencodes + About-box rectangle (mirror xfmgr.p8's constants)
     const ubyte SC_TL = sc:'┌'
@@ -352,6 +354,90 @@ main {
     sub aboutln(ubyte ln, str s) {
         txt.plot(about_col(lsb(strings.length(s))), ABOUT_TOP + ln)
         txt.print(s)
+    }
+
+    ; ---- bottom command menu (all the label strings live here now) ----
+    ; State the menu depends on is passed in from main (the overlay can't see main's globals):
+    ; menu_mode 0/1/2 = MENU/CTRL/ALT, focus 0 = tree pane, del_char = env-specific Del key char,
+    ; sort_mode 0/1/2 = name/ext/size.
+
+    sub ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3) {
+        do_draw_commands(menu_mode, focus, del_char, sort_mode)
+    }
+    sub do_draw_commands(ubyte menu_mode, ubyte focus, ubyte del_char, ubyte sort_mode) {
+        blank_span(1, 78, CMDROW1)
+        txt.plot(TREE_TEXT, CMDROW1)
+        txt.color(shared.CLR_ACCENT)
+        when menu_mode {
+            1 -> {
+                txt.print("CTRL: ")
+                txt.color(shared.CLR_FG)
+                menu_ctrl_items(focus, del_char)
+            }
+            2 -> {
+                txt.print("ALT:  ")
+                txt.color(shared.CLR_FG)
+                menu_alt_items(focus, sort_mode)
+            }
+            else -> {
+                txt.print("MENU: ")
+                txt.color(shared.CLR_FG)
+                menu_plain_items(focus)
+            }
+        }
+        blank_span(1, 78, CMDROW2)
+        txt.plot(TREE_TEXT, CMDROW2)
+        txt.color(shared.CLR_FG)
+        if menu_mode == 0
+            txt.print(petscii:"hold \x9eCTRL\x05 or \x9eALT\x05 for more commands")
+        if menu_mode == 2 {
+            txt.plot(70, CMDROW2)
+            txt.print(petscii:"\x9eQ\x05uit-here")
+        } else {
+            txt.plot(75, CMDROW2)
+            txt.print(petscii:"\x9eQ\x05uit")
+        }
+    }
+
+    sub hk(ubyte c) {
+        ; print a hotkey letter highlighted in the accent colour (yellow)
+        txt.color(shared.CLR_ACCENT)
+        txt.chrout(c)
+        txt.color(shared.CLR_FG)
+    }
+
+    sub menu_plain_items(ubyte focus) {
+        if focus == FOCUS_TREE {
+            txt.print(petscii:"\x9e←┘\x05log  m\x9eK\x05dir  \x9eR\x05ename  \x9eD\x05elete  \x9eTAB\x05 files")
+            txt.plot(74, CMDROW1)
+            txt.print(petscii:"\x9eA\x05bout")
+        } else {
+            txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eV\x05iew \x9eE\x05dit \x9eC\x05opy \x9eM\x05ove \x9eF\x05ilespec \x9eR\x05ename \x9eD\x05elete")
+        }
+    }
+
+    sub menu_ctrl_items(ubyte focus, ubyte del_char) {
+        if focus == FOCUS_TREE {
+            txt.print(petscii:"\x9eT\x05ag  \x9eU\x05ntag")
+            return
+        }
+        txt.print(petscii:"\x9eT\x05ag  \x9eU\x05ntag  \x9eI\x05nvert  \x9eG\x05lobal  \x9eC\x05opy  m\x9eO\x05ve  \x9eW\x05ildcard  ")
+        hk(del_char)
+        txt.print(" Del")                   ; Ctrl-X (emu) / Ctrl-D (hw)
+    }
+
+    sub menu_alt_items(ubyte focus, ubyte sort_mode) {
+        if focus == FOCUS_TREE {
+            txt.print(petscii:"\x9eF3\x05 relog  \x9eP\x05rune  \x9eR\x05elease")
+        } else {
+            txt.print(petscii:"e\x9eX\x05ecute  \x9eS\x05ort: ")
+            when sort_mode {
+                1 -> txt.print("ext")
+                2 -> txt.print("size")
+                else -> txt.print("name")
+            }
+            txt.print(petscii:"\x9e  F3\x05 relog  \x9eR\x05elease")
+        }
     }
 
     ; ------------------------------------------------------------------ in-bank helpers
