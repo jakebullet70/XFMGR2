@@ -138,8 +138,6 @@ main {
     str treeline = "?" * 48             ; composed tree row (connectors + name)
     str sa_line  = "?" * 100            ; composed ShowAll row (path + name)
     ubyte[20] levlast                   ; per-depth: is the ancestor a last child?
-    ubyte[256] viewbuf                  ; main-RAM read buffer for the file-copy command
-                                        ; (tview has its own bank-2 read buffer; not shared any more)
 
     ; shared "press any key" footer text (Prog8 has no const str; this str is never
     ; written). Reused by the About box and the 2-line completion banners.
@@ -180,7 +178,8 @@ main {
     ; $A003 = wildcard_expand(orig @R0, pat @R1, out @R2);
     ; $A006 = prune_dir(parent @R0, name @R1) -> ubyte (1=ok, 0=fail);
     ; $A009 = hist_load(cat @R0, base @R1) -> count; $A00C = hist_store(str @R0) -> count;
-    ; $A00F = hist_save(cat @R0, base @R1); $A012 = hist_get(slot @R0, out @R1).
+    ; $A00F = hist_save(cat @R0, base @R1); $A012 = hist_get(slot @R0, out @R1);
+    ; $A015 = stream_copy(src @R0, dst @R1) -> uword (lsb=fail 0/1/2/3, msb=DOS code).
     const ubyte MISC_BANK = 3
     extsub @bank 3 $A000 = miscutil_init()
     extsub @bank 3 $A003 = wildcard_expand(uword origptr @R0, uword patptr @R1, uword outptr @R2)
@@ -192,6 +191,9 @@ main {
     extsub @bank 3 $A00C = hist_store(uword sptr @R0) -> ubyte @A
     extsub @bank 3 $A00F = hist_save(uword cat @R0, uword base @R1)
     extsub @bank 3 $A012 = hist_get(ubyte slot @R0, uword outptr @R1)
+    ; the file-copy byte pump lives in the overlay too (its 255-byte buffer no longer costs main
+    ; RAM). src is an absolute path, dst a bare name in the CWD the caller chdir'd into.
+    extsub @bank 3 $A015 = stream_copy(uword srcptr @R0, uword dstptr @R1) -> uword @AY
     bool misc_ok                            ; miscutil.bin loaded OK
 
     sub start() {
@@ -1466,6 +1468,10 @@ main {
         ; different logical files, so both stay open while we copy in 255-byte chunks.
         ; Returns 0 = failed (cm_fail set), 1 = copied, 2 = skipped (target exists, not
         ; overwritten). Honours the batch overwrite policy ow_mode (0 ask / 1 all / 2 skip).
+        if not misc_ok {
+            cm_fail = 4                          ; copy byte-pump lives in the overlay; it's not loaded
+            return 0
+        }
         void strings.copy(cm_sdir, cm_src)
         void strings.append(cm_src, fname)
 
@@ -1486,35 +1492,13 @@ main {
             ; ow_mode == 1, or 'y' / 'a' chosen: fall through and overwrite
         }
 
-        diskio.delete(fname)                     ; allow overwrite: CBM-DOS/hostfs won't truncate
-                                                 ; an existing file on open, so clear this name in
-                                                 ; the dest dir first (no-op when it isn't there)
-        if not diskio.f_open(cm_src) {
-            cm_fail = 1                          ; source file wouldn't open
-            return 0
-        }
-        if not diskio.f_open_w(fname) {
-            diskio.f_close()
-            cm_fail = 2                          ; dest wouldn't open (missing dir / name clash?)
-            cm_wstat = diskio.status_code()      ; grab the DOS code for the diagnostic
-            return 0
-        }
-        bool ok = true
-        repeat {
-            uword n = diskio.f_read(&viewbuf, 255)
-            if n == 0
-                break
-            if not diskio.f_write(&viewbuf, n) {
-                cm_fail = 3                       ; write failed
-                cm_wstat = diskio.status_code()   ; grab the DOS error code for the diagnostic
-                ok = false
-                break
-            }
-        }
-        diskio.f_close()
-        diskio.f_close_w()
-        if ok
+        ; hand the actual byte-copy to the overlay (its 255-byte buffer no longer costs main RAM).
+        ; cm_src = absolute source path, fname = bare dest name in the CWD we chdir'd into.
+        uword res = stream_copy(cm_src, fname)
+        cm_fail = lsb(res)                       ; 0 copied, 1 src-open, 2 dst-open, 3 write
+        if cm_fail == 0
             return 1
+        cm_wstat = msb(res)                      ; DOS code (meaningful on dst-open / write fail)
         return 0
     }
 
@@ -2313,6 +2297,7 @@ main {
                 void strings.append(cm_dst, " - write error ")
                 box_append_uw(cm_wstat)
             }
+            4 -> void strings.append(cm_dst, " - copy overlay missing")
             else -> void strings.append(cm_dst, " - nothing selected")
         }
         box_open()

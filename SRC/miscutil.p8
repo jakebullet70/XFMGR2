@@ -27,12 +27,13 @@ main {
 
     ; Jump table so callable entry offsets stay fixed across rebuilds. The compiler prepends
     ; `jmp start` at $A000, so: $A000 = start (library init), $A003 = wildcard_expand,
-    ; $A006 = prune_dir, $A009 = hist_load, $A00C = hist_store, $A00F = hist_save, $A012 = hist_get.
+    ; $A006 = prune_dir, $A009 = hist_load, $A00C = hist_store, $A00F = hist_save,
+    ; $A012 = hist_get, $A015 = stream_copy.
     ; KEEP THIS BLOCK FREE OF INITIALIZED VARIABLES - prog8 emits a block's initialized vars
     ; inline BEFORE its code/jumptable, which would shove the table off $A003 (same gotcha as
-    ; tview.p8). All module vars below (pr_*, hist_buf, ...) are UNINITIALIZED (-> BSS tail) and
-    ; all other locals live inside subs.
-    %jmptable ( main.wildcard_expand, main.prune_dir, main.hist_load, main.hist_store, main.hist_save, main.hist_get )
+    ; tview.p8). All module vars below (pr_*, hist_buf, cpbuf, ...) are UNINITIALIZED (-> BSS tail)
+    ; and all other locals live inside subs.
+    %jmptable ( main.wildcard_expand, main.prune_dir, main.hist_load, main.hist_store, main.hist_save, main.hist_get, main.stream_copy )
 
     sub start() {
         ; library init entrypoint ($A000): the compiler emits the BSS-clear here. Do NO UI or
@@ -56,6 +57,42 @@ main {
         if prune(parptr, nameptr)
             return 1
         return 0
+    }
+
+    sub stream_copy(uword srcptr @R0, uword dstptr @R1) -> uword {
+        ; real entry ($A015). Stream-copy the file at srcptr (absolute path, READ) into dstptr
+        ; (bare name in the CURRENT dir, WRITE), in 255-byte chunks via the in-bank cpbuf. The
+        ; caller (main copy_one) has already resolved the overwrite decision and chdir'd into the
+        ; dest dir. Pointers are copied into do_stream_copy's params before its body runs, so the
+        ; diskio clobber of cx16.r0-r3 inside is harmless. Returns a packed uword:
+        ;   lsb = fail point (0 copied, 1 src-open, 2 dst-open, 3 write),
+        ;   msb = DOS status code captured on a dst-open / write failure (else 0).
+        return do_stream_copy(srcptr, dstptr)
+    }
+
+    sub do_stream_copy(uword src, uword dst) -> uword {
+        diskio.delete(dst)                      ; clear any existing dest (hostfs won't truncate on open)
+        if not diskio.f_open(src)
+            return 1                            ; source wouldn't open
+        if not diskio.f_open_w(dst) {
+            diskio.f_close()                    ; close the source we opened
+            return mkword(diskio.status_code(), 2)   ; msb = DOS code, lsb = 2 (dst-open fail)
+        }
+        ubyte fc = 0
+        ubyte wst = 0
+        repeat {
+            uword n = diskio.f_read(&cpbuf, 255)
+            if n == 0
+                break
+            if not diskio.f_write(&cpbuf, n) {
+                fc = 3                          ; write failed
+                wst = diskio.status_code()
+                break
+            }
+        }
+        diskio.f_close()
+        diskio.f_close_w()
+        return mkword(wst, fc)
     }
 
     ; ---- pure string helpers (ported verbatim from xfmgr.p8) ----
@@ -140,6 +177,7 @@ main {
     ubyte[41]  pr_leaf                      ; segment to rmdir / next subdir while descending
     ubyte[41]  pr_file                      ; last filename deleted in a leaf's file sweep (loop guard)
     ubyte[81]  pr_path                      ; filename scratch for delete_all_files
+    ubyte[255] cpbuf                        ; in-bank stream-copy chunk buffer (was viewbuf in main RAM)
 
     sub prune(str parent_path, str name) -> bool {
         ; Recursively delete <parent_path><name>/ and EVERYTHING under it, then the directory
