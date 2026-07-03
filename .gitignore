@@ -6,3 +6,5 @@
 *.asm
 .vscode/settings.json
 run/*
+__pycache__/
+*.pyc

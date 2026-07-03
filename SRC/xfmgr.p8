@@ -171,6 +171,15 @@ main {
     extsub @bank 2 $A003 = view_file(uword nameptr @R0)
     bool viewer_ok                          ; tview.bin loaded OK -> V uses the banked viewer
 
+    ; --- banked BMX image viewer (ximgview) overlay ---
+    ; ximgview.p8 is a %output library blob loaded into reserved HIRAM bank 5. It displays a
+    ; native X16 "BMX" bitmap file full-screen and returns to text mode on any key. $A000 = init;
+    ; $A003 = view_image entry. V dispatches here when the selected file's name ends in ".bmx".
+    const ubyte IMG_BANK = 5
+    extsub @bank 5 $A000 = ximgview_init()
+    extsub @bank 5 $A003 = view_image(uword nameptr @R0)
+    bool imgview_ok                         ; ximgview.bin loaded OK -> V shows .bmx images
+
     ; --- banked misc-utility overlay (miscutil) ---
     ; miscutil.p8 is a second %output library blob loaded into reserved HIRAM bank 3 at
     ; startup; it holds self-contained helpers moved out of main RAM (the wildcard rename
@@ -279,6 +288,13 @@ main {
         cx16.pop_rambank()
         if ui_ok
             uiutil_init()               ; extsub @bank 4: clears the overlay's in-bank BSS ONCE
+
+        ; load the ximgview BMX image viewer overlay into its reserved bank (IMG_BANK) the same way
+        cx16.push_rambank(IMG_BANK)
+        imgview_ok = diskio.loadlib("ximgview.bin", $a000) != 0
+        cx16.pop_rambank()
+        if imgview_ok
+            ximgview_init()             ; extsub @bank 5: clears the overlay's in-bank BSS ONCE
 
         diskio.chdir(pathbuf)           ; back to the launch dir so the tree anchors where we started
 
@@ -710,17 +726,22 @@ main {
                     dirty_status = true
                 }
             }
-            'v' -> {                            ; View: run the banked tview overlay
+            'v' -> {                            ; View: .bmx -> banked image viewer, else text/hex viewer
                 if xfiles.ft_count != 0 {
-                    if viewer_ok {
-                        xfiles.get_name(file_cursor, namebuf)
-                        xtree.build_path(cur_dir, pathbuf)
-                        diskio.chdir(pathbuf)   ; so tview's f_open(namebuf) resolves
+                    xfiles.get_name(file_cursor, namebuf)
+                    xtree.build_path(cur_dir, pathbuf)
+                    diskio.chdir(pathbuf)       ; so bmx.open/f_open(namebuf) resolve in the file's dir
+                    if imgview_ok and file_is_bmx(&namebuf) {
+                        view_image(&namebuf)            ; bank-5 overlay: shows the BMX, returns on any key
+                        cx16.set_screen_mode(SCREEN_MODE)  ; image viewer left VERA in bitmap mode -> back to 80x30
+                        txt.lowercase()                 ; CINT/set_screen_mode reset the charset to uppercase
+                        txt.color2(shared.CLR_FG, shared.CLR_BG)   ; restore app theme after CINT reset the palette
+                    } else if viewer_ok {
                         view_file(&namebuf)             ; tview reads via its own bank-2 buffer (returns on Q/ESC)
                         txt.color2(shared.CLR_FG, shared.CLR_BG)   ; viewer left the text colour blue; restore app theme
                                                      ; (full_redraw's blanks use the current colour)
                     } else {
-                        op_edit()               ; overlay missing -> fall back to X16 Edit
+                        op_edit()               ; overlays missing -> fall back to X16 Edit
                     }
                     dirty_full = true           ; viewer/editor took the screen; repaint
                 }
@@ -2451,6 +2472,22 @@ main {
             txt.chrout(s[i])
             i++
         }
+    }
+
+    sub file_is_bmx(uword nameptr) -> bool {
+        ; True if the file's first 3 bytes are the BMX magic (raw content, so no filename-encoding
+        ; ambiguity - the host-fs may return names as lowercase ASCII). On-disk magic is $42,$4D,$58
+        ; (= petscii "bmx" = ascii "BMX"), matching bmx.p8's FILEID. Mirrors tview's zsm_detect.
+        ; The caller must have chdir'd into the file's directory first.
+        ubyte[3] magic
+        magic[0] = 0
+        magic[1] = 0
+        magic[2] = 0
+        if not diskio.f_open(nameptr)
+            return false
+        ubyte got = lsb(diskio.f_read(&magic, 3))
+        diskio.f_close()
+        return got >= 3 and magic[0]==$42 and magic[1]==$4d and magic[2]==$58
     }
 
     sub wait_key() -> ubyte {
