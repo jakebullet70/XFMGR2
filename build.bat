@@ -23,9 +23,9 @@ REM the .prg is named after the source (xfmgr.p8 -> xfmgr.prg), written to the r
 FOR %%F IN ("%SRC%") DO SET PRGFILE=%~dp0%%~nF.prg
 
 SET BUILDLOG=%TEMP%\xfmgr_build.txt
-REM prog8c-12.2.1-all.jar is the active compiler; the older prog8c.jar (12.1.1) is kept
-REM alongside as a fallback - swap the name here to roll back.
-java -jar "%~dp0prog8c-12.2.1-all.jar" -target cx16 -out "%~dp0." "%SRCDIR%\%SRC%" > "%BUILDLOG%" 2>&1
+REM prog8c.jar (root) is the active compiler; prior versions are archived in old-compilers\
+REM (swap the name here to roll back to one of those).
+java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\%SRC%" > "%BUILDLOG%" 2>&1
 SET ERR=%ERRORLEVEL%
 TYPE "%BUILDLOG%"
 IF NOT "%ERR%"=="0" ( ENDLOCAL & EXIT /B %ERR% )
@@ -37,10 +37,10 @@ REM --- companion build: the tview viewer overlay (%output library -> headerless
 REM     $A000, loaded into HIRAM bank 2 at runtime and called via extsub @bank). Only when
 REM     building the app itself. %memtop $C000 in tview.p8 fails the build if it outgrows the bank.
 IF /I "%SRC%"=="xfmgr.p8" (
-    java -jar "%~dp0prog8c-12.2.1-all.jar" -target cx16 -out "%~dp0." "%SRCDIR%\tview.p8" > "%TEMP%\tview_build.txt" 2>&1
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\tview.p8" > "%TEMP%\tview_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\tview_build.txt" & ECHO *** tview overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
     ECHO tview overlay: tview.bin built ^($A000 HIRAM bank overlay^).
-    java -jar "%~dp0prog8c-12.2.1-all.jar" -target cx16 -out "%~dp0." "%SRCDIR%\miscutil.p8" > "%TEMP%\miscutil_build.txt" 2>&1
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\miscutil.p8" > "%TEMP%\miscutil_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\miscutil_build.txt" & ECHO *** miscutil overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
     ECHO miscutil overlay: miscutil.bin built ^($A000 HIRAM bank overlay^).
 )

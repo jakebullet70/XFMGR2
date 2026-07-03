@@ -38,6 +38,8 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
+    const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
+                                        ; confirmations) - two white columns, text from col 2
 
     ; tree pane interior columns
     const ubyte TREE_MARK = 1           ; focus marker column
@@ -372,24 +374,17 @@ main {
         tree_cursor = 0
     }
 
-    sub yes_no() -> bool {
-        ; reverse-video cursor, then read a command key: true on 'y'/'Y'. Shared tail of
-        ; every confirmation prompt (the caller prints the question + "(Y/N) " first).
-        txt.chrout($92)
-        return cmd_key() == 'y'
-    }
-
-    sub confirm(str question) -> bool {
-        ; full fixed-text confirmation as a centered white box (question + Y/N)
-        return box_confirm(question)
+    sub confirm(str question, bool default_yes) -> bool {
+        ; bracketed Yes/No confirmation box; default_yes picks which side ENTER selects.
+        return ask_yn(question, default_yes)
     }
 
     sub confirm_quit() -> bool {
-        return confirm("Quit XFMGR2?")
+        return confirm("Quit XFMGR2?", true)
     }
 
     sub confirm_quit_here() -> bool {
-        return confirm("Quit to this directory?")
+        return confirm("Quit to this directory?", true)
     }
 
     sub handle_ctrl(ubyte letter) {
@@ -1147,7 +1142,7 @@ main {
             return
         xfiles.get_name(file_cursor, namebuf)
         box_compose_name("Delete ", namebuf, "?")
-        if confirm(cm_dst) {
+        if confirm(cm_dst, false) {                 ; default No (destructive)
             xtree.build_path(cur_dir, pathbuf)
             diskio.chdir(pathbuf)
             diskio.delete(namebuf)
@@ -1156,6 +1151,7 @@ main {
             clamp_file_cursor()
             if xfiles.ft_count == 0                 ; last file gone -> hop back to the dir pane
                 change_focus(FOCUS_TREE)
+            banner_delete(1)                        ; result banner, like copy/move
         }
     }
 
@@ -1164,24 +1160,45 @@ main {
             flash("no tagged files")
             return
         }
-        void strings.copy("Delete ", cm_dst)
-        box_append_uw(xtree.dx_tag(cur_dir))
-        void strings.append(cm_dst, " tagged files?")
-        if confirm(cm_dst) {
-            xtree.build_path(cur_dir, pathbuf)
-            diskio.chdir(pathbuf)
-            for g_ndx in 0 to xfiles.ft_count-1 {
-                if xfiles.is_tagged(g_ndx) {
-                    xfiles.get_name(g_ndx, namebuf)
+        uword ntag = xtree.dx_tag(cur_dir)
+        ubyte mode = ask_confirm_each(ntag)         ; 1 = confirm each, 0 = delete all, 255 = cancel
+        if mode == 255
+            return
+        xtree.build_path(cur_dir, pathbuf)
+        diskio.chdir(pathbuf)
+        bool allrem = mode == 0                     ; "No" at the top prompt -> delete all, no asking
+        uword ndel = 0
+        ; Walk DOWNWARD: deleting a file + reindexing only shifts indices ABOVE it, which we've
+        ; already visited, so lower indices stay valid. Local `fi` (not g_ndx): the per-file
+        ; prompt and the live repaint both clobber the shared g_ndx counter.
+        ubyte fi = xfiles.ft_count
+        while fi != 0 {
+            fi--
+            if xfiles.is_tagged(fi) {
+                xfiles.get_name(fi, namebuf)
+                ubyte act = 1                       ; default action: delete
+                if not allrem {
+                    act = ask_delete_this(namebuf)  ; 1=del 0=skip 2=all 255=cancel
+                    if act == 2 {
+                        allrem = true               ; "All Files" -> stop asking, delete the rest
+                        act = 1
+                    } else if act == 255
+                        break                       ; cancel the remaining files
+                }
+                if act == 1 {
                     diskio.delete(namebuf)
-                    xfiles.hide(g_ndx, cur_dir)     ; clears its tag + marks deleted
+                    xfiles.hide(fi, cur_dir)        ; clears its tag + marks deleted
+                    ndel++
+                    void xfiles.build_index(cur_dir)    ; recompact the cached view...
+                    clamp_file_cursor()
+                    draw_files()                        ; ...and repaint so the file leaves the screen live
                 }
             }
-            void xfiles.build_index(cur_dir)
-            clamp_file_cursor()
-            if xfiles.ft_count == 0                 ; last file gone -> hop back to the dir pane
-                change_focus(FOCUS_TREE)
         }
+        clamp_file_cursor()
+        if xfiles.ft_count == 0                     ; last file gone -> hop back to the dir pane
+            change_focus(FOCUS_TREE)
+        banner_delete(ndel)                         ; result banner, like copy/move
     }
 
     sub op_mkdir() {
@@ -1224,7 +1241,7 @@ main {
         void strings.copy(xtree.name_ptr(idx), namebuf) ; stable copy of the target name
         box_compose_name("pruning ", namebuf, " ...")   ; transient status; the result box follows
         box_open()
-        box_center(CMDROW1, cm_dst)
+        box_left(CMDROW1, cm_dst)
         bool ok = false
         if misc_ok
             ok = prune_dir(&pathbuf, &namebuf) != 0     ; banked engine (miscutil overlay, bank 3)
@@ -1239,7 +1256,7 @@ main {
                 tree_top = tree_cursor
             select_dir(xtree.vis_idx[uprow])
             box_open()                                      ; 4-row white box, like relog/copy
-            box_center(CMDROW1, "Prune OK")
+            box_left(CMDROW1, "Prune OK")
             sys.wait(90)                                     ; show ~1.5s, then auto-dismiss (no keypress)
             box_close()
         } else {
@@ -1263,7 +1280,7 @@ main {
             return                                          ; before we bother confirming
         }
         box_compose_name("Delete empty folder ", namebuf, "?")
-        if not confirm(cm_dst)
+        if not confirm(cm_dst, false)               ; default No (destructive)
             return
         ubyte parent = xtree.d_parent[idx]
         ubyte uprow = tree_cursor                           ; land one row up once it vanishes
@@ -1416,19 +1433,29 @@ main {
         ; black on white with the Y/N/A/S keys in light blue; the box chars underneath are
         ; erased and restored by draw_frame() after the batch. Returns the folded key:
         ; 'y' overwrite this, 'n' skip this, 'a' overwrite all, 's' skip all remaining.
+        ; "Overwrite <name>?" on row 1; bracketed choices on row 2. ENTER picks the bracketed
+        ; default (No = skip just this one); Esc/STOP = Skip all remaining. Hotkeys light blue.
         box_compose_name("Overwrite ", fname, "?")
         box_open()
-        box_center(CMDROW1, cm_dst)
-        const ubyte KW = 30                      ; "Y=yes  N=no  A=all  S=skip all" width
-        ubyte kstart = (80 - KW) / 2
-        box_center(CMDROW2, "Y=yes  N=no  A=all  S=skip all")
-        box_key(kstart,      CMDROW2)            ; Y
-        box_key(kstart + 7,  CMDROW2)            ; N
-        box_key(kstart + 13, CMDROW2)            ; A
-        box_key(kstart + 20, CMDROW2)            ; S
+        box_left(CMDROW1, cm_dst)
+        ubyte cs = choices_row(CMDROW2, "", "Yes  [No]  All  Skip all  Esc Cancel")
+        box_keyrun(cs,      1, CMDROW2)         ; Y
+        box_keyrun(cs + 6,  1, CMDROW2)         ; N (inside the [ ])
+        box_keyrun(cs + 11, 1, CMDROW2)         ; A
+        box_keyrun(cs + 16, 1, CMDROW2)         ; S (Skip all)
+        box_keyrun(cs + 26, 3, CMDROW2)         ; Esc
         ; no box_close here: the copy loop keeps running, and the "Copying..." / result box
         ; that follows redraws over this one (a box_close now would flash the 2-line frame)
-        return cmd_key()
+        ubyte r
+        repeat {
+            when cmd_key() {
+                'y'        -> { r = 'y' break }
+                'n', 13    -> { r = 'n' break }     ; N / ENTER (default) = skip this one
+                'a'        -> { r = 'a' break }
+                's', 27, 3 -> { r = 's' break }     ; Skip all / Esc = skip all remaining
+            }
+        }
+        return r
     }
 
     sub copy_one(str fname) -> ubyte {
@@ -1568,7 +1595,7 @@ main {
         ; is exactly what copy_one needs - it writes each file by bare name into the CWD.
         if dir_exists(path)
             return true
-        if not confirm("Dest dir missing. Create it?")
+        if not confirm("Dest dir missing. Create it?", true)     ; default Yes
             return false
         make_dirs(path)                         ; create the whole chain, not just the leaf
         if dir_exists(path)                     ; confirm it really got created (and enter it)
@@ -1619,9 +1646,9 @@ main {
                                                 ; target must be entered (an existing one already is)
         box_open()                              ; status box during the copy (covers the prompt)
         if is_move
-            box_center(CMDROW1, "Moving...")
+            box_left(CMDROW1, "Moving...")
         else
-            box_center(CMDROW1, "Copying...")
+            box_left(CMDROW1, "Copying...")
         uword done = 0
         uword failed = 0
         uword skipped = 0
@@ -1701,8 +1728,8 @@ main {
         box_append_uw(cnt)
         void strings.append(cm_dst, " file(s)")
         box_open()
-        box_center(CMDROW1, cm_dst)
-        box_center(CMDROW2, MSG_PRESS_ANY_KEY)
+        box_left(CMDROW1, cm_dst)
+        box_left(CMDROW2, MSG_PRESS_ANY_KEY)
         void wait_key()
         box_close()
     }
@@ -1745,9 +1772,9 @@ main {
         diskio.chdir(cm_ddir)                   ; copy with the dest as cwd (hostfs writes there)
         box_open()                              ; status box during the copy (covers the prompt)
         if is_move
-            box_center(CMDROW1, "Moving...")
+            box_left(CMDROW1, "Moving...")
         else
-            box_center(CMDROW1, "Copying...")
+            box_left(CMDROW1, "Copying...")
         uword done = 0
         uword failed = 0
         uword skipped = 0
@@ -1800,11 +1827,11 @@ main {
         clamp_file_cursor()
         ; brief 4-row white box so the new order is obvious even with 0/1 files
         box_open()
-        box_center(CMDROW1, "Sort order:")
+        box_left(CMDROW1, "Sort order:")
         when xfiles.sort_mode {
-            1 -> box_center(CMDROW2, "extension")
-            2 -> box_center(CMDROW2, "size")
-            else -> box_center(CMDROW2, "name")
+            1 -> box_left(CMDROW2, "extension")
+            2 -> box_left(CMDROW2, "size")
+            else -> box_left(CMDROW2, "name")
         }
         sys.wait(45)                ; ~0.75s, then the menu repaints over it
         box_close()
@@ -1834,11 +1861,11 @@ main {
             xtree.rebuild_visible()
             set_tree_cursor_to(cur_dir)
             box_open()
-            box_center(CMDROW1, "relogged folders")
+            box_left(CMDROW1, "relogged folders")
             void strings.copy("+", cm_dst)
             box_append_uw(added)
             void strings.append(cm_dst, " new")
-            box_center(CMDROW2, cm_dst)
+            box_left(CMDROW2, cm_dst)
             sys.wait(120)
             box_close()
             return
@@ -1852,11 +1879,11 @@ main {
                 cur_blocks += xfiles.get_blocks(g_ndx)
         clamp_file_cursor()
         box_open()
-        box_center(CMDROW1, "relogged")
+        box_left(CMDROW1, "relogged")
         cm_dst[0] = 0
         box_append_uw(xfiles.ft_count)
         void strings.append(cm_dst, " file(s)")
-        box_center(CMDROW2, cm_dst)
+        box_left(CMDROW2, cm_dst)
         sys.wait(90)               ; show the box ~2 seconds, then auto-dismiss
         box_close()
     }
@@ -1904,7 +1931,7 @@ main {
             return
         xfiles.get_name(file_cursor, namebuf)
         box_compose_name("Run ", namebuf, "? exits XFMGR")
-        if confirm(cm_dst) {
+        if confirm(cm_dst, true) {                  ; default Yes
             xtree.build_path(cur_dir, pathbuf)
             run_exit = true
         }
@@ -2059,8 +2086,8 @@ main {
 
     sub flash(str m) {
         box_open()
-        box_center(CMDROW1, m)
-        box_center(CMDROW2, MSG_PRESS_ANY_KEY)
+        box_left(CMDROW1, m)
+        box_left(CMDROW2, MSG_PRESS_ANY_KEY)
         void wait_key()
         box_close()
     }
@@ -2069,7 +2096,7 @@ main {
         ; brief self-dismissing status: message only (no "press any key"), auto-closes
         ; after ~1.5 s (90 jiffies at 60 Hz). For confirmations that need no acknowledgement.
         box_open()
-        box_center(CMDROW1, m)
+        box_left(CMDROW1, m)
         sys.wait(90)
         box_close()
     }
@@ -2092,15 +2119,12 @@ main {
         draw_frame()                        ; restore the borders the box erased
     }
 
-    sub box_center(ubyte row, str s) {
-        ; print s centered on row, then force that row black-on-white
-        txt.plot((80 - lsb(strings.length(s))) / 2, row)
+    sub box_left(ubyte row, str s) {
+        ; print s left-aligned at BANNER_LEFT on row, then force that row black-on-white.
+        ; the house style for every bottom-banner line (see BANNER_LEFT).
+        txt.plot(BANNER_LEFT, row)
         txt.print(s)
         hilite_row(0, 79, row, shared.OW_BLACK)
-    }
-
-    sub box_key(ubyte col, ubyte row) {
-        txt.setclr(col, row, shared.OW_KEY)        ; recolour one hotkey cell light blue
     }
 
     sub box_compose_name(str prefix, str name, str suffix) {
@@ -2140,15 +2164,104 @@ main {
         cm_dst[l] = 0
     }
 
-    sub box_confirm(str question) -> bool {
-        ; centered Y/N dialog: question on row 1, "(Y/N)" with keys light blue on row 2
+    sub ask_yn(str question, bool default_yes) -> bool {
+        ; bracketed Yes/No confirm in the new style: question on row 1, "[Yes] No / Yes [No]"
+        ; plus "Esc Cancel" on row 2. ENTER picks the bracketed default; Y/N pick directly;
+        ; ESC/STOP -> false. (Callers may pass a literal or cm_dst itself as `question`.)
         box_open()
-        box_center(CMDROW1, question)
-        box_center(CMDROW2, "(Y/N)")
-        ubyte c = (80 - 5) / 2
-        box_key(c + 1, CMDROW2)             ; Y
-        box_key(c + 3, CMDROW2)             ; N
-        bool r = yes_no()
+        box_left(CMDROW1, question)
+        ubyte cs
+        if default_yes {
+            cs = choices_row(CMDROW2, "", "[Yes]  No  Esc Cancel")
+            box_keyrun(cs + 1,  1, CMDROW2)         ; Y (inside the [ ])
+            box_keyrun(cs + 7,  1, CMDROW2)         ; N
+            box_keyrun(cs + 11, 3, CMDROW2)         ; Esc
+        } else {
+            cs = choices_row(CMDROW2, "", "Yes  [No]  Esc Cancel")
+            box_keyrun(cs,      1, CMDROW2)         ; Y
+            box_keyrun(cs + 6,  1, CMDROW2)         ; N (inside the [ ])
+            box_keyrun(cs + 11, 3, CMDROW2)         ; Esc
+        }
+        bool result
+        repeat {
+            when cmd_key() {
+                'y'   -> { result = true          break }
+                'n'   -> { result = false         break }
+                27, 3 -> { result = false         break }
+                13    -> { result = default_yes    break }
+            }
+        }
+        box_close()
+        return result
+    }
+
+    ; ---- bracketed multi-choice prompts (XTree "[Yes] No Esc" style) --------------------
+    ; The default choice is shown wrapped in [brackets] and is what ENTER selects; the first
+    ; letter of each choice is its hotkey (light blue), ESC/STOP always cancels.
+
+    sub box_keyrun(ubyte col, ubyte n, ubyte row) {
+        ; recolour a run of n cells light blue (a multi-cell box_key, e.g. "Esc")
+        ubyte e = col + n - 1
+        for g_ndx in col to e
+            txt.setclr(g_ndx, row, shared.OW_KEY)
+    }
+
+    sub choices_row(ubyte row, str q, str ch) -> ubyte {
+        ; question q left at BANNER_LEFT, choices ch right-aligned ending at col 78, on `row`;
+        ; returns the column ch starts at (so the caller can colour its hotkey cells).
+        txt.plot(BANNER_LEFT, row)
+        txt.print(q)
+        ubyte cstart = 79 - lsb(strings.length(ch))
+        txt.plot(cstart, row)
+        txt.print(ch)
+        hilite_row(0, 79, row, shared.OW_BLACK)
+        return cstart
+    }
+
+    sub ask_confirm_each(uword n) -> ubyte {
+        ; heading "Delete N tagged files" on row 1; "Confirm delete for each file?" + choices
+        ; on row 2. Returns 1 = confirm each, 0 = delete all (no per-file), 255 = cancel.
+        box_open()
+        void strings.copy("Delete ", cm_dst)
+        box_append_uw(n)
+        void strings.append(cm_dst, " tagged files")
+        box_left(CMDROW1, cm_dst)
+        ubyte cs = choices_row(CMDROW2, "Confirm delete for each file?", "[Yes]  No  Esc Cancel")
+        box_keyrun(cs + 1,  1, CMDROW2)         ; Y (inside the [ ])
+        box_keyrun(cs + 7,  1, CMDROW2)         ; N
+        box_keyrun(cs + 11, 3, CMDROW2)         ; Esc
+        ubyte r
+        repeat {
+            when cmd_key() {
+                13, 'y' -> { r = 1   break }    ; Enter (default) / Y
+                'n'     -> { r = 0   break }
+                27, 3   -> { r = 255 break }
+            }
+        }
+        box_close()
+        return r
+    }
+
+    sub ask_delete_this(str name) -> ubyte {
+        ; "Delete <name>?" on row 1; "Yes [No] All Files  Esc Cancel" on row 2 (default No).
+        ; Returns 1 = delete this, 0 = skip, 2 = delete this + all remaining, 255 = cancel rest.
+        box_open()
+        box_compose_name("Delete ", name, "?")
+        box_left(CMDROW1, cm_dst)
+        ubyte cs = choices_row(CMDROW2, "", "Yes  [No]  All Files  Esc Cancel")
+        box_keyrun(cs,      1, CMDROW2)         ; Y (Yes)
+        box_keyrun(cs + 6,  1, CMDROW2)         ; N (inside the [ ])
+        box_keyrun(cs + 11, 1, CMDROW2)         ; A (All Files)
+        box_keyrun(cs + 22, 3, CMDROW2)         ; Esc
+        ubyte r
+        repeat {
+            when cmd_key() {
+                'y'     -> { r = 1   break }
+                13, 'n' -> { r = 0   break }    ; Enter (default) / N -> skip
+                'a'     -> { r = 2   break }
+                27, 3   -> { r = 255 break }
+            }
+        }
         box_close()
         return r
     }
@@ -2163,7 +2276,7 @@ main {
             void strings.copy("Copied ", cm_dst)
         box_append_uw(done)
         void strings.append(cm_dst, " file(s)")
-        box_center(CMDROW1, cm_dst)
+        box_left(CMDROW1, cm_dst)
         if failed == 0 and skipped == 0 {
             sys.wait(120)
             box_close()
@@ -2174,8 +2287,19 @@ main {
         void strings.append(cm_dst, " failed  ")
         box_append_uw(skipped)
         void strings.append(cm_dst, " skipped")
-        box_center(CMDROW2, cm_dst)
+        box_left(CMDROW2, cm_dst)
         sys.wait(200)                                        ; linger a little on problems
+        box_close()
+    }
+
+    sub banner_delete(uword done) {
+        ; auto-dismiss "Deleted N file(s)" box, same look/timing as banner_copymove's happy path.
+        box_open()
+        void strings.copy("Deleted ", cm_dst)
+        box_append_uw(done)
+        void strings.append(cm_dst, " file(s)")
+        box_left(CMDROW1, cm_dst)
+        sys.wait(120)
         box_close()
     }
 
@@ -2192,8 +2316,8 @@ main {
             else -> void strings.append(cm_dst, " - nothing selected")
         }
         box_open()
-        box_center(CMDROW1, cm_dst)
-        box_center(CMDROW2, MSG_PRESS_ANY_KEY)
+        box_left(CMDROW1, cm_dst)
+        box_left(CMDROW2, MSG_PRESS_ANY_KEY)
         void wait_key()
         box_close()
     }
@@ -2369,19 +2493,27 @@ main {
 
     sub prompt_hint(bool usehist, bool dirpick) {
         ; key help on row 2 under a text prompt: black text with the hotkeys in light blue.
-        ubyte col = TREE_TEXT
+        ; RIGHT-justified to end at col 78, matching the bracketed dialogs' row-2 choices.
+        ; measure the total run width first (keys + labels of each shown segment), then start
+        ; at 79 - width so the last char lands on col 78.
+        ubyte w = 2 + 5 + 3 + 7                  ; "←┘"+" OK  "  and  "ESC"+" Cancel" (always shown)
         if usehist
-            col = hint_key(col, petscii:"↑", "=history  ")
+            w += 1 + 10                          ; "↑" + " History  "
         if dirpick
-            col = hint_key(col, "F2", "=dir tree  ")
-        col = hint_key(col, petscii:"←┘", "=OK  ")
-        col = hint_key(col, "ESC", "=cancel")
+            w += 2 + 11                          ; "F2" + " Dir tree  "
+        ubyte col = 79 - w
+        if usehist
+            col = hint_key(col, petscii:"↑", " History  ")
+        if dirpick
+            col = hint_key(col, "F2", " Dir tree  ")
+        col = hint_key(col, petscii:"←┘", " OK  ")
+        col = hint_key(col, "ESC", " Cancel")
     }
 
     sub input_frame(str prompt, bool usehist, bool dirpick) {
         ; white 4-row box with the prompt label (black) on row 1 and the key hints on row 2
         box_open()
-        txt.plot(1, MSGROW)
+        txt.plot(BANNER_LEFT, MSGROW)
         txt.print(prompt)
         hilite_row(0, 79, MSGROW, shared.OW_BLACK)
         prompt_hint(usehist, dirpick)
@@ -2396,7 +2528,7 @@ main {
         if usehist
             hist_count = hist_load(histname, &xtree.base_path)      ; banked ring; cache the returned count
         input_frame(prompt, usehist, dirpick)
-        ubyte fieldcol = 2 + lsb(strings.length(prompt))
+        ubyte fieldcol = BANNER_LEFT + 1 + lsb(strings.length(prompt))     ; one space after the prompt label
         ubyte n = 0
         ubyte curpos = 0
         ubyte j
