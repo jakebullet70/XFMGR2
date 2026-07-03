@@ -1,6 +1,6 @@
 ---
 name: xfmgr-color-theme-setup
-description: XFMGR2 colour-theme setup - Alt-C launches standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
+description: XFMGR2 colour-theme setup - Alt-F10 launches standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
 metadata: 
   node_type: memory
   type: project
@@ -21,7 +21,9 @@ High-Contrast (RGB rows in themes.p8).
 
 **Standalone PRG, not an overlay.** Setup is stateless w.r.t. the tree/arena, so no state snapshot is
 needed. `SRC/xfsetup.p8` is a normal $0801 PRG. Flow:
-- XFMGR `Alt-C` -> `handle_alt('c')` -> `op_setup()` confirms **"Setup? loses logged dirs + tags"**
+- XFMGR `Alt-F10` -> `handle_alt($15)` -> `op_setup()` confirms **"Setup? loses logged dirs + tags"**
+  (moved off Alt-C on 2026-07-03; F10 = keycode $15, passes through the ALT menu unchanged like
+  Alt-F3=134. See [[xfmgr-find-file]] which took a CTRL slot in the same session.)
   (default No; the hop cold-restarts XFMGR) -> sets `setup_exit` -> main loop breaks -> shutdown
   branch `chain_run("/xfmgr/xfsetup.prg")` (existing dynamic-keyboard launcher).
 - XFSETUP: 80x30 PETSCII, up/down pick a theme with LIVE preview (`apply_theme` each move), ENTER
@@ -32,6 +34,6 @@ needed. `SRC/xfsetup.p8` is a normal $0801 PRG. Flow:
 **Config file** `/xfmgr/xfmgr.cfg` (tiny `theme=N` text line, staged beside the .prg + overlays).
 `themes.cfg_read/cfg_write` clone the `hist_save`/`hist_load` diskio pattern
 ([[xfmgr-run-and-persistence]]); themes.p8 has NO `%encoding` so its filename literals stay PETSCII.
-Missing/garbled cfg -> theme 1 (Classic). Discoverability: `Alt-C = Config` hint in uiutil's
-`menu_alt_items`. Build/run: `build.bat`/`run.bat` compile+stage `xfsetup.prg` like the overlays.
+Missing/garbled cfg -> theme 1 (Classic). Discoverability: `F10 Config` hint in uiutil's
+`menu_alt_items` (both panes). Build/run: `build.bat`/`run.bat` compile+stage `xfsetup.prg` like the overlays.
 Cost: xfmgr.prg +~0.6 KB (themes apply/cfg code); ~5.3 KB main RAM still free. See [[prog8-build-toolchain]].

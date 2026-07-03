@@ -27,6 +27,8 @@
 - [Filename literals must be lowercase](prog8-filename-literals-lowercase.md) — uppercase source A-Z encodes to $C1-DA and the FS won't match; use lowercase
 - [Overlay RAM strategy](xfmgr-overlay-ram-strategy.md) — bank map (2=tview 3=miscutil 4=uiutil), UI-in-overlay pattern, 5.9 KB free, backlog
 - [BMX image viewer](xfmgr-bmx-image-viewer.md) — V on *.bmx -> bank-5 ximgview overlay; png2bmx converter in tools/ (Python off-PATH)
-- [Colour theme setup](xfmgr-color-theme-setup.md) — Alt-C -> standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
+- [Colour theme setup](xfmgr-color-theme-setup.md) — Alt-F10 -> standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
+- [Find file (Ctrl-F)](xfmgr-find-file.md) — whole-disk crawler overlay yields match-dirs; log-on-match; flat modal + jump-to-file
 - [CP437/ISO keyboard](x16-cp437-iso-keyboard.md) — why XFMGR stays PETSCII: ISO mode breaks the ALT/CTRL command keys
 - [Custom fonts (V2)](xfmgr-custom-fonts-v2.md) — backlog: upload a custom charset for double-line DOS boxes, staying PETSCII
+- [Vendored diskio patch](prog8-diskio-vendored-patch.md) — SRC/diskio_patched.p8 bounds the 50-byte list_filename overflow; prog8 can't shadow embedded libs by name

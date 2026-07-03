@@ -9,7 +9,7 @@
 ;        T tag   U untag   V view   Q quit
 
 %import textio
-%import diskio
+%import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 %import strings
 %import xarena
 %import xtree
@@ -39,6 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
+    const ubyte BUILD_NUM = 104          ; shown top-right; bump by 1 every build (dev aid)
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
 
@@ -114,7 +115,7 @@ main {
     ubyte g_ndx
     bool run_exit                           ; Alt-X set: quit XFMGR and run a program
     bool do_quit                            ; Alt-Q set: quit (exit_dir already chosen)
-    bool setup_exit                         ; Alt-C set: quit XFMGR and run the theme setup PRG
+    bool setup_exit                         ; Alt-F10 set: quit XFMGR and run the theme setup PRG
     ; directory the host shell is left in on a normal quit: the startup dir for the
     ; main-menu Quit, or the currently selected dir for the ALT-menu Quit.
     str exit_dir = "?" * 80
@@ -124,6 +125,11 @@ main {
     ; free, so we use the classic XTree Ctrl-D there. Set once at startup.
     ubyte del_key                           ; lowercase dispatch key: 'x' (emu) or 'd' (hw)
     ubyte del_char                          ; uppercase display char: 'X' or 'D'
+
+    ; "find files" CTRL key. Same story: the emulator swallows Ctrl-F before it reaches us,
+    ; so under the emulator we bind Find to Ctrl-N (fiNd); on real hardware Ctrl-F is free.
+    ubyte find_key                          ; lowercase dispatch key: 'n' (emu) or 'f' (hw)
+    ubyte find_char                         ; uppercase display char: 'N' or 'F'
 
     ; The X16 maps ALT to the Commodore (graphics) key, so ALT+letter returns a
     ; PETSCII graphics code in $A1..$BF (161..191) instead of the letter. This table
@@ -151,6 +157,7 @@ main {
     str cm_ddir = "?" * 80
     str cm_src  = "?" * 132
     str cm_dst  = "?" * 132
+    str find_lc = "?" * 32                  ; Ctrl-F: lowercased filespec for the whole-disk crawl
     ubyte cm_fail                           ; copy_one failure point: 0 ok/none, 1 src-open, 2 dst-open, 3 write
     ubyte cm_wstat                          ; DOS status code captured when a write fails (diagnostic)
     ubyte ow_mode                           ; overwrite policy for the current copy/move batch:
@@ -205,6 +212,14 @@ main {
     ; the file-copy byte pump lives in the overlay too (its 255-byte buffer no longer costs main
     ; RAM). src is an absolute path, dst a bare name in the CWD the caller chdir'd into.
     extsub @bank 3 $A015 = stream_copy(uword srcptr @R0, uword dstptr @R1) -> uword @AY
+    ; whole-disk "Find file" crawler (also overlay-resident: its path buffers cost no main RAM).
+    ; crawl_begin(specptr) starts a fresh crawl for the lowercased filespec; crawl_next_hit(outptr)
+    ; writes the next matching-dir path to outptr and returns 1 (0 = disk exhausted); crawl_trunc()
+    ; is 1 if any subtree was skipped for being too deep. Only one listing is ever open at a time,
+    ; so main's own diskio (open_path/scan_dir) is free to run between hits.
+    extsub @bank 3 $A018 = crawl_begin(uword specptr @R0)
+    extsub @bank 3 $A01B = crawl_next_hit(uword outptr @R0) -> ubyte @A
+    extsub @bank 3 $A01E = crawl_trunc() -> ubyte @A
     bool misc_ok                            ; miscutil.bin loaded OK
 
     ; --- banked UI overlay (uiutil) ---
@@ -229,7 +244,7 @@ main {
     extsub @bank 4 $A024 = ui_show_about(ubyte high_bank @R0, ubyte max_bank @R1)
     ; the bottom command menu (all its label strings) draws here too; main passes the state it
     ; depends on (menu_mode / focus / del_char / sort_mode) since the overlay can't see globals.
-    extsub @bank 4 $A027 = ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3)
+    extsub @bank 4 $A027 = ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4)
     bool ui_ok                              ; uiutil.bin loaded OK -> dialogs use the overlay
 
     sub start() {
@@ -248,13 +263,17 @@ main {
         saved_mode, cx16.r0L, cx16.r0H = cx16.get_screen_mode()
         cx16.set_screen_mode(SCREEN_MODE)        ; 80x30
 
-        ; pick the "delete tagged" CTRL key for this environment
+        ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D and Ctrl-F)
         if emudbg.is_emulator() {
             del_key  = 'x'
             del_char = 'X'
+            find_key  = 'n'
+            find_char = 'N'
         } else {
             del_key  = 'd'
             del_char = 'D'
+            find_key  = 'f'
+            find_char = 'F'
         }
         txt.lowercase()
         txt.color2(shared.CLR_FG, shared.CLR_BG)               ; white text on a blue field
@@ -369,7 +388,7 @@ main {
             if run_exit
                 break                       ; Alt-X: leave XFMGR to run a program
             if setup_exit
-                break                       ; Alt-C: leave XFMGR to run the theme setup PRG
+                break                       ; Alt-F10: leave XFMGR to run the theme setup PRG
             if do_quit
                 break                       ; Alt-Q: quit to the current directory
             ; repaint only what changed
@@ -458,6 +477,11 @@ main {
             dirty_cmd = true
             return
         }
+        if letter == find_key {             ; Ctrl-N (emu) / Ctrl-F (hw): find files across the disk
+            op_find()                       ; (runtime key, so it can't be a constant when-case)
+            dirty_full = true
+            return
+        }
         when letter {
             't' -> {                        ; Ctrl-T: tag ALL files
                 xfiles.tag_all(cur_dir)
@@ -500,7 +524,8 @@ main {
     sub handle_alt(ubyte letter) {
         ; ALT-key commands
         when letter {
-            'c' -> {                        ; Alt-C: open the colour-theme setup (either pane)
+            $15 -> {                        ; Alt-F10: open the colour-theme setup (either pane)
+                                            ; ($15 = F10; passes through unchanged like Alt-F3=134)
                 op_setup()
                 if not setup_exit
                     dirty_full = true       ; cancelled: repaint the screen the confirm covered
@@ -875,6 +900,12 @@ main {
         ; program title embedded in the top border
         txt.plot(2, 0)
         txt.print(" XFMGR2 ")
+        ; build number on the right of the top border (bump BUILD_NUM every build)
+        void strings.copy(" build ", cm_dst)
+        box_append_uw(BUILD_NUM)
+        void strings.append(cm_dst, " ")
+        txt.plot(78 - lsb(strings.length(cm_dst)), 0)
+        txt.print(cm_dst)
         txt.color(shared.CLR_FG)
     }
 
@@ -1107,7 +1138,7 @@ main {
         ; the bottom command menu (rows CMDROW1/CMDROW2) is drawn by the uiutil overlay - all its
         ; label strings live there now. Pass the state it varies on (the overlay can't see globals).
         if ui_ok
-            ui_draw_commands(menu_mode, focus, del_char, xfiles.sort_mode)
+            ui_draw_commands(menu_mode, focus, del_char, xfiles.sort_mode, find_char)
     }
 
     ; ---------- file operations ----------
@@ -1871,7 +1902,7 @@ main {
     }
 
     sub op_setup() {
-        ; Alt-C: open the standalone colour-theme setup. It is a separate PRG, so launching it
+        ; Alt-F10: open the standalone colour-theme setup. It is a separate PRG, so launching it
         ; QUITS XFMGR - all logged folders and tags are lost. On save it relaunches XFMGR, which
         ; re-reads and applies the chosen theme. Confirm (default No) before the destructive hop.
         if confirm("Setup? loses logged dirs + tags", false) {
@@ -2488,6 +2519,23 @@ main {
             txt.setclr(g_ndx, row, color)
     }
 
+    sub bar_fill(ubyte row) {
+        ; full-width reverse status bar (cols 0..79), viewer-style. setchr/setclr (not chrout) so
+        ; filling col 79 / the bottom row never triggers an auto-scroll. Matches tview.bar_fill.
+        for g_ndx in 0 to 79 {
+            txt.setchr(g_ndx, row, sc:' ')
+            txt.setclr(g_ndx, row, (shared.BAR_BG << 4) | shared.BAR_FG)
+        }
+        txt.color2(shared.BAR_FG, shared.BAR_BG)
+    }
+
+    sub bar_key(str s) {
+        ; a highlighted hotkey on the bar (dark-gray on blue), then revert to white-on-blue
+        txt.color2(shared.BAR_KEY, shared.BAR_BG)
+        txt.print(s)
+        txt.color2(shared.BAR_FG, shared.BAR_BG)
+    }
+
     ; draw_box / box_row / box_shadow / box_header now live in the uiutil overlay (bank 4),
     ; called via ui_draw_box / ui_box_header. print_trunc stays here - it's on the hot draw path
     ; (draw_status / draw_file_row), so a per-cell JSRFAR would be far too slow.
@@ -2627,7 +2675,7 @@ main {
             }
             txt.plot(2, 29)
             txt.color(shared.CLR_ACCENT)
-            txt.print("up/dn  U untag  C copy  M move  ESC/Q exit")
+            txt.print("Up/Dn  U untag  C copy  M move  ESC/Q exit")
             txt.color(shared.CLR_FG)
 
             g_key = wait_key()
@@ -2683,6 +2731,223 @@ main {
                 }
             }
         }
+    }
+
+    ; ---------- Ctrl-F: whole-disk Find ----------
+
+    sub op_find() {
+        ; Ctrl-F: prompt for a filespec, crawl the WHOLE disk from "/", log every directory that
+        ; contains a match (match-less dirs are never logged, so the tree stays clean and the
+        ; 128-dir cap is respected), then show the matches as a flat modal list you can jump from.
+        ;
+        ; The crawler lives in the miscutil overlay (bank 3) and yields one matching-dir path at a
+        ; time via its OWN diskio; between hits we log that one dir with main's diskio. Only one
+        ; listing is ever open at any instant, so the two never collide.
+        if not misc_ok {
+            flash("Find needs the misc overlay")
+            return
+        }
+        if not input_line("Find (eg *.prg):", inputbuf, 31, "find", false)
+            return
+        if inputbuf[0] == 0
+            return
+        void strings.copy(inputbuf, find_lc)        ; lowercase a copy for nocase matching
+        void strings.lower(find_lc)
+
+        box_open()                                  ; "Searching..." over the bottom rows
+        box_left(CMDROW1, "Searching...")
+
+        ubyte partial = 0                           ; bit0=too deep  bit1=dir cap  bit2=result cap
+        crawl_begin(&find_lc)
+        while crawl_next_hit(&cm_dst) != 0 {        ; cm_dst (132 B) fits a full crawl path
+            ubyte node = xscan.open_path(cm_dst)    ; log + expand ancestors, return deepest node
+            void xscan.scan_dir(node)               ; log THIS dir's files (open_path only did ancestors)
+            if xtree.dir_count >= xtree.DIR_MAX {
+                partial |= 2                        ; 128-dir cap: stop logging further hits
+                break
+            }
+        }
+        if crawl_trunc() != 0
+            partial |= 1                            ; some subtree skipped (path too long)
+        box_close()
+
+        xtree.rebuild_visible()
+        xfiles.collect_matching(find_lc)
+        if xfiles.sa_count >= xfiles.GLOBAL_MAX
+            partial |= 4                            ; results capped at GLOBAL_MAX
+
+        if xfiles.sa_count == 0 {
+            if partial != 0
+                flash("No matches (search was partial)")
+            else
+                flash("No matches")
+            return
+        }
+        show_find_results(partial)
+    }
+
+    ; Find modal: viewer-style layout - reverse blue header (row 0) + footer (SCR_BOT) bars,
+    ; white-on-gray list body (rows SA_TOP..SA_TOP+SA_VIS-1). The bars are painted ONCE on entry;
+    ; the body redraws a whole page only when it scrolls, otherwise just the two rows the cursor
+    ; left and landed on. sf_partial is stashed so the row helpers stay 2-arg on the hot path.
+    const ubyte SF_TOP = 2
+    const ubyte SF_VIS = 27                 ; list rows 2..28 (row 0 header bar, row 1 col headers, row 29 footer)
+    ubyte sf_partial
+    ubyte sf_top                            ; window top index; module-level so draw_find_row sees it
+
+    sub draw_find_row(ubyte i, ubyte cursor) {
+        ; paint the absolute-index entry i onto its screen row; caller keeps i within the visible
+        ; window, so the row is SF_TOP + (i - sf_top). Highlights when i == cursor.
+        ubyte srow = SF_TOP + (i - sf_top)
+        txt.color2(shared.BAR_FG, shared.CONTENT_BG)    ; white on gray body
+        blank_span(0, 79, srow)
+        if i < xfiles.sa_count {
+            txt.plot(0, srow)
+            if i == cursor
+                txt.chrout('>')
+            else
+                txt.spc()
+            xtree.build_path(xfiles.sa_dir[i], sa_line)
+            xfiles.sa_name(i, namebuf)
+            ubyte sl = lsb(strings.length(sa_line))     ; append the filename with a cap so
+            if sl < 99                                  ; path+name can't overflow the 100-byte
+                str_copy_cap(namebuf, &sa_line + sl, 99 - sl)  ; sa_line buffer
+            print_trunc(sa_line, 70)
+            txt.plot(73, srow)
+            txt.print_uw(xfiles.sa_blocks(i))
+            if i == cursor
+                hilite_row(0, 78, srow, shared.HILITE)
+        }
+    }
+
+    sub draw_find_page(ubyte cursor) {
+        ubyte row
+        for row in 0 to SF_VIS-1
+            draw_find_row(sf_top + row, cursor)
+    }
+
+    sub show_find_results(ubyte partial) {
+        ; full-screen modal listing the Find matches gathered in sa_* (path + name + blocks).
+        ; Enter jumps to the highlighted file; ESC/Q exits.
+        sf_partial = partial
+        sf_top = 0
+        ubyte cursor = 0
+        ubyte oldc
+
+        ; static frame (drawn once): blue header + footer bars, gray body
+        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
+        txt.clear_screen()
+        bar_fill(0)                                     ; header bar
+        txt.plot(2, 0)
+        txt.print("FIND matches: ")
+        txt.print_uw(xfiles.sa_count)
+        if sf_partial != 0
+            txt.print("  (partial - capped)")
+        txt.color2(shared.CLR_ACCENT, shared.CONTENT_BG) ; row 1: column headers over the gray body
+        txt.plot(2, 1)
+        txt.print("Name")
+        txt.plot(73, 1)
+        txt.print("Size")
+        bar_fill(SCR_BOT)                               ; footer bar
+        txt.plot(2, SCR_BOT)
+        bar_key("Up/Dn")
+        txt.print(" Move  ")
+        bar_key(petscii:"←┘")
+        txt.print(" Go to file  ")
+        bar_key("ESC")
+        txt.print(" Exit")
+        draw_find_page(cursor)
+
+        repeat {
+            g_key = wait_key()
+            if g_key >= $c1 and g_key <= $da
+                g_key -= $80
+            when g_key {
+                27, 3, 'q' -> return
+                13 -> {                     ; enter: jump to the highlighted match, close the modal
+                    if xfiles.sa_count != 0
+                        jump_to_result(cursor)
+                    return
+                }
+                17 -> {                     ; down
+                    if cursor + 1 < xfiles.sa_count {
+                        oldc = cursor
+                        cursor++
+                        if cursor >= sf_top + SF_VIS {
+                            sf_top++
+                            draw_find_page(cursor)              ; scrolled: whole page
+                        } else {
+                            draw_find_row(oldc, cursor)        ; un-highlight the row we left
+                            draw_find_row(cursor, cursor)      ; highlight the new row
+                        }
+                    }
+                }
+                145 -> {                    ; up
+                    if cursor != 0 {
+                        oldc = cursor
+                        cursor--
+                        if cursor < sf_top {
+                            sf_top = cursor
+                            draw_find_page(cursor)
+                        } else {
+                            draw_find_row(oldc, cursor)
+                            draw_find_row(cursor, cursor)
+                        }
+                    }
+                }
+                2 -> {                      ; PgDn: next page (not shown in the footer, keys only)
+                    if sf_top + SF_VIS < xfiles.sa_count {
+                        sf_top += SF_VIS                     ; advance a whole page, cursor at its top
+                        cursor = sf_top
+                        draw_find_page(cursor)
+                    } else if cursor + 1 != xfiles.sa_count {
+                        cursor = xfiles.sa_count - 1         ; last page already shown: land on the end
+                        draw_find_page(cursor)
+                    }
+                }
+                130 -> {                    ; PgUp ($82): previous page
+                    if sf_top != 0 {
+                        if sf_top >= SF_VIS
+                            sf_top -= SF_VIS
+                        else
+                            sf_top = 0
+                        cursor = sf_top
+                        draw_find_page(cursor)
+                    } else if cursor != 0 {
+                        cursor = 0
+                        draw_find_page(cursor)
+                    }
+                }
+            }
+        }
+    }
+
+    sub jump_to_result(ubyte i) {
+        ; land the dual-pane view on the file at sa_ index i: expand every ancestor of its dir,
+        ; put the tree cursor on the dir, filter the file pane to the search spec (so the match
+        ; shows), and drop focus into the file pane on the matching row.
+        ubyte dir = xfiles.sa_dir[i]
+        xfiles.sa_name(i, namebuf)                   ; the matched filename
+        ubyte a = xtree.d_parent[dir]
+        while a != xtree.NONE {
+            xtree.d_flags[a] |= xtree.FL_EXPANDED
+            a = xtree.d_parent[a]
+        }
+        xtree.rebuild_visible()
+        set_tree_cursor_to(dir)
+        xfiles.set_spec(inputbuf)                    ; file pane shows the found set (draw clamps tops)
+        select_dir(dir)                              ; build ft_ index with that spec (resets cursor/top)
+        file_cursor = 0
+        if xfiles.ft_count != 0 {
+            for g_ndx in 0 to xfiles.ft_count-1 {
+                xfiles.get_name(g_ndx, pathbuf)      ; pathbuf: name scratch (>= namebuf capacity)
+                if strings.compare(pathbuf, namebuf) == 0 {
+                    file_cursor = g_ndx
+                    break
+                }
+            }
+        }
+        focus = FOCUS_FILE
     }
 
     sub show_about() {

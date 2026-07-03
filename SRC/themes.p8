@@ -14,7 +14,7 @@
 ; must stay PETSCII like every other filename (the emulator host-fs matches petscii bytes). It
 ; prints no display text, so it never needs CP437.
 
-%import diskio
+%import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 %import strings
 
 themes {

@@ -16,7 +16,7 @@
 ; opens and closes its listing before returning and never collides with main's diskio.
 
 %import strings
-%import diskio
+%import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 %address $A000
 %memtop  $C000
 %output  library
@@ -28,12 +28,13 @@ main {
     ; Jump table so callable entry offsets stay fixed across rebuilds. The compiler prepends
     ; `jmp start` at $A000, so: $A000 = start (library init), $A003 = wildcard_expand,
     ; $A006 = prune_dir, $A009 = hist_load, $A00C = hist_store, $A00F = hist_save,
-    ; $A012 = hist_get, $A015 = stream_copy.
+    ; $A012 = hist_get, $A015 = stream_copy, $A018 = crawl_begin, $A01B = crawl_next_hit,
+    ; $A01E = crawl_trunc.
     ; KEEP THIS BLOCK FREE OF INITIALIZED VARIABLES - prog8 emits a block's initialized vars
     ; inline BEFORE its code/jumptable, which would shove the table off $A003 (same gotcha as
-    ; tview.p8). All module vars below (pr_*, hist_buf, cpbuf, ...) are UNINITIALIZED (-> BSS tail)
-    ; and all other locals live inside subs.
-    %jmptable ( main.wildcard_expand, main.prune_dir, main.hist_load, main.hist_store, main.hist_save, main.hist_get, main.stream_copy )
+    ; tview.p8). All module vars below (pr_*, hist_buf, cpbuf, cr_*, ...) are UNINITIALIZED
+    ; (-> BSS tail) and all other locals live inside subs.
+    %jmptable ( main.wildcard_expand, main.prune_dir, main.hist_load, main.hist_store, main.hist_save, main.hist_get, main.stream_copy, main.crawl_begin, main.crawl_next_hit, main.crawl_trunc )
 
     sub start() {
         ; library init entrypoint ($A000): the compiler emits the BSS-clear here. Do NO UI or
@@ -420,5 +421,158 @@ main {
                 break
             i++
         }
+    }
+
+    ; ==== whole-disk "Find file" crawler (diskio + strings only) ====
+    ; A resumable, O(depth) pre-order DFS over every directory from root "/". The hard rule is
+    ; that diskio allows only ONE listing open at a time, so we cannot hold a parent open while
+    ; descending. Instead we keep just the CURRENT path (cr_cur) and, on each crawl_next_hit call,
+    ; fully list cr_cur once (closing the listing before returning), then advance cr_cur to the
+    ; next DFS node - re-listing an ancestor only long enough to find the sibling that comes after
+    ; the child we came up from. Main consumes one matching-dir path per hit, logs just that dir,
+    ; then calls again. Only one listing is ever open at any instant, and there is no worklist in
+    ; RAM. All buffers below are UNINITIALIZED (-> BSS tail; must not be initialized, or they shove
+    ; the %jmptable off its fixed offsets - same rule as pr_*/hist_buf above).
+    const ubyte CR_PATHCAP = 100            ; max usable path length (cr_cur is 102 bytes)
+    ubyte[102] cr_cur                       ; path of the directory to visit next (trailing '/')
+    ubyte[102] cr_par                       ; parent-path scratch (advance / sibling search)
+    ubyte[42]  cr_sub                       ; first subdir found while visiting / sibling scratch
+    ubyte[42]  cr_came                      ; segment we descended from (find its next sibling)
+    ubyte[34]  cr_spec                      ; lowercased filespec to match against
+    ubyte cr_done                           ; 1 once the DFS is exhausted
+    ubyte cr_trunc                          ; 1 if any subtree was skipped (path too long)
+
+    sub crawl_begin(uword specptr @R0) {
+        ; entry ($A018): start a fresh whole-disk crawl for the (already lowercased) filespec at
+        ; specptr. Capture the pointer before the first strings call (it clobbers cx16.r0-r3).
+        uword lspec = specptr
+        void strings.copy(lspec, cr_spec)
+        cr_cur[0] = '/'                     ; root
+        cr_cur[1] = 0
+        cr_done  = 0
+        cr_trunc = 0
+    }
+
+    sub crawl_next_hit(uword outptr @R0) -> ubyte {
+        ; entry ($A01B): resume the crawl and return the next directory that CONTAINS a matching
+        ; file, as an absolute path (trailing '/') written to outptr. Returns 1 on a hit, 0 when
+        ; the disk is exhausted. Capture outptr before any diskio/strings call (clobbers r0-r3).
+        uword lout = outptr
+        while cr_done == 0 {
+            ; --- visit cr_cur: one listing pass yields both has_match and the first subdir ---
+            bool has_match = false
+            cr_sub[0] = 0
+            diskio.chdir(cr_cur)
+            if diskio.lf_start_list("*") {
+                while diskio.lf_next_entry() {
+                    if diskio.list_filename[0] == '.'
+                        continue                    ; skip . / .. / hidden
+                    if diskio.list_filetype == "dir" {
+                        if cr_sub[0] == 0
+                            void strings.copy(diskio.list_filename, cr_sub)   ; remember first subdir
+                    } else if not has_match {
+                        if strings.pattern_match_nocase(diskio.list_filename, cr_spec, false)
+                            has_match = true
+                    }
+                }
+                diskio.lf_end_list()
+            }
+            void strings.copy(cr_cur, lout)         ; tentative result (overwritten if no match)
+            cr_advance()                            ; move cr_cur to the next DFS node
+            if has_match
+                return 1
+        }
+        return 0
+    }
+
+    sub crawl_trunc() -> ubyte {
+        ; entry ($A01E): 1 if the crawl skipped any subtree because its path grew too long.
+        return cr_trunc
+    }
+
+    sub cr_advance() {
+        ; move cr_cur from the node we just visited to the next pre-order DFS node. Try to descend
+        ; into the first subdir; otherwise walk up, taking the next sibling of each ancestor until
+        ; one exists or we pop past root (cr_done). Reuses cr_sub for the sibling name.
+        if cr_sub[0] != 0 {
+            if strings.length(cr_cur) + strings.length(cr_sub) + 1 < CR_PATHCAP {
+                void strings.append(cr_cur, cr_sub)
+                void strings.append(cr_cur, "/")
+                return                              ; descended into the child
+            }
+            cr_trunc = 1                            ; child path too long: skip this subtree
+        }
+        repeat {
+            if not split_last(cr_cur, cr_par, cr_came) {
+                cr_done = 1                         ; popped past root: DFS finished
+                return
+            }
+            if cr_next_sibling(cr_par, cr_came, cr_sub) {
+                if strings.length(cr_par) + strings.length(cr_sub) + 1 < CR_PATHCAP {
+                    void strings.copy(cr_par, cr_cur)
+                    void strings.append(cr_cur, cr_sub)
+                    void strings.append(cr_cur, "/")
+                    return                          ; advanced to the next sibling
+                }
+                cr_trunc = 1                        ; sibling path too long: skip it (don't overrun cr_cur)
+            }
+            void strings.copy(cr_par, cr_cur)       ; no (usable) sibling: pop and retry
+        }
+    }
+
+    sub split_last(str path, str par, str came) -> bool {
+        ; split an absolute dir path "/a/b/c/" into par="/a/b/" and came="c". Returns false for
+        ; "/" (or empty), which has no last segment.
+        ubyte n = lsb(strings.length(path))
+        if n <= 1
+            return false
+        ubyte e = n - 1                             ; index of the trailing '/'
+        ubyte s = e
+        while s != 0 {
+            s--
+            if path[s] == '/'
+                break
+        }
+        ubyte j = 0
+        ubyte k = s + 1
+        while k < e {
+            came[j] = path[k]
+            j++
+            k++
+        }
+        came[j] = 0
+        ubyte i = 0
+        while i <= s {
+            par[i] = path[i]
+            i++
+        }
+        par[i] = 0
+        return true
+    }
+
+    sub cr_next_sibling(str parent, str came, str out) -> bool {
+        ; list parent and copy the name of the subdirectory enumerated immediately AFTER `came`
+        ; into out. Returns false if `came` is the last subdir (or the listing fails). Opens,
+        ; reads and closes one listing, per the one-at-a-time rule.
+        diskio.chdir(parent)
+        if not diskio.lf_start_list("*")
+            return false
+        bool seen  = false
+        bool found = false
+        while diskio.lf_next_entry() {
+            if diskio.list_filename[0] == '.'
+                continue                            ; skip . / .. / hidden
+            if diskio.list_filetype != "dir"
+                continue                            ; only directories are DFS nodes
+            if seen {
+                void strings.copy(diskio.list_filename, out)
+                found = true
+                break
+            }
+            if strings.compare(diskio.list_filename, came) == 0
+                seen = true
+        }
+        diskio.lf_end_list()
+        return found
     }
 }

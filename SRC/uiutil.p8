@@ -361,10 +361,10 @@ main {
     ; menu_mode 0/1/2 = MENU/CTRL/ALT, focus 0 = tree pane, del_char = env-specific Del key char,
     ; sort_mode 0/1/2 = name/ext/size.
 
-    sub ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3) {
-        do_draw_commands(menu_mode, focus, del_char, sort_mode)
+    sub ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4) {
+        do_draw_commands(menu_mode, focus, del_char, sort_mode, find_char)
     }
-    sub do_draw_commands(ubyte menu_mode, ubyte focus, ubyte del_char, ubyte sort_mode) {
+    sub do_draw_commands(ubyte menu_mode, ubyte focus, ubyte del_char, ubyte sort_mode, ubyte find_char) {
         blank_span(1, 78, CMDROW1)
         txt.plot(TREE_TEXT, CMDROW1)
         txt.color(shared.CLR_ACCENT)
@@ -372,7 +372,7 @@ main {
             1 -> {
                 txt.print("CTRL: ")
                 txt.color(shared.CLR_FG)
-                menu_ctrl_items(focus, del_char)
+                menu_ctrl_items(focus, del_char, find_char)
             }
             2 -> {
                 txt.print("ALT:  ")
@@ -416,19 +416,33 @@ main {
         }
     }
 
-    sub menu_ctrl_items(ubyte focus, ubyte del_char) {
+    sub menu_ctrl_items(ubyte focus, ubyte del_char, ubyte find_char) {
         if focus == FOCUS_TREE {
-            txt.print(petscii:"\x9eT\x05ag  \x9eU\x05ntag")
+            txt.print(petscii:"\x9eT\x05ag  \x9eU\x05ntag  ")
+            find_label(find_char)
             return
         }
-        txt.print(petscii:"\x9eT\x05ag  \x9eU\x05ntag  \x9eI\x05nvert  \x9eG\x05lobal  \x9eC\x05opy  m\x9eO\x05ve  \x9eW\x05ildcard  ")
+        txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eI\x05nvert \x9eG\x05lobal ")
+        find_label(find_char)
+        txt.print(petscii:" \x9eC\x05opy m\x9eO\x05ve \x9eW\x05ildcard ")
         hk(del_char)
         txt.print(" Del")                   ; Ctrl-X (emu) / Ctrl-D (hw)
     }
 
+    sub find_label(ubyte find_char) {
+        ; the Find hotkey varies by environment (Ctrl-F on hw, Ctrl-N under the emulator, which
+        ; swallows Ctrl-F). Show the active key: "Find" with F picked out on hw, "N Find" on emu.
+        if find_char == 'F' {
+            txt.print(petscii:"\x9eF\x05ind")
+        } else {
+            hk(find_char)
+            txt.print(" Find")
+        }
+    }
+
     sub menu_alt_items(ubyte focus, ubyte sort_mode) {
         if focus == FOCUS_TREE {
-            txt.print(petscii:"\x9eF3\x05 relog  \x9eP\x05rune  \x9eR\x05elease  \x9eC\x05onfig")
+            txt.print(petscii:"\x9eF3\x05 relog  \x9eP\x05rune  \x9eR\x05elease")
         } else {
             txt.print(petscii:"e\x9eX\x05ecute  \x9eS\x05ort: ")
             when sort_mode {
@@ -436,8 +450,11 @@ main {
                 2 -> txt.print("size")
                 else -> txt.print("name")
             }
-            txt.print(petscii:"\x9e  F3\x05 relog  \x9eR\x05elease  \x9eC\x05onfig")
+            txt.print(petscii:"\x9e  F3\x05 relog  \x9eR\x05elease")
         }
+        ; Config hotkey right-justified at the row's right edge (ends at col 78, like "About")
+        txt.plot(69, CMDROW1)
+        txt.print(petscii:"\x9eF10\x05 Config")
     }
 
     ; ------------------------------------------------------------------ in-bank helpers

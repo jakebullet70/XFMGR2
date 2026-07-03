@@ -10,7 +10,7 @@
 ; Directory NAMES go in a small main-RAM bump arena, referenced by byte offset.
 
 %import strings
-%import diskio
+%import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 
 xtree {
     %option ignore_unused

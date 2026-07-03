@@ -1,6 +1,6 @@
 ; xfsetup - standalone colour-theme picker for XFMGR2.
 ;
-; A normal $0801 PRG (NOT a bank overlay). XFMGR launches it via chain_run (Alt-C); it lets the
+; A normal $0801 PRG (NOT a bank overlay). XFMGR launches it via chain_run (Alt-F10); it lets the
 ; user pick a colour theme with live preview, writes the choice to /xfmgr/xfmgr.cfg, then
 ; chain_runs back to /xfmgr/xfmgr.prg - which cold-starts, reads the cfg and applies the theme.
 ; Because setup is stateless w.r.t. XFMGR's tree/arena, no state snapshot is needed; the only cost
@@ -8,7 +8,7 @@
 ; PETSCII 80x30 text mode XFMGR uses - no charset change.
 
 %import textio
-%import diskio
+%import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 %import strings
 %import themes
 %import "shared-const"
@@ -86,7 +86,7 @@ main {
         txt.plot(BX0 + 3, BY0 + 2)
         txt.print("Colour theme:")
         txt.plot(BX0 + 2, BY1 - 2)
-        txt.print(petscii:"\x9eup/dn\x05 select")
+        txt.print(petscii:"\x9eUp/Dn\x05 select")
         txt.plot(BX0 + 2, BY1 - 1)
         txt.print(petscii:"\x9e←┘\x05 save  \x9eESC\x05 cancel")
     }

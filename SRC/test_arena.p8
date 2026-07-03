@@ -68,7 +68,7 @@ main {
         ubyte fails = 0
         for p in 0 to len(probe_idx)-1 {
             make_name(probe_idx[p])                 ; expected[] = correct value
-            xarena.read_str(probe_bank[p], probe_off[p], got)
+            xarena.read_str(probe_bank[p], probe_off[p], got, 23)   ; got is 24 bytes
 
             txt.print("idx ")
             txt.print_uw(probe_idx[p])

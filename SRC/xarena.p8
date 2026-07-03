@@ -103,20 +103,26 @@ xarena {
         cx16.pop_rambank()
     }
 
-    sub read_str(ubyte bank, uword off, str dest) {
-        ; Copy a NUL-terminated string from the arena into a main-RAM buffer.
+    sub read_str(ubyte bank, uword off, str dest, ubyte cap) {
+        ; Copy a NUL-terminated string from the arena into a main-RAM buffer, writing AT MOST
+        ; `cap` chars before the terminating NUL (so dest must be >= cap+1 bytes). Stored names
+        ; can be up to NAME_CAP (249) bytes, but the RAM display/compare buffers that read them
+        ; are far smaller (~52); without this bound a long filename overruns the buffer and
+        ; corrupts adjacent memory. Names longer than `cap` are truncated in the copy only (the
+        ; stored name is untouched).
         cx16.push_rambank(bank)
         uword src = off
         ubyte ix = 0
         ubyte c
         repeat {
             c = @(src)
+            if c == 0 or ix >= cap
+                break
             dest[ix] = c
             src++
             ix++
-            if c == 0
-                break
         }
+        dest[ix] = 0
         cx16.pop_rambank()
     }
 }

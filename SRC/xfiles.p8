@@ -23,7 +23,7 @@ xfiles {
 
     const ubyte FILE_VIS_MAX = 255      ; max files indexed for one displayed dir
     const ubyte NAME_CAP     = 249      ; longest filename we store (keeps reclen<256)
-    const ubyte GLOBAL_MAX   = 255      ; max tagged files collected for ShowAll
+    const ubyte GLOBAL_MAX   = 255      ; max files collected for ShowAll / Find (hit cap -> "(partial)")
 
     ; bits in a record's flags byte (record offset +4)
     const ubyte REC_TAGGED = %00000001
@@ -47,6 +47,11 @@ xfiles {
     str cmpb = "?" * 52
     str exa  = "?" * 20             ; extension scratch (sort by ext)
     str exb  = "?" * 20
+
+    ; max chars any name read from the arena into a RAM buffer may occupy (all such buffers -
+    ; cmpa/cmpb here, plus main's namebuf - are 52 bytes). read_str caps at this so a stored
+    ; name longer than the buffer (up to NAME_CAP=249) truncates the copy instead of overrunning.
+    const ubyte NAME_RD_CAP = 51
 
     ; file sort order: 0 = name, 1 = extension, 2 = size
     ubyte sort_mode
@@ -145,7 +150,7 @@ xfiles {
             if xarena.far_peek(bank, off + 4) & REC_HIDDEN == 0 {
                 bool keep = true
                 if not spec_all() {
-                    xarena.read_str(bank, off + 5, cmpa)
+                    xarena.read_str(bank, off + 5, cmpa, NAME_RD_CAP)
                     keep = strings.pattern_match_nocase(cmpa, spec_lc, false)
                 }
                 if keep {
@@ -201,11 +206,11 @@ xfiles {
         for i in 1 to ft_count-1 {
             ubyte b = ft_bank[i]
             uword o = ft_off[i]
-            xarena.read_str(b, o + 5, cmpa)         ; name of the element to place
+            xarena.read_str(b, o + 5, cmpa, NAME_RD_CAP)   ; name of the element to place
             uword ablocks = blocks_at(b, o)
             ubyte j = i
             while j != 0 {
-                xarena.read_str(ft_bank[j-1], ft_off[j-1] + 5, cmpb)
+                xarena.read_str(ft_bank[j-1], ft_off[j-1] + 5, cmpb, NAME_RD_CAP)
                 bool pred_le
                 when sort_mode {
                     2 -> pred_le = blocks_at(ft_bank[j-1], ft_off[j-1]) <= ablocks
@@ -254,7 +259,8 @@ xfiles {
     }
 
     sub get_name(ubyte i, str dest) {
-        xarena.read_str(ft_bank[i], ft_off[i] + 5, dest)
+        ; dest is always a >=52-byte buffer (namebuf / cmpa / pathbuf); cap keeps long names in bounds
+        xarena.read_str(ft_bank[i], ft_off[i] + 5, dest, NAME_RD_CAP)
     }
 
     sub get_blocks(ubyte i) -> uword {
@@ -338,8 +344,44 @@ xfiles {
         }
     }
 
+    sub collect_matching(str lc_pattern) {
+        ; Find-file result gather: like collect_tagged, but selects records whose NAME matches the
+        ; (lowercased) wildcard instead of the tagged flag. Walks every logged directory's record
+        ; run and fills the sa_* arrays; caps at GLOBAL_MAX (main reads sa_count==GLOBAL_MAX as the
+        ; "results capped" signal). Reuses cmpa as name scratch.
+        sa_count = 0
+        ubyte d
+        for d in 0 to xtree.dir_count-1 {
+            if xtree.d_flags[d] & xtree.FL_SCANNED == 0
+                continue
+            uword remaining = xtree.dx_fcount(d)
+            ubyte bank = xtree.dx_fbank(d)
+            uword off  = xtree.dx_foff(d)
+            while remaining != 0 and sa_count < GLOBAL_MAX {
+                ubyte rl = xarena.far_peek(bank, off)
+                if rl == 0 {
+                    bank++
+                    off = xarena.WIN_START
+                    continue
+                }
+                ubyte fl = xarena.far_peek(bank, off + 4)
+                if fl & REC_HIDDEN == 0 {
+                    xarena.read_str(bank, off + 5, cmpa, NAME_RD_CAP)
+                    if strings.pattern_match_nocase(cmpa, lc_pattern, false) {
+                        sa_bank[sa_count] = bank
+                        sa_off[sa_count]  = off
+                        sa_dir[sa_count]  = d
+                        sa_count++
+                    }
+                }
+                off += rl
+                remaining--
+            }
+        }
+    }
+
     sub sa_name(ubyte i, str dest) {
-        xarena.read_str(sa_bank[i], sa_off[i] + 5, dest)
+        xarena.read_str(sa_bank[i], sa_off[i] + 5, dest, NAME_RD_CAP)
     }
 
     sub sa_blocks(ubyte i) -> uword {

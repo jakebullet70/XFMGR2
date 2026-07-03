@@ -4,7 +4,7 @@
 ; file as a banked record (xfiles). diskio allows only one listing session at a
 ; time; we never start another listing inside the loop, so the rule is respected.
 
-%import diskio
+%import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 %import strings
 %import xtree
 %import xfiles

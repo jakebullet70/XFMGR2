@@ -14,7 +14,7 @@
 ; content); hex mode reaches any offset in the file.
 
 %import textio
-%import diskio
+%import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 %import strings
 %import "shared-const"
 ; --- loadable-library overlay: headerless blob loaded at $A000 into a HIRAM bank and
