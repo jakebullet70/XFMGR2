@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 122          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 125          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -2681,69 +2681,113 @@ main {
     ; (ui_show_about); show_about() below is just the thin wrapper. show_all stays here - it walks
     ; xfiles/xtree state the overlay can't reach.
 
-    sub show_all() {
-        ; full-screen modal: every tagged file across all logged directories
-        const ubyte SA_TOP = 2
-        const ubyte SA_VIS = 26             ; list rows 2..27
-        xfiles.collect_tagged()
-        ubyte top = 0
-        ubyte cursor = 0
-        txt.clear_screen()
-        repeat {
-            txt.color(shared.CLR_ACCENT)
-            txt.plot(2, 0)
-            txt.print("SHOWALL - tagged files: ")
-            txt.print_uw(xfiles.sa_count)
-            txt.print("    ")
-            txt.color(shared.CLR_FG)
-            ubyte row
-            for row in 0 to SA_VIS-1 {
-                ubyte srow = SA_TOP + row
-                blank_span(0, 79, srow)
-                ubyte i = top + row
-                if i < xfiles.sa_count {
-                    txt.plot(0, srow)
-                    if i == cursor
-                        txt.chrout('>')
-                    else
-                        txt.spc()
-                    xtree.build_path(xfiles.sa_dir[i], sa_line)
-                    xfiles.sa_name(i, namebuf)
-                    ubyte sl = lsb(strings.length(sa_line))     ; append the filename with a cap
-                    if sl < 99                                  ; so path+name can't overflow the
-                        str_copy_cap(namebuf, &sa_line + sl, 99 - sl)  ; 100-byte sa_line buffer
-                    print_trunc(sa_line, 70)
-                    txt.plot(73, srow)
-                    txt.print_uw(xfiles.sa_blocks(i))
-                    if i == cursor
-                        hilite_row(0, 78, srow, shared.HILITE)
-                }
-            }
-            txt.plot(2, 29)
-            txt.color(shared.CLR_ACCENT)
-            txt.print("Up/Dn  U untag  C copy  M move  ESC/Q exit")
-            txt.color(shared.CLR_FG)
+    sub show_all_frame() {
+        ; find-panel chrome for SHOWALL: reverse-blue header bar + tagged count, Name/Size column
+        ; headers, and a footer bar with the commands as highlighted keys. Does NOT clear the screen.
+        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
+        bar_fill(0)                                     ; header bar
+        txt.plot(2, 0)
+        txt.print("SHOWALL - tagged files: ")
+        txt.print_uw(xfiles.sa_count)
+        txt.color2(shared.CLR_ACCENT, shared.CONTENT_BG) ; row 1: column headers over the gray body
+        txt.plot(2, 1)
+        txt.print("Name")
+        txt.plot(73, 1)
+        txt.print("Size")
+        bar_fill(SCR_BOT)                               ; footer bar
+        txt.plot(2, SCR_BOT)
+        bar_key("Up/Dn")
+        txt.print("  ")
+        bar_key(petscii:"←┘")
+        txt.print(" Go Dir  ")
+        bar_key("U")
+        txt.print(" Untag  ")
+        bar_key("C")
+        txt.print(" Copy all  ")
+        bar_key("M")
+        txt.print(" Move all  ")
+        bar_key("ESC")
+        txt.print(" Exit")
+    }
 
+    sub show_all() {
+        ; full-screen modal (find-panel styling): every tagged file across all logged directories.
+        ; Reuses the shared flat-list renderer (draw_sa_page/draw_sa_row over the sf_top window), so
+        ; SHOWALL and Find look + scroll identically. Enter jumps to the file (like Find); U/C/M
+        ; untag / copy / move across all dirs; ESC/Q exits.
+        xfiles.collect_tagged()
+        sf_top = 0
+        ubyte cursor = 0
+        ubyte oldc
+
+        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
+        txt.clear_screen()
+        show_all_frame()
+        draw_sa_page(cursor)
+
+        repeat {
             g_key = wait_key()
             if g_key >= $c1 and g_key <= $da
                 g_key -= $80
             when g_key {
                 27, 3, 'q' -> return
+                13 -> {                     ; enter: jump to the highlighted file, close the modal
+                    if xfiles.sa_count != 0 {
+                        void strings.copy("*", inputbuf)    ; show all files so the tagged file is visible
+                        jump_to_result(cursor)
+                    }
+                    return
+                }
                 17 -> {                     ; down
                     if cursor + 1 < xfiles.sa_count {
+                        oldc = cursor
                         cursor++
-                        if cursor >= top + SA_VIS
-                            top++
+                        if cursor >= sf_top + SF_VIS {
+                            sf_top++
+                            draw_sa_page(cursor)
+                        } else {
+                            draw_sa_row(oldc, cursor)
+                            draw_sa_row(cursor, cursor)
+                        }
                     }
                 }
                 145 -> {                    ; up
                     if cursor != 0 {
+                        oldc = cursor
                         cursor--
-                        if cursor < top
-                            top = cursor
+                        if cursor < sf_top {
+                            sf_top = cursor
+                            draw_sa_page(cursor)
+                        } else {
+                            draw_sa_row(oldc, cursor)
+                            draw_sa_row(cursor, cursor)
+                        }
                     }
                 }
-                'u' -> {                    ; untag highlighted entry, refresh list
+                2 -> {                      ; PgDn
+                    if sf_top + SF_VIS < xfiles.sa_count {
+                        sf_top += SF_VIS
+                        cursor = sf_top
+                        draw_sa_page(cursor)
+                    } else if cursor + 1 != xfiles.sa_count {
+                        cursor = xfiles.sa_count - 1
+                        draw_sa_page(cursor)
+                    }
+                }
+                130 -> {                    ; PgUp
+                    if sf_top != 0 {
+                        if sf_top >= SF_VIS
+                            sf_top -= SF_VIS
+                        else
+                            sf_top = 0
+                        cursor = sf_top
+                        draw_sa_page(cursor)
+                    } else if cursor != 0 {
+                        cursor = 0
+                        draw_sa_page(cursor)
+                    }
+                }
+                'u' -> {                    ; untag highlighted entry, refresh list + count
                     if xfiles.sa_count != 0 {
                         xfiles.sa_untag(cursor)
                         xfiles.collect_tagged()
@@ -2751,28 +2795,36 @@ main {
                             cursor = 0
                         else if cursor >= xfiles.sa_count
                             cursor = xfiles.sa_count - 1
-                        if cursor < top
-                            top = cursor
+                        if cursor < sf_top
+                            sf_top = cursor
+                        show_all_frame()                    ; header count changed
+                        draw_sa_page(cursor)
                     }
                 }
                 'c' -> {                    ; copy EVERY tagged file (across all dirs) to one dest
                     if xfiles.sa_count != 0 {
                         op_copymove_global(false)
                         xfiles.collect_tagged()
-                        top = 0
+                        sf_top = 0
                         if cursor >= xfiles.sa_count
                             cursor = 0
-                        txt.clear_screen()  ; the copy prompt/banner drew over the modal
+                        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
+                        txt.clear_screen()                  ; the copy prompt/banner drew over the modal
+                        show_all_frame()
+                        draw_sa_page(cursor)
                     }
                 }
                 'm' -> {                    ; move EVERY tagged file (across all dirs) to one dest
                     if xfiles.sa_count != 0 {
                         op_copymove_global(true)
                         xfiles.collect_tagged()
-                        top = 0
+                        sf_top = 0
                         if cursor >= xfiles.sa_count
                             cursor = 0
+                        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
                         txt.clear_screen()
+                        show_all_frame()
+                        draw_sa_page(cursor)
                     }
                 }
             }
@@ -2832,16 +2884,17 @@ main {
         show_find_results(partial)
     }
 
-    ; Find modal: viewer-style layout - reverse blue header (row 0) + footer (SCR_BOT) bars,
-    ; white-on-gray list body (rows SA_TOP..SA_TOP+SA_VIS-1). The bars are painted ONCE on entry;
-    ; the body redraws a whole page only when it scrolls, otherwise just the two rows the cursor
-    ; left and landed on. sf_partial is stashed so the row helpers stay 2-arg on the hot path.
+    ; Shared flat-list modal layout, used by BOTH the Find panel (show_find_results) and the global
+    ; SHOWALL panel (show_all): viewer-style reverse-blue header (row 0) + footer (SCR_BOT) bars,
+    ; white-on-gray list body (rows SF_TOP..SF_TOP+SF_VIS-1). The bars are painted ONCE on entry; the
+    ; body redraws a whole page only when it scrolls, otherwise just the two rows the cursor left and
+    ; landed on. Both panels list the sa_* arrays via draw_sa_row/draw_sa_page over the sf_top window.
     const ubyte SF_TOP = 2
     const ubyte SF_VIS = 27                 ; list rows 2..28 (row 0 header bar, row 1 col headers, row 29 footer)
     ubyte sf_partial
-    ubyte sf_top                            ; window top index; module-level so draw_find_row sees it
+    ubyte sf_top                            ; window top index; module-level so draw_sa_row sees it
 
-    sub draw_find_row(ubyte i, ubyte cursor) {
+    sub draw_sa_row(ubyte i, ubyte cursor) {
         ; paint the absolute-index entry i onto its screen row; caller keeps i within the visible
         ; window, so the row is SF_TOP + (i - sf_top). Highlights when i == cursor.
         ubyte srow = SF_TOP + (i - sf_top)
@@ -2866,10 +2919,10 @@ main {
         }
     }
 
-    sub draw_find_page(ubyte cursor) {
+    sub draw_sa_page(ubyte cursor) {
         ubyte row
         for row in 0 to SF_VIS-1
-            draw_find_row(sf_top + row, cursor)
+            draw_sa_row(sf_top + row, cursor)
     }
 
     sub show_find_results(ubyte partial) {
@@ -2899,10 +2952,10 @@ main {
         bar_key("Up/Dn")
         txt.print(" Move  ")
         bar_key(petscii:"←┘")
-        txt.print(" Go to file  ")
+        txt.print(" Go Dir  ")
         bar_key("ESC")
         txt.print(" Exit")
-        draw_find_page(cursor)
+        draw_sa_page(cursor)
 
         repeat {
             g_key = wait_key()
@@ -2921,10 +2974,10 @@ main {
                         cursor++
                         if cursor >= sf_top + SF_VIS {
                             sf_top++
-                            draw_find_page(cursor)              ; scrolled: whole page
+                            draw_sa_page(cursor)              ; scrolled: whole page
                         } else {
-                            draw_find_row(oldc, cursor)        ; un-highlight the row we left
-                            draw_find_row(cursor, cursor)      ; highlight the new row
+                            draw_sa_row(oldc, cursor)        ; un-highlight the row we left
+                            draw_sa_row(cursor, cursor)      ; highlight the new row
                         }
                     }
                 }
@@ -2934,10 +2987,10 @@ main {
                         cursor--
                         if cursor < sf_top {
                             sf_top = cursor
-                            draw_find_page(cursor)
+                            draw_sa_page(cursor)
                         } else {
-                            draw_find_row(oldc, cursor)
-                            draw_find_row(cursor, cursor)
+                            draw_sa_row(oldc, cursor)
+                            draw_sa_row(cursor, cursor)
                         }
                     }
                 }
@@ -2945,10 +2998,10 @@ main {
                     if sf_top + SF_VIS < xfiles.sa_count {
                         sf_top += SF_VIS                     ; advance a whole page, cursor at its top
                         cursor = sf_top
-                        draw_find_page(cursor)
+                        draw_sa_page(cursor)
                     } else if cursor + 1 != xfiles.sa_count {
                         cursor = xfiles.sa_count - 1         ; last page already shown: land on the end
-                        draw_find_page(cursor)
+                        draw_sa_page(cursor)
                     }
                 }
                 130 -> {                    ; PgUp ($82): previous page
@@ -2958,10 +3011,10 @@ main {
                         else
                             sf_top = 0
                         cursor = sf_top
-                        draw_find_page(cursor)
+                        draw_sa_page(cursor)
                     } else if cursor != 0 {
                         cursor = 0
-                        draw_find_page(cursor)
+                        draw_sa_page(cursor)
                     }
                 }
             }
