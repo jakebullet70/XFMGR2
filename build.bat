@@ -46,6 +46,9 @@ IF /I "%SRC%"=="xfmgr.p8" (
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\uiutil.p8" > "%TEMP%\uiutil_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\uiutil_build.txt" & ECHO *** uiutil overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
     ECHO uiutil overlay: uiutil.bin built ^($A000 HIRAM bank overlay^).
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\ximgview.p8" > "%TEMP%\ximgview_build.txt" 2>&1
+    IF ERRORLEVEL 1 ( TYPE "%TEMP%\ximgview_build.txt" & ECHO *** ximgview overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
+    ECHO ximgview overlay: ximgview.bin built ^($A000 HIRAM bank overlay^).
 )
 
 ENDLOCAL & EXIT /B 0

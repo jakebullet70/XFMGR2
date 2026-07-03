@@ -26,3 +26,4 @@
 - [docs/ reference tree](xfmgr-docs-reference-tree.md) — repo vendors prog8 stdlib, X16 manuals, examples, agent skills; ProgB docs too
 - [Filename literals must be lowercase](prog8-filename-literals-lowercase.md) — uppercase source A-Z encodes to $C1-DA and the FS won't match; use lowercase
 - [Overlay RAM strategy](xfmgr-overlay-ram-strategy.md) — bank map (2=tview 3=miscutil 4=uiutil), UI-in-overlay pattern, 5.9 KB free, backlog
+- [BMX image viewer](xfmgr-bmx-image-viewer.md) — V on *.bmx -> bank-5 ximgview overlay; png2bmx converter in tools/ (Python off-PATH)
