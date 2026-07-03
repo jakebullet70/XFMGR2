@@ -428,7 +428,7 @@ main {
 
     sub menu_alt_items(ubyte focus, ubyte sort_mode) {
         if focus == FOCUS_TREE {
-            txt.print(petscii:"\x9eF3\x05 relog  \x9eP\x05rune  \x9eR\x05elease")
+            txt.print(petscii:"\x9eF3\x05 relog  \x9eP\x05rune  \x9eR\x05elease  \x9eC\x05onfig")
         } else {
             txt.print(petscii:"e\x9eX\x05ecute  \x9eS\x05ort: ")
             when sort_mode {
@@ -436,7 +436,7 @@ main {
                 2 -> txt.print("size")
                 else -> txt.print("name")
             }
-            txt.print(petscii:"\x9e  F3\x05 relog  \x9eR\x05elease")
+            txt.print(petscii:"\x9e  F3\x05 relog  \x9eR\x05elease  \x9eC\x05onfig")
         }
     }
 

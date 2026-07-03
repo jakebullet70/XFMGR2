@@ -34,6 +34,7 @@ COPY /Y "%~dp0tview.bin" "%XFMGRDIR%\tview.bin" >NUL
 COPY /Y "%~dp0miscutil.bin" "%XFMGRDIR%\miscutil.bin" >NUL
 COPY /Y "%~dp0uiutil.bin" "%XFMGRDIR%\uiutil.bin" >NUL
 COPY /Y "%~dp0ximgview.bin" "%XFMGRDIR%\ximgview.bin" >NUL
+COPY /Y "%~dp0xfsetup.prg" "%XFMGRDIR%\xfsetup.prg" >NUL
 
 REM 2c) stage the sample BMX images (tracked in samples\) into the browse root so the
 REM     V image viewer has something to open. run\ is gitignored; samples\ is the source of truth.

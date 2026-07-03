@@ -17,6 +17,7 @@
 %import xscan
 %import hlprs
 %import emudbg
+%import themes
 %import "shared-const"
 %zeropage basicsafe
 %option no_sysinit
@@ -113,6 +114,7 @@ main {
     ubyte g_ndx
     bool run_exit                           ; Alt-X set: quit XFMGR and run a program
     bool do_quit                            ; Alt-Q set: quit (exit_dir already chosen)
+    bool setup_exit                         ; Alt-C set: quit XFMGR and run the theme setup PRG
     ; directory the host shell is left in on a normal quit: the startup dir for the
     ; main-menu Quit, or the currently selected dir for the ALT-menu Quit.
     str exit_dir = "?" * 80
@@ -296,6 +298,10 @@ main {
         if imgview_ok
             ximgview_init()             ; extsub @bank 5: clears the overlay's in-bank BSS ONCE
 
+        ; apply the saved colour theme (xfmgr.cfg lives in this /xfmgr/ folder, read before chdir back).
+        ; A palette remap - full_redraw below repaints in the themed colours. Missing cfg -> Classic.
+        themes.apply_theme(themes.cfg_read())
+
         diskio.chdir(pathbuf)           ; back to the launch dir so the tree anchors where we started
 
         xarena.reset()
@@ -362,6 +368,8 @@ main {
             }
             if run_exit
                 break                       ; Alt-X: leave XFMGR to run a program
+            if setup_exit
+                break                       ; Alt-C: leave XFMGR to run the theme setup PRG
             if do_quit
                 break                       ; Alt-Q: quit to the current directory
             ; repaint only what changed
@@ -393,6 +401,10 @@ main {
             ; hand off to BASIC: load + run the selected program via the dynamic keyboard
             diskio.chdir(pathbuf)               ; the selected file's directory
             chain_run(namebuf)
+        } else if setup_exit {
+            ; hand off to the theme setup PRG (absolute path -> cwd doesn't matter). It writes
+            ; xfmgr.cfg then relaunches /xfmgr/xfmgr.prg, which re-reads + applies the theme.
+            chain_run("/xfmgr/xfsetup.prg")
         } else {
             diskio.chdir(exit_dir)              ; leave the shell in the chosen directory
             txt.print("xfmgr done.\n")
@@ -488,6 +500,11 @@ main {
     sub handle_alt(ubyte letter) {
         ; ALT-key commands
         when letter {
+            'c' -> {                        ; Alt-C: open the colour-theme setup (either pane)
+                op_setup()
+                if not setup_exit
+                    dirty_full = true       ; cancelled: repaint the screen the confirm covered
+            }
             's' -> {                        ; Alt-S: cycle the file sort order (file pane only)
                 if focus == FOCUS_FILE
                     op_sort()
@@ -1851,6 +1868,15 @@ main {
         cx16.rombank(oldrom)
         sys.disable_caseswitch()
         diskio.chdir(pathbuf)                   ; X16Edit can change dir; restore ours
+    }
+
+    sub op_setup() {
+        ; Alt-C: open the standalone colour-theme setup. It is a separate PRG, so launching it
+        ; QUITS XFMGR - all logged folders and tags are lost. On save it relaunches XFMGR, which
+        ; re-reads and applies the chosen theme. Confirm (default No) before the destructive hop.
+        if confirm("Setup? loses logged dirs + tags", false) {
+            setup_exit = true
+        }
     }
 
     sub op_execute() {
