@@ -1,8 +1,10 @@
 ---
 name: xfmgr-overlay-ram-strategy
-description: How XFMGR frees main RAM by moving code into bank overlays, current bank map, and what's left to move
-metadata:
+description: "How XFMGR frees main RAM by moving code into bank overlays, current bank map, and what's left to move"
+metadata: 
+  node_type: memory
   type: project
+  originSessionId: 34a3aff3-3870-4671-a1b8-ab8c9f46ea15
 ---
 
 XFMGR is main-RAM constrained; the lever for headroom is moving cold code into HIRAM bank
@@ -10,8 +12,9 @@ overlays (%output library blobs, org $A000, loaded via diskio.loadlib, called vi
 
 **Bank map** (see [[x16-banked-ram-min-config]], xarena.FIRST_BANK): 0=Kernal, 1=xtree dir-extras,
 2=tview (viewer), 3=miscutil (wildcard/prune/history + stream_copy byte-pump), 4=uiutil (bottom
-dialogs + About/modal-box drawing). Arena = banks 5..max_bank. Each overlay keeps a fixed
-`%jmptable` at $A003+ (KEEP module vars UNINITIALIZED or they shove the table — see
+dialogs + About/modal-box drawing), 5=ximgview (BMX image viewer, see [[xfmgr-bmx-image-viewer]]).
+Arena = banks 6..max_bank (FIRST_BANK bumped 5->6 when ximgview was added). Each overlay keeps a
+fixed `%jmptable` at $A003+ (KEEP module vars UNINITIALIZED or they shove the table — see
 [[prog8-jmptable-init-vars-gotcha]]).
 
 **As of 2026-07-03: 6.5 KB free to $9F00** (was ~2.2 KB before this push). Won by: copy byte-pump

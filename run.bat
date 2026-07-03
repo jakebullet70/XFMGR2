@@ -33,6 +33,11 @@ COPY /Y "%~dp0xfmgr.prg" "%XFMGRDIR%\xfmgr.prg" >NUL
 COPY /Y "%~dp0tview.bin" "%XFMGRDIR%\tview.bin" >NUL
 COPY /Y "%~dp0miscutil.bin" "%XFMGRDIR%\miscutil.bin" >NUL
 COPY /Y "%~dp0uiutil.bin" "%XFMGRDIR%\uiutil.bin" >NUL
+COPY /Y "%~dp0ximgview.bin" "%XFMGRDIR%\ximgview.bin" >NUL
+
+REM 2c) stage the sample BMX images (tracked in samples\) into the browse root so the
+REM     V image viewer has something to open. run\ is gitignored; samples\ is the source of truth.
+COPY /Y "%~dp0samples\*.bmx" "%RUNDIR%\" >NUL
 
 REM 3) launch from the run\ root as the host filesystem root (no AUTOBOOT.X16 there),
 REM    running the XT loader stub - it LOADs+RUNs /XFMGR/XFMGR.PRG from the subfolder.
