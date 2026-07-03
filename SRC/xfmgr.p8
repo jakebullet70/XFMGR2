@@ -196,6 +196,28 @@ main {
     extsub @bank 3 $A015 = stream_copy(uword srcptr @R0, uword dstptr @R1) -> uword @AY
     bool misc_ok                            ; miscutil.bin loaded OK
 
+    ; --- banked UI overlay (uiutil) ---
+    ; uiutil.p8 is a %output library blob in reserved HIRAM bank 4; it holds the bottom-banner
+    ; dialog DRAWING (confirms / banners / prompts). Main keeps the frame plumbing + thin wrappers
+    ; (ask_yn / flash / banner_* / ...) that box_open, JSRFAR into these, then box_close. Message
+    ; pointers point into main RAM (mapped below $A000 while the bank is active). $A000 = init.
+    const ubyte UI_BANK = 4
+    extsub @bank 4 $A000 = uiutil_init()
+    extsub @bank 4 $A003 = ui_flash(uword mptr @R0)
+    extsub @bank 4 $A006 = ui_toast(uword mptr @R0)
+    extsub @bank 4 $A009 = ui_ask_yn(uword qptr @R0, ubyte default_yes @R1) -> ubyte @A
+    extsub @bank 4 $A00C = ui_ask_overwrite(uword fnptr @R0) -> ubyte @A
+    extsub @bank 4 $A00F = ui_ask_confirm_each(uword n @R0) -> ubyte @A
+    extsub @bank 4 $A012 = ui_ask_delete_this(uword nptr @R0) -> ubyte @A
+    extsub @bank 4 $A015 = ui_banner_copymove(ubyte is_move @R0, uword done @R1, uword failed @R2, uword skipped @R3)
+    extsub @bank 4 $A018 = ui_banner_delete(uword done @R0)
+    extsub @bank 4 $A01B = ui_copy_diag(ubyte failcode @R0, ubyte wstat @R1)
+    ; modal popup boxes (Recent / Pick-a-dir borders + the full About screen) also draw here.
+    extsub @bank 4 $A01E = ui_draw_box(ubyte x0 @R0, ubyte y0 @R1, ubyte x1 @R2, ubyte y1 @R3)
+    extsub @bank 4 $A021 = ui_box_header(ubyte x0 @R0, ubyte x1 @R1, ubyte y0 @R2, uword titleptr @R3)
+    extsub @bank 4 $A024 = ui_show_about(ubyte high_bank @R0, ubyte max_bank @R1)
+    bool ui_ok                              ; uiutil.bin loaded OK -> dialogs use the overlay
+
     sub start() {
         ; XFMGR2 depends on R49+ Kernal behaviour (notably the X16 Edit ROM API used by
         ; the E command). Refuse to run on older or pre-release ROMs instead of booting
@@ -247,6 +269,13 @@ main {
         cx16.pop_rambank()
         if misc_ok
             miscutil_init()             ; extsub @bank 3: clears the overlay's in-bank BSS ONCE
+
+        ; load the uiutil dialog overlay into its reserved bank (UI_BANK) the same way
+        cx16.push_rambank(UI_BANK)
+        ui_ok = diskio.loadlib("uiutil.bin", $a000) != 0
+        cx16.pop_rambank()
+        if ui_ok
+            uiutil_init()               ; extsub @bank 4: clears the overlay's in-bank BSS ONCE
 
         diskio.chdir(pathbuf)           ; back to the launch dir so the tree anchors where we started
 
@@ -1431,33 +1460,14 @@ main {
     }
 
     sub ask_overwrite(str fname) -> ubyte {
-        ; 4-row white dialog box (rows DIVBOT..SCR_BOT) shown on a name conflict. Text is
-        ; black on white with the Y/N/A/S keys in light blue; the box chars underneath are
-        ; erased and restored by draw_frame() after the batch. Returns the folded key:
-        ; 'y' overwrite this, 'n' skip this, 'a' overwrite all, 's' skip all remaining.
-        ; "Overwrite <name>?" on row 1; bracketed choices on row 2. ENTER picks the bracketed
-        ; default (No = skip just this one); Esc/STOP = Skip all remaining. Hotkeys light blue.
-        box_compose_name("Overwrite ", fname, "?")
+        ; name-conflict dialog (drawn by uiutil): "Overwrite <name>?" + "Yes [No] All Skip all
+        ; Esc Cancel". ENTER/N skip this, Esc = skip all. Returns folded 'y'/'n'/'a'/'s'.
+        ; NO box_close - the copy loop's "Copying..." / result box redraws over it. Degrades to
+        ; 's' (skip all remaining) if the overlay isn't loaded.
         box_open()
-        box_left(CMDROW1, cm_dst)
-        ubyte cs = choices_row(CMDROW2, "", "Yes  [No]  All  Skip all  Esc Cancel")
-        box_keyrun(cs,      1, CMDROW2)         ; Y
-        box_keyrun(cs + 6,  1, CMDROW2)         ; N (inside the [ ])
-        box_keyrun(cs + 11, 1, CMDROW2)         ; A
-        box_keyrun(cs + 16, 1, CMDROW2)         ; S (Skip all)
-        box_keyrun(cs + 26, 3, CMDROW2)         ; Esc
-        ; no box_close here: the copy loop keeps running, and the "Copying..." / result box
-        ; that follows redraws over this one (a box_close now would flash the 2-line frame)
-        ubyte r
-        repeat {
-            when cmd_key() {
-                'y'        -> { r = 'y' break }
-                'n', 13    -> { r = 'n' break }     ; N / ENTER (default) = skip this one
-                'a'        -> { r = 'a' break }
-                's', 27, 3 -> { r = 's' break }     ; Skip all / Esc = skip all remaining
-            }
-        }
-        return r
+        if ui_ok
+            return ui_ask_overwrite(fname)
+        return 's'
     }
 
     sub copy_one(str fname) -> ubyte {
@@ -1996,8 +2006,10 @@ main {
         ubyte boxtop = 24 - rows
         ; --- draw the chrome + full list ONCE; the key loop below only repaints the two
         ;     rows that change on Up/Down instead of redrawing the whole list ---
-        draw_box(HIST_PX0, boxtop, HIST_PX1, boxtop+rows+2, "")
-        box_header(HIST_PX0, HIST_PX1, boxtop, " Recent ")
+        if ui_ok {
+            ui_draw_box(HIST_PX0, boxtop, HIST_PX1, boxtop+rows+2)
+            ui_box_header(HIST_PX0, HIST_PX1, boxtop, " Recent ")
+        }
         ; key hints in a centered footer on the bottom border, as ONE embedded-colour
         ; string (\x9e=accent, \x05=fg; ←┘=ENTER glyph). Visible length = 21.
         txt.plot(HIST_PX0 + 1 + (HIST_PX1 - HIST_PX0 - 1 - 21) / 2, boxtop+rows+2)
@@ -2068,20 +2080,21 @@ main {
 
     ; ---------- bottom-line prompts ----------
 
+    ; The dialog DRAWING/interaction lives in the uiutil overlay (bank 4); these thin wrappers
+    ; open the bottom box (frame plumbing stays in main), JSRFAR in to draw + wait/interact, then
+    ; close. If the overlay isn't loaded they degrade to a safe default rather than crashing.
     sub flash(str m) {
         box_open()
-        box_left(CMDROW1, m)
-        box_left(CMDROW2, MSG_PRESS_ANY_KEY)
-        void wait_key()
+        if ui_ok
+            ui_flash(m)
         box_close()
     }
 
     sub toast(str m) {
-        ; brief self-dismissing status: message only (no "press any key"), auto-closes
-        ; after ~1.5 s (90 jiffies at 60 Hz). For confirmations that need no acknowledgement.
+        ; brief self-dismissing status (~1.5 s), no keypress.
         box_open()
-        box_left(CMDROW1, m)
-        sys.wait(90)
+        if ui_ok
+            ui_toast(m)
         box_close()
     }
 
@@ -2148,162 +2161,60 @@ main {
         cm_dst[l] = 0
     }
 
+    ; ---- thin wrappers over the uiutil overlay dialogs (bank 4) ----
+    ; Each opens the bottom box (frame plumbing stays here), JSRFARs into uiutil to draw +
+    ; interact, then closes. box_compose_name / box_append_uw stay in main (callers build the
+    ; question in cm_dst before calling ask_yn). If the overlay is missing, degrade to a safe
+    ; default rather than JSRFAR into an unloaded bank.
+
     sub ask_yn(str question, bool default_yes) -> bool {
-        ; bracketed Yes/No confirm in the new style: question on row 1, "[Yes] No / Yes [No]"
-        ; plus "Esc Cancel" on row 2. ENTER picks the bracketed default; Y/N pick directly;
-        ; ESC/STOP -> false. (Callers may pass a literal or cm_dst itself as `question`.)
         box_open()
-        box_left(CMDROW1, question)
-        ubyte cs
-        if default_yes {
-            cs = choices_row(CMDROW2, "", "[Yes]  No  Esc Cancel")
-            box_keyrun(cs + 1,  1, CMDROW2)         ; Y (inside the [ ])
-            box_keyrun(cs + 7,  1, CMDROW2)         ; N
-            box_keyrun(cs + 11, 3, CMDROW2)         ; Esc
-        } else {
-            cs = choices_row(CMDROW2, "", "Yes  [No]  Esc Cancel")
-            box_keyrun(cs,      1, CMDROW2)         ; Y
-            box_keyrun(cs + 6,  1, CMDROW2)         ; N (inside the [ ])
-            box_keyrun(cs + 11, 3, CMDROW2)         ; Esc
-        }
-        bool result
-        repeat {
-            when cmd_key() {
-                'y'   -> { result = true          break }
-                'n'   -> { result = false         break }
-                27, 3 -> { result = false         break }
-                13    -> { result = default_yes    break }
-            }
-        }
+        ubyte r = default_yes as ubyte
+        if ui_ok
+            r = ui_ask_yn(question, default_yes as ubyte)
         box_close()
-        return result
-    }
-
-    ; ---- bracketed multi-choice prompts (XTree "[Yes] No Esc" style) --------------------
-    ; The default choice is shown wrapped in [brackets] and is what ENTER selects; the first
-    ; letter of each choice is its hotkey (light blue), ESC/STOP always cancels.
-
-    sub box_keyrun(ubyte col, ubyte n, ubyte row) {
-        ; recolour a run of n cells light blue (a multi-cell box_key, e.g. "Esc")
-        ubyte e = col + n - 1
-        for g_ndx in col to e
-            txt.setclr(g_ndx, row, shared.OW_KEY)
-    }
-
-    sub choices_row(ubyte row, str q, str ch) -> ubyte {
-        ; question q left at BANNER_LEFT, choices ch right-aligned ending at col 78, on `row`;
-        ; returns the column ch starts at (so the caller can colour its hotkey cells).
-        txt.plot(BANNER_LEFT, row)
-        txt.print(q)
-        ubyte cstart = 79 - lsb(strings.length(ch))
-        txt.plot(cstart, row)
-        txt.print(ch)
-        hilite_row(0, 79, row, shared.OW_BLACK)
-        return cstart
+        return r != 0
     }
 
     sub ask_confirm_each(uword n) -> ubyte {
-        ; heading "Delete N tagged files" on row 1; "Confirm delete for each file?" + choices
-        ; on row 2. Returns 1 = confirm each, 0 = delete all (no per-file), 255 = cancel.
+        ; 1 = confirm each, 0 = delete all (no per-file), 255 = cancel
         box_open()
-        void strings.copy("Delete ", cm_dst)
-        box_append_uw(n)
-        void strings.append(cm_dst, " tagged files")
-        box_left(CMDROW1, cm_dst)
-        ubyte cs = choices_row(CMDROW2, "Confirm delete for each file?", "[Yes]  No  Esc Cancel")
-        box_keyrun(cs + 1,  1, CMDROW2)         ; Y (inside the [ ])
-        box_keyrun(cs + 7,  1, CMDROW2)         ; N
-        box_keyrun(cs + 11, 3, CMDROW2)         ; Esc
-        ubyte r
-        repeat {
-            when cmd_key() {
-                13, 'y' -> { r = 1   break }    ; Enter (default) / Y
-                'n'     -> { r = 0   break }
-                27, 3   -> { r = 255 break }
-            }
-        }
+        ubyte r = 255
+        if ui_ok
+            r = ui_ask_confirm_each(n)
         box_close()
         return r
     }
 
     sub ask_delete_this(str name) -> ubyte {
-        ; "Delete <name>?" on row 1; "Yes [No] All Files  Esc Cancel" on row 2 (default No).
-        ; Returns 1 = delete this, 0 = skip, 2 = delete this + all remaining, 255 = cancel rest.
+        ; 1 = delete this, 0 = skip, 2 = delete this + all remaining, 255 = cancel rest
         box_open()
-        box_compose_name("Delete ", name, "?")
-        box_left(CMDROW1, cm_dst)
-        ubyte cs = choices_row(CMDROW2, "", "Yes  [No]  All Files  Esc Cancel")
-        box_keyrun(cs,      1, CMDROW2)         ; Y (Yes)
-        box_keyrun(cs + 6,  1, CMDROW2)         ; N (inside the [ ])
-        box_keyrun(cs + 11, 1, CMDROW2)         ; A (All Files)
-        box_keyrun(cs + 22, 3, CMDROW2)         ; Esc
-        ubyte r
-        repeat {
-            when cmd_key() {
-                'y'     -> { r = 1   break }
-                13, 'n' -> { r = 0   break }    ; Enter (default) / N -> skip
-                'a'     -> { r = 2   break }
-                27, 3   -> { r = 255 break }
-            }
-        }
+        ubyte r = 255
+        if ui_ok
+            r = ui_ask_delete_this(name)
         box_close()
         return r
     }
 
     sub banner_copymove(bool is_move, uword done, uword failed, uword skipped) {
-        ; 4-row white box summarising a copy/move, auto-dismiss like the relog one.
-        ; Line 1: "<Copied|Moved> N file(s)".  Line 2: failed / skipped counts, if any.
         box_open()
-        if is_move
-            void strings.copy("Moved ", cm_dst)
-        else
-            void strings.copy("Copied ", cm_dst)
-        box_append_uw(done)
-        void strings.append(cm_dst, " file(s)")
-        box_left(CMDROW1, cm_dst)
-        if failed == 0 and skipped == 0 {
-            sys.wait(120)
-            box_close()
-            return
-        }
-        cm_dst[0] = 0
-        box_append_uw(failed)
-        void strings.append(cm_dst, " failed  ")
-        box_append_uw(skipped)
-        void strings.append(cm_dst, " skipped")
-        box_left(CMDROW2, cm_dst)
-        sys.wait(200)                                        ; linger a little on problems
+        if ui_ok
+            ui_banner_copymove(is_move as ubyte, done, failed, skipped)
         box_close()
     }
 
     sub banner_delete(uword done) {
-        ; auto-dismiss "Deleted N file(s)" box, same look/timing as banner_copymove's happy path.
         box_open()
-        void strings.copy("Deleted ", cm_dst)
-        box_append_uw(done)
-        void strings.append(cm_dst, " file(s)")
-        box_left(CMDROW1, cm_dst)
-        sys.wait(120)
+        if ui_ok
+            ui_banner_delete(done)
         box_close()
     }
 
     sub copy_diag() {
-        ; shown when a copy/move produced 0 files: a boxed "Nothing copied" plus the cause.
-        void strings.copy("Nothing copied", cm_dst)
-        when cm_fail {
-            1 -> void strings.append(cm_dst, " - source open failed")
-            2 -> void strings.append(cm_dst, " - dest open failed")
-            3 -> {
-                void strings.append(cm_dst, " - write error ")
-                box_append_uw(cm_wstat)
-            }
-            4 -> void strings.append(cm_dst, " - copy overlay missing")
-            else -> void strings.append(cm_dst, " - nothing selected")
-        }
+        ; "Nothing copied - <cause>" box; cause comes from cm_fail / cm_wstat.
         box_open()
-        box_left(CMDROW1, cm_dst)
-        box_left(CMDROW2, MSG_PRESS_ANY_KEY)
-        void wait_key()
+        if ui_ok
+            ui_copy_diag(cm_fail, cm_wstat)
         box_close()
     }
 
@@ -2393,8 +2304,10 @@ main {
         ; empty-title box, a white header bar, a blank spacer line under it, then a centered
         ; hotkey footer on the bottom border with the keys picked out in the accent colour.
         const ubyte BIW = PICK_X1 - PICK_X0 - 1         ; box interior width
-        draw_box(PICK_X0, PICK_Y0, PICK_X1, PICK_Y1, "")
-        box_header(PICK_X0, PICK_X1, PICK_Y0, " Pick a directory ")
+        if ui_ok {
+            ui_draw_box(PICK_X0, PICK_Y0, PICK_X1, PICK_Y1)
+            ui_box_header(PICK_X0, PICK_X1, PICK_Y0, " Pick a directory ")
+        }
         ; footer (40 visible chars) as ONE embedded-colour string instead of 8 colour + 8
         ; print calls. In-string PETSCII codes: \x9e = shared.CLR_ACCENT (yellow), \x05 = shared.CLR_FG
         ; (white); ←┘ is the ENTER glyph. Ends white so the list rows below inherit shared.CLR_FG.
@@ -2613,73 +2526,9 @@ main {
             txt.setclr(g_ndx, row, color)
     }
 
-    sub box_shadow(ubyte x0, ubyte y0, ubyte x1, ubyte y1) {
-        ; drop shadow one column right and one row below a box, for a raised 3D look.
-        ; setclr blacks out the cells (fg+bg = 0) so the content under them reads as
-        ; shadow; a later full_redraw restores everything.
-        for g_ndx in y0+1 to y1+1 {
-            if x1 + 1 < 80
-                txt.setclr(x1+1, g_ndx, 0)
-        }
-        for g_ndx in x0+1 to x1+1 {
-            if y1 + 1 < 30 and g_ndx < 80
-                txt.setclr(g_ndx, y1+1, 0)
-        }
-    }
-
-    sub box_row(ubyte x0, ubyte x1, ubyte row) {
-        ; one framed, empty interior row: side borders + blank middle (in shared.CLR_FG, which
-        ; also resets any leftover selection-bar colour on the row)
-        txt.color(shared.CLR_FG)
-        txt.setchr(x0, row, SC_V)
-        txt.setchr(x1, row, SC_V)
-        blank_span(x0+1, x1-1, row)
-        txt.setclr(x0, row, shared.CLR_BOX)
-        txt.setclr(x1, row, shared.CLR_BOX)
-    }
-
-    sub draw_box(ubyte x0, ubyte y0, ubyte x1, ubyte y1, str title) {
-        ; draw a framed, shadowed, titled popup window. Interior rows are cleared (via
-        ; box_row) so the caller just prints content into them. An empty title draws none.
-        txt.color(shared.CLR_FG)
-        txt.setchr(x0, y0, SC_TL)
-        txt.setchr(x1, y0, SC_TR)
-        txt.setchr(x0, y1, SC_BL)
-        txt.setchr(x1, y1, SC_BR)
-        txt.setclr(x0, y0, shared.CLR_BOX)
-        txt.setclr(x1, y0, shared.CLR_BOX)
-        txt.setclr(x0, y1, shared.CLR_BOX)
-        txt.setclr(x1, y1, shared.CLR_BOX)
-        for g_ndx in x0+1 to x1-1 {
-            txt.setchr(g_ndx, y0, SC_H)
-            txt.setchr(g_ndx, y1, SC_H)
-            txt.setclr(g_ndx, y0, shared.CLR_BOX)
-            txt.setclr(g_ndx, y1, shared.CLR_BOX)
-        }
-        for g_ndx in y0+1 to y1-1            ; box_row uses a LOCAL counter, so g_ndx survives
-            box_row(x0, x1, g_ndx)
-        box_shadow(x0, y0, x1, y1)
-        if title[0] != 0 {
-            txt.color(shared.CLR_TITLE)
-            txt.plot(x0+2, y0)
-            txt.print(title)
-            txt.color(shared.CLR_FG)
-        }
-    }
-
-    sub box_header(ubyte x0, ubyte x1, ubyte y0, str title) {
-        ; solid blue title bar spanning the full top border (between the corners), with the
-        ; title centered in white. Blank the border line to spaces, print the title, then
-        ; recolour the whole span to white-on-blue ($e1 = bg 14 / fg 1, same as shared.HILITE).
-        for g_ndx in x0+1 to x1-1
-            txt.setchr(g_ndx, y0, sc:' ')
-        ubyte tlen = lsb(strings.length(title))
-        txt.plot(x0 + 1 + (x1 - x0 - 1 - tlen) / 2, y0)
-        txt.print(title)
-        for g_ndx in x0+1 to x1-1
-            txt.setclr(g_ndx, y0, $e1)
-        txt.color(shared.CLR_FG)               ; body text below prints white again
-    }
+    ; draw_box / box_row / box_shadow / box_header now live in the uiutil overlay (bank 4),
+    ; called via ui_draw_box / ui_box_header. print_trunc stays here - it's on the hot draw path
+    ; (draw_status / draw_file_row), so a per-cell JSRFAR would be far too slow.
 
     sub print_trunc(str s, ubyte maxlen) {
         ubyte i = 0
@@ -2756,31 +2605,9 @@ main {
 
     ; ---------- about overlay ----------
 
-    ; screen rectangle of the About box (columns/rows), shared by the two subs
-    ; below: aboutln() (positions each text line) and show_about() (draws the box).
-    const ubyte ABOUT_LEFT   = 19
-    const ubyte ABOUT_RIGHT  = 60
-    const ubyte ABOUT_TOP    = 6
-    const ubyte ABOUT_BOTTOM = 20
-
-    sub about_col(ubyte slen) -> ubyte {
-        ; leftmost column that horizontally centers a `slen`-char string in the box interior
-        return ABOUT_LEFT + 1 + (ABOUT_RIGHT - ABOUT_LEFT - 1 - slen) / 2
-    }
-
-    sub about_digits(ubyte n) -> ubyte {
-        ; how many characters txt.print_ub will emit for n (used to center a line with a number in it)
-        if n >= 100
-            return 3
-        if n >= 10
-            return 2
-        return 1
-    }
-
-    sub aboutln(ubyte ln, str s) {
-        txt.plot(about_col(lsb(strings.length(s))), ABOUT_TOP + ln)
-        txt.print(s)
-    }
+    ; the About modal (draw_box + version text + banked-RAM line) now lives in the uiutil overlay
+    ; (ui_show_about); show_about() below is just the thin wrapper. show_all stays here - it walks
+    ; xfiles/xtree state the overlay can't reach.
 
     sub show_all() {
         ; full-screen modal: every tagged file across all logged directories
@@ -2881,27 +2708,9 @@ main {
     }
 
     sub show_about() {
-        draw_box(ABOUT_LEFT, ABOUT_TOP, ABOUT_RIGHT, ABOUT_BOTTOM, "")
-        box_header(ABOUT_LEFT, ABOUT_RIGHT, ABOUT_TOP, " About ")
-        aboutln(2,  "X F M G R")
-        aboutln(4,  "An XTree-style file manager")
-        aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Version 1.0.0")
-        ; live banked-RAM usage: banks 1..high_bank are in use (bank 1 = dir-extras,
-        ; 2..high_bank = file arena), of max_bank usable on this machine (63 on a 512 KB X16).
-        ; length = "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
-        txt.plot(about_col(22 + about_digits(xarena.high_bank) + about_digits(xarena.max_bank)), ABOUT_TOP + 9)
-        txt.print("Banked RAM: ")
-        txt.print_ub(xarena.high_bank)
-        txt.print(" of ")
-        txt.print_ub(xarena.max_bank)
-        txt.print(" banks")
-        aboutln(10, "Written in Prog8")
-        aboutln(11, "(c)2025-26 sadLogic")
-        txt.plot(about_col(lsb(strings.length(MSG_PRESS_ANY_KEY))), ABOUT_BOTTOM-1)   ; centered "Press any key"
-        txt.color(shared.CLR_ACCENT)
-        txt.print(MSG_PRESS_ANY_KEY)
-        txt.color(shared.CLR_FG)
-        void wait_key()
+        ; the whole About modal is drawn by the uiutil overlay; pass it the live banked-RAM
+        ; figures from xarena (it can't see main's blocks). Caller repaints (dirty_full) after.
+        if ui_ok
+            ui_show_about(xarena.high_bank, xarena.max_bank)
     }
 }

@@ -32,6 +32,7 @@ IF NOT EXIST "%XFMGRDIR%" MKDIR "%XFMGRDIR%"
 COPY /Y "%~dp0xfmgr.prg" "%XFMGRDIR%\xfmgr.prg" >NUL
 COPY /Y "%~dp0tview.bin" "%XFMGRDIR%\tview.bin" >NUL
 COPY /Y "%~dp0miscutil.bin" "%XFMGRDIR%\miscutil.bin" >NUL
+COPY /Y "%~dp0uiutil.bin" "%XFMGRDIR%\uiutil.bin" >NUL
 
 REM 3) launch from the run\ root as the host filesystem root (no AUTOBOOT.X16 there),
 REM    running the XT loader stub - it LOADs+RUNs /XFMGR/XFMGR.PRG from the subfolder.

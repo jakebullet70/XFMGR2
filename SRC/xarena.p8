@@ -17,9 +17,9 @@
 xarena {
     %option ignore_unused
 
-    const ubyte FIRST_BANK = 4          ; bank 0 = Kernal; bank 1 = xtree dir-extras;
-                                        ; bank 2 = tview overlay; bank 3 = miscutil overlay
-                                        ; (VIEW_BANK / MISC_BANK in xfmgr); arena = 4..max_bank
+    const ubyte FIRST_BANK = 5          ; bank 0 = Kernal; bank 1 = xtree dir-extras;
+                                        ; bank 2 = tview; bank 3 = miscutil; bank 4 = uiutil
+                                        ; overlays (VIEW/MISC/UI_BANK in xfmgr); arena = 5..max_bank
     const uword WIN_START  = $a000
     const uword WIN_END    = $bf00      ; reserve $bf00-$bfff as scratch / guard
 

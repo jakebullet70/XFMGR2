@@ -1,0 +1,441 @@
+; uiutil - bottom-banner dialog widgets, run from a HIRAM bank overlay (bank 4 = UI_BANK).
+;
+; Compiled as a %output library headerless blob (org $A000), loaded into reserved HIRAM bank 4
+; at startup via diskio.loadlib, and called from XFMGR via `extsub @bank 4`. Moving the (cold,
+; user-triggered) confirm / banner / prompt DRAWING here frees scarce main RAM; XFMGR keeps the
+; frame plumbing (box_open/box_close -> draw_frame) and thin wrappers that open the box, JSRFAR
+; into one of these to draw + interact, then close.
+;
+; Contract: the caller has ALREADY box_open'd (blanked rows DIVBOT..SCR_BOT to white); each entry
+; below draws its content into that box and, for the interactive ones, loops reading keys and
+; returns the choice. It does NOT restore the frame - the caller box_close's on return (except
+; ui_ask_overwrite, whose box the copy loop redraws over). Message pointers (flash/ask_yn/...)
+; point into main RAM, which stays mapped below $A000 while this bank is active.
+;
+; Fixed entry offsets via %jmptable: $A000 = init, $A003 = ui_flash, $A006 = ui_toast,
+; $A009 = ui_ask_yn, $A00C = ui_ask_overwrite, $A00F = ui_ask_confirm_each,
+; $A012 = ui_ask_delete_this, $A015 = ui_banner_copymove, $A018 = ui_banner_delete,
+; $A01B = ui_copy_diag.
+
+%import textio
+%import strings
+%import "shared-const"
+%address $A000
+%memtop  $C000
+%output  library
+%zeropage dontuse
+
+main {
+    %option ignore_unused
+
+    ; KEEP THIS BLOCK FREE OF INITIALIZED VARIABLES (same %jmptable gotcha as miscutil/tview):
+    ; a module-level initialized var would be emitted before the code and shove the table off its
+    ; fixed offsets. cm_dst below is UNINITIALIZED (-> BSS tail); all strings used here are inline
+    ; literals inside subs (those are fine - it's only module init-data that moves the table).
+    %jmptable ( main.ui_flash, main.ui_toast, main.ui_ask_yn, main.ui_ask_overwrite, main.ui_ask_confirm_each, main.ui_ask_delete_this, main.ui_banner_copymove, main.ui_banner_delete, main.ui_copy_diag, main.ui_draw_box, main.ui_box_header, main.ui_show_about )
+
+    ; bottom-banner layout (must match xfmgr.p8's constants)
+    const ubyte DIVBOT   = 26
+    const ubyte CMDROW1  = 27
+    const ubyte CMDROW2  = 28
+    const ubyte MSGROW   = 27
+    const ubyte SCR_BOT  = 29
+    const ubyte BANNER_LEFT = 2
+
+    ; box-drawing screencodes + About-box rectangle (mirror xfmgr.p8's constants)
+    const ubyte SC_TL = sc:'┌'
+    const ubyte SC_TR = sc:'┐'
+    const ubyte SC_BL = sc:'└'
+    const ubyte SC_BR = sc:'┘'
+    const ubyte SC_H  = sc:'─'
+    const ubyte SC_V  = sc:'│'
+    const ubyte ABOUT_LEFT   = 19
+    const ubyte ABOUT_RIGHT  = 60
+    const ubyte ABOUT_TOP    = 6
+    const ubyte ABOUT_BOTTOM = 20
+
+    ubyte[132] cm_dst                       ; message-compose scratch (UNINITIALIZED -> BSS tail)
+
+    sub start() {
+        ; library init ($A000): the compiler emits the BSS-clear here. No UI / system init.
+    }
+
+    ; ------------------------------------------------------------------ public entries
+
+    sub ui_flash(uword mptr @R0) {
+        ; message on row 1, "Press any key" on row 2, block until a key. (caller box_open'd)
+        do_flash(mptr)
+    }
+    sub do_flash(str m) {
+        box_left(CMDROW1, m)
+        box_left(CMDROW2, " Press any key ")
+        void wait_key()
+    }
+
+    sub ui_toast(uword mptr @R0) {
+        ; brief self-dismissing message (~1.5s), no keypress.
+        do_toast(mptr)
+    }
+    sub do_toast(str m) {
+        box_left(CMDROW1, m)
+        sys.wait(90)
+    }
+
+    sub ui_ask_yn(uword qptr @R0, ubyte default_yes @R1) -> ubyte {
+        ; bracketed Yes/No: question on row 1, "[Yes] No / Yes [No]" + "Esc Cancel" on row 2.
+        ; ENTER = bracketed default; Y/N pick; ESC/STOP -> No. Returns 1 = yes, 0 = no.
+        return do_ask_yn(qptr, default_yes)
+    }
+    sub do_ask_yn(str question, ubyte default_yes) -> ubyte {
+        box_left(CMDROW1, question)
+        ubyte cs
+        if default_yes != 0 {
+            cs = choices_row(CMDROW2, "", "[Yes]  No  Esc Cancel")
+            box_keyrun(cs + 1,  1, CMDROW2)         ; Y (inside the [ ])
+            box_keyrun(cs + 7,  1, CMDROW2)         ; N
+            box_keyrun(cs + 11, 3, CMDROW2)         ; Esc
+        } else {
+            cs = choices_row(CMDROW2, "", "Yes  [No]  Esc Cancel")
+            box_keyrun(cs,      1, CMDROW2)         ; Y
+            box_keyrun(cs + 6,  1, CMDROW2)         ; N (inside the [ ])
+            box_keyrun(cs + 11, 3, CMDROW2)         ; Esc
+        }
+        repeat {
+            when cmd_key() {
+                'y'   -> return 1
+                'n'   -> return 0
+                27, 3 -> return 0
+                13    -> return default_yes
+            }
+        }
+    }
+
+    sub ui_ask_overwrite(uword fnptr @R0) -> ubyte {
+        ; "Overwrite <name>?" + "Yes [No] All Skip all  Esc Cancel" (default No = skip this).
+        ; Returns folded 'y' overwrite this / 'n' skip this / 'a' overwrite all / 's' skip all.
+        ; No frame restore here - the copy loop redraws over this box.
+        return do_ask_overwrite(fnptr)
+    }
+    sub do_ask_overwrite(str fname) -> ubyte {
+        compose_name("Overwrite ", fname, "?")
+        box_left(CMDROW1, cm_dst)
+        ubyte cs = choices_row(CMDROW2, "", "Yes  [No]  All  Skip all  Esc Cancel")
+        box_keyrun(cs,      1, CMDROW2)         ; Y
+        box_keyrun(cs + 6,  1, CMDROW2)         ; N (inside the [ ])
+        box_keyrun(cs + 11, 1, CMDROW2)         ; A
+        box_keyrun(cs + 16, 1, CMDROW2)         ; S (Skip all)
+        box_keyrun(cs + 26, 3, CMDROW2)         ; Esc
+        repeat {
+            when cmd_key() {
+                'y'        -> return 'y'
+                'n', 13    -> return 'n'         ; N / ENTER (default) = skip this one
+                'a'        -> return 'a'
+                's', 27, 3 -> return 's'         ; Skip all / Esc = skip all remaining
+            }
+        }
+    }
+
+    sub ui_ask_confirm_each(uword n @R0) -> ubyte {
+        ; heading "Delete N tagged files" on row 1; "Confirm delete for each file?" + choices on
+        ; row 2. Returns 1 = confirm each, 0 = delete all (no per-file), 255 = cancel.
+        return do_ask_confirm_each(n)
+    }
+    sub do_ask_confirm_each(uword n) -> ubyte {
+        void strings.copy("Delete ", cm_dst)
+        append_uw(n)
+        void strings.append(cm_dst, " tagged files")
+        box_left(CMDROW1, cm_dst)
+        ubyte cs = choices_row(CMDROW2, "Confirm delete for each file?", "[Yes]  No  Esc Cancel")
+        box_keyrun(cs + 1,  1, CMDROW2)         ; Y (inside the [ ])
+        box_keyrun(cs + 7,  1, CMDROW2)         ; N
+        box_keyrun(cs + 11, 3, CMDROW2)         ; Esc
+        repeat {
+            when cmd_key() {
+                13, 'y' -> return 1             ; Enter (default) / Y
+                'n'     -> return 0
+                27, 3   -> return 255
+            }
+        }
+    }
+
+    sub ui_ask_delete_this(uword nptr @R0) -> ubyte {
+        ; "Delete <name>?" on row 1; "Yes [No] All Files  Esc Cancel" on row 2 (default No).
+        ; Returns 1 = delete this, 0 = skip, 2 = delete this + all remaining, 255 = cancel rest.
+        return do_ask_delete_this(nptr)
+    }
+    sub do_ask_delete_this(str name) -> ubyte {
+        compose_name("Delete ", name, "?")
+        box_left(CMDROW1, cm_dst)
+        ubyte cs = choices_row(CMDROW2, "", "Yes  [No]  All Files  Esc Cancel")
+        box_keyrun(cs,      1, CMDROW2)         ; Y (Yes)
+        box_keyrun(cs + 6,  1, CMDROW2)         ; N (inside the [ ])
+        box_keyrun(cs + 11, 1, CMDROW2)         ; A (All Files)
+        box_keyrun(cs + 22, 3, CMDROW2)         ; Esc
+        repeat {
+            when cmd_key() {
+                'y'     -> return 1
+                13, 'n' -> return 0             ; Enter (default) / N -> skip
+                'a'     -> return 2
+                27, 3   -> return 255
+            }
+        }
+    }
+
+    sub ui_banner_copymove(ubyte is_move @R0, uword done @R1, uword failed @R2, uword skipped @R3) {
+        ; "<Copied|Moved> N file(s)" on row 1; failed/skipped counts on row 2 if any. Auto-dismiss.
+        do_banner_copymove(is_move, done, failed, skipped)
+    }
+    sub do_banner_copymove(ubyte is_move, uword done, uword failed, uword skipped) {
+        if is_move != 0
+            void strings.copy("Moved ", cm_dst)
+        else
+            void strings.copy("Copied ", cm_dst)
+        append_uw(done)
+        void strings.append(cm_dst, " file(s)")
+        box_left(CMDROW1, cm_dst)
+        if failed == 0 and skipped == 0 {
+            sys.wait(120)
+            return
+        }
+        cm_dst[0] = 0
+        append_uw(failed)
+        void strings.append(cm_dst, " failed  ")
+        append_uw(skipped)
+        void strings.append(cm_dst, " skipped")
+        box_left(CMDROW2, cm_dst)
+        sys.wait(200)                            ; linger a little on problems
+    }
+
+    sub ui_banner_delete(uword done @R0) {
+        ; auto-dismiss "Deleted N file(s)".
+        do_banner_delete(done)
+    }
+    sub do_banner_delete(uword done) {
+        void strings.copy("Deleted ", cm_dst)
+        append_uw(done)
+        void strings.append(cm_dst, " file(s)")
+        box_left(CMDROW1, cm_dst)
+        sys.wait(120)
+    }
+
+    sub ui_copy_diag(ubyte failcode @R0, ubyte wstat @R1) {
+        ; "Nothing copied - <cause>" + press any key. failcode/wstat come from main's cm_fail/cm_wstat.
+        do_copy_diag(failcode, wstat)
+    }
+    sub do_copy_diag(ubyte failcode, ubyte wstat) {
+        void strings.copy("Nothing copied", cm_dst)
+        when failcode {
+            1 -> void strings.append(cm_dst, " - source open failed")
+            2 -> void strings.append(cm_dst, " - dest open failed")
+            3 -> {
+                void strings.append(cm_dst, " - write error ")
+                append_uw(wstat)
+            }
+            4 -> void strings.append(cm_dst, " - copy overlay missing")
+            else -> void strings.append(cm_dst, " - nothing selected")
+        }
+        box_left(CMDROW1, cm_dst)
+        box_left(CMDROW2, " Press any key ")
+        void wait_key()
+    }
+
+    ; ---- modal popup boxes (Recent / Pick-a-dir borders drawn here for main; About in full) ----
+
+    sub ui_draw_box(ubyte x0 @R0, ubyte y0 @R1, ubyte x1 @R2, ubyte y1 @R3) {
+        ; framed, shadowed, EMPTY-title popup window (callers add a title bar via ui_box_header).
+        do_draw_box(x0, y0, x1, y1)
+    }
+    sub do_draw_box(ubyte x0, ubyte y0, ubyte x1, ubyte y1) {
+        ubyte i
+        txt.color(shared.CLR_FG)
+        txt.setchr(x0, y0, SC_TL)
+        txt.setchr(x1, y0, SC_TR)
+        txt.setchr(x0, y1, SC_BL)
+        txt.setchr(x1, y1, SC_BR)
+        txt.setclr(x0, y0, shared.CLR_BOX)
+        txt.setclr(x1, y0, shared.CLR_BOX)
+        txt.setclr(x0, y1, shared.CLR_BOX)
+        txt.setclr(x1, y1, shared.CLR_BOX)
+        for i in x0+1 to x1-1 {
+            txt.setchr(i, y0, SC_H)
+            txt.setchr(i, y1, SC_H)
+            txt.setclr(i, y0, shared.CLR_BOX)
+            txt.setclr(i, y1, shared.CLR_BOX)
+        }
+        for i in y0+1 to y1-1
+            box_row(x0, x1, i)
+        box_shadow(x0, y0, x1, y1)
+    }
+
+    sub box_row(ubyte x0, ubyte x1, ubyte row) {
+        txt.color(shared.CLR_FG)
+        txt.setchr(x0, row, SC_V)
+        txt.setchr(x1, row, SC_V)
+        blank_span(x0+1, x1-1, row)
+        txt.setclr(x0, row, shared.CLR_BOX)
+        txt.setclr(x1, row, shared.CLR_BOX)
+    }
+
+    sub box_shadow(ubyte x0, ubyte y0, ubyte x1, ubyte y1) {
+        ubyte i
+        for i in y0+1 to y1+1 {
+            if x1 + 1 < 80
+                txt.setclr(x1+1, i, 0)
+        }
+        for i in x0+1 to x1+1 {
+            if y1 + 1 < 30 and i < 80
+                txt.setclr(i, y1+1, 0)
+        }
+    }
+
+    sub ui_box_header(ubyte x0 @R0, ubyte x1 @R1, ubyte y0 @R2, uword titleptr @R3) {
+        ; solid blue title bar across the top border, title centered white-on-blue ($e1).
+        do_box_header(x0, x1, y0, titleptr)
+    }
+    sub do_box_header(ubyte x0, ubyte x1, ubyte y0, str title) {
+        ubyte i
+        for i in x0+1 to x1-1
+            txt.setchr(i, y0, sc:' ')
+        ubyte tlen = lsb(strings.length(title))
+        txt.plot(x0 + 1 + (x1 - x0 - 1 - tlen) / 2, y0)
+        txt.print(title)
+        for i in x0+1 to x1-1
+            txt.setclr(i, y0, $e1)
+        txt.color(shared.CLR_FG)
+    }
+
+    sub blank_span(ubyte col0, ubyte col1, ubyte row) {
+        txt.plot(col0, row)
+        ubyte c
+        for c in col0 to col1
+            txt.spc()
+    }
+
+    ; ---- the About modal (full box; banked-RAM figures passed in from main's xarena) ----
+
+    sub ui_show_about(ubyte high_bank @R0, ubyte max_bank @R1) {
+        do_show_about(high_bank, max_bank)
+    }
+    sub do_show_about(ubyte high_bank, ubyte max_bank) {
+        do_draw_box(ABOUT_LEFT, ABOUT_TOP, ABOUT_RIGHT, ABOUT_BOTTOM)
+        do_box_header(ABOUT_LEFT, ABOUT_RIGHT, ABOUT_TOP, " About ")
+        aboutln(2,  "X F M G R")
+        aboutln(4,  "An XTree-style file manager")
+        aboutln(5,  "for the Commander X16")
+        aboutln(7,  "Version 1.0.0")
+        ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
+        txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
+        txt.print("Banked RAM: ")
+        txt.print_ub(high_bank)
+        txt.print(" of ")
+        txt.print_ub(max_bank)
+        txt.print(" banks")
+        aboutln(10, "Written in Prog8")
+        aboutln(11, "(c)2025-26 sadLogic")
+        txt.plot(about_col(15), ABOUT_BOTTOM-1)         ; centered " Press any key " (15 chars)
+        txt.color(shared.CLR_ACCENT)
+        txt.print(" Press any key ")
+        txt.color(shared.CLR_FG)
+        void wait_key()
+    }
+
+    sub about_col(ubyte slen) -> ubyte {
+        return ABOUT_LEFT + 1 + (ABOUT_RIGHT - ABOUT_LEFT - 1 - slen) / 2
+    }
+    sub about_digits(ubyte n) -> ubyte {
+        if n >= 100
+            return 3
+        if n >= 10
+            return 2
+        return 1
+    }
+    sub aboutln(ubyte ln, str s) {
+        txt.plot(about_col(lsb(strings.length(s))), ABOUT_TOP + ln)
+        txt.print(s)
+    }
+
+    ; ------------------------------------------------------------------ in-bank helpers
+
+    sub box_left(ubyte row, str s) {
+        txt.plot(BANNER_LEFT, row)
+        txt.print(s)
+        hilite_row(0, 79, row, shared.OW_BLACK)
+    }
+
+    sub box_keyrun(ubyte col, ubyte n, ubyte row) {
+        ubyte c
+        ubyte e = col + n - 1
+        for c in col to e
+            txt.setclr(c, row, shared.OW_KEY)
+    }
+
+    sub choices_row(ubyte row, str q, str ch) -> ubyte {
+        ; question q left at BANNER_LEFT, choices ch right-aligned ending at col 78; returns cstart.
+        txt.plot(BANNER_LEFT, row)
+        txt.print(q)
+        ubyte cstart = 79 - lsb(strings.length(ch))
+        txt.plot(cstart, row)
+        txt.print(ch)
+        hilite_row(0, 79, row, shared.OW_BLACK)
+        return cstart
+    }
+
+    sub hilite_row(ubyte x0, ubyte x1, ubyte row, ubyte color) {
+        ubyte c
+        for c in x0 to x1
+            txt.setclr(c, row, color)
+    }
+
+    sub compose_name(str prefix, str name, str suffix) {
+        ; cm_dst = prefix + name(capped at 58) + suffix
+        void strings.copy(prefix, cm_dst)
+        ubyte cl = lsb(strings.length(cm_dst))
+        ubyte fi = 0
+        while name[fi] != 0 and cl < 58 {
+            cm_dst[cl] = name[fi]
+            cl++
+            fi++
+        }
+        cm_dst[cl] = 0
+        void strings.append(cm_dst, suffix)
+    }
+
+    sub append_uw(uword v) {
+        ; append decimal v to cm_dst
+        ubyte[6] tmp
+        ubyte nd = 0
+        if v == 0 {
+            tmp[0] = '0'
+            nd = 1
+        } else {
+            while v != 0 {
+                tmp[nd] = '0' + lsb(v % 10)
+                nd++
+                v /= 10
+            }
+        }
+        ubyte l = lsb(strings.length(cm_dst))
+        while nd != 0 {
+            nd--
+            cm_dst[l] = tmp[nd]
+            l++
+        }
+        cm_dst[l] = 0
+    }
+
+    sub wait_key() -> ubyte {
+        repeat {
+            ubyte k = cbm.GETIN2()
+            if k != 0
+                return k
+        }
+    }
+
+    sub cmd_key() -> ubyte {
+        ; read a key case-insensitively: fold a SHIFTED letter ($c1..$da) down onto $41..$5a.
+        ubyte k = wait_key()
+        if k >= $c1 and k <= $da
+            k -= $80
+        return k
+    }
+}
