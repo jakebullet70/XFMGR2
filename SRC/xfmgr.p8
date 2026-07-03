@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 112          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 122          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -87,6 +87,8 @@ main {
     ubyte start_node                    ; tree node of the launch directory (selected at startup)
     uword cur_blocks                    ; total blocks of visible files in cur_dir
     ubyte saved_mode                    ; screen mode to restore on exit
+    ubyte saved_charset                 ; pre-launch charset (2=upper/gfx 3=lower); restored on exit
+    ubyte saved_color                   ; pre-launch text colour (bg<<4|fg); restored on exit
 
     ; per-keystroke "what changed" flags, so we repaint only the affected regions
     ; (e.g. moving in the file column never touches the directory column). The *_cur
@@ -262,6 +264,7 @@ main {
 
         ; remember the current mode (returns mode, width, height) to restore on exit
         saved_mode, cx16.r0L, cx16.r0H = cx16.get_screen_mode()
+        snapshot_machine_state()                 ; capture charset + text colour before we change anything
         cx16.set_screen_mode(SCREEN_MODE)        ; 80x30
 
         ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D and Ctrl-F)
@@ -418,6 +421,7 @@ main {
 
         txt.clear_screen()
         cx16.set_screen_mode(saved_mode)         ; restore the original screen mode
+        restore_machine_state()                  ; re-apply the user's charset + text colour (CINT reset them)
         if run_exit {
             ; hand off to BASIC: load + run the selected program via the dynamic keyboard
             diskio.chdir(pathbuf)               ; the selected file's directory
@@ -428,8 +432,31 @@ main {
             chain_run("/xfmgr/xfsetup.prg")
         } else {
             diskio.chdir(exit_dir)              ; leave the shell in the chosen directory
+            txt.clear_screen()                  ; clean screen (in the restored charset/colours) before the sign-off
             txt.print("xfmgr done.\n")
         }
+    }
+
+    sub snapshot_machine_state() {
+        ; capture the user's charset + text colour so exit can put them back (set_screen_mode's CINT
+        ; resets both to X16 defaults). Read while STILL in the launch screen mode.
+        saved_charset = cx16.get_charset()          ; 1=ISO 2=PETSCII upper/gfx 3=PETSCII lower (0=unknown)
+        ; text colour = the colour matrix at the cursor cell. MUST use txt.getclr, not a hand-computed
+        ; VERA address: the text matrix has a fixed 256-byte row stride (128 cols), so row*width*2 is
+        ; wrong for row>0 - that was the earlier "bad background" bug. High nibble=bg, low nibble=fg.
+        ubyte cx_col
+        ubyte cx_row
+        cx_col, cx_row = txt.get_cursor()
+        saved_color = txt.getclr(cx_col, cx_row)
+    }
+
+    sub restore_machine_state() {
+        ; undo XFMGR's charset + colour changes: re-apply what snapshot_machine_state() captured (the
+        ; set_screen_mode call just above already reset them to X16 defaults via its CINT).
+        if saved_charset >= 1 and saved_charset <= 3
+            cx16.screen_set_charset(saved_charset, 0)       ; 0 ptr = built-in ROM charset
+        if saved_color != 0                                 ; 0 = black-on-black -> skip a bad read
+            txt.color2(saved_color & 15, saved_color >> 4)  ; low nibble = fg, high nibble = bg
     }
 
     sub select_dir(ubyte idx) {
@@ -2008,9 +2035,9 @@ main {
             ui_box_header(HIST_PX0, HIST_PX1, boxtop, " Recent ")
         }
         ; key hints in a centered footer on the bottom border, as ONE embedded-colour
-        ; string (\x9e=accent, \x05=fg; ←┘=ENTER glyph). Visible length = 21.
-        txt.plot(HIST_PX0 + 1 + (HIST_PX1 - HIST_PX0 - 1 - 21) / 2, boxtop+rows+2)
-        txt.print(petscii:"\x9e ←┘\x05 Select  \x9eESC\x05 Exit ")
+        ; string (\x9e=accent, \x05=fg; ←┘=ENTER glyph). Visible length = 23.
+        txt.plot(HIST_PX0 + 1 + (HIST_PX1 - HIST_PX0 - 1 - 23) / 2, boxtop+rows+2)
+        txt.print(petscii:"\x9e ←┘\x05 Select  \x9eESC\x05 Cancel ")
         ubyte p
         for p in 0 to rows-1 {
             ubyte slot = rows - 1 - p        ; oldest at top, newest at the bottom
@@ -2254,9 +2281,10 @@ main {
     const ubyte PICK_VIS = PICK_Y1 - PICK_Y0 - 2    ; visible list rows (row Y0+1 is a spacer)
 
     sub pick_draw_row(ubyte row, ubyte cur, ubyte top) {
-        ; draw one visible list row (0..PICK_VIS-1): indent by depth, +/- marker, name, and
-        ; a selection bar if it is the cursor entry. Same draw path as the full repaint, so
-        ; a non-cursor redraw exactly restores the base row (blank_span resets any bar colour).
+        ; draw one visible list row (0..PICK_VIS-1): the SAME tree connectors + markers + name the
+        ; main dir pane draws (build_tree_line), plus a selection bar if it is the cursor entry.
+        ; Same draw path as the full repaint, so a non-cursor redraw exactly restores the base row
+        ; (blank_span resets any bar colour).
         ubyte srow = PICK_Y0 + 2 + row
         txt.color(shared.CLR_FG)
         blank_span(PICK_X0+1, PICK_X1-1, srow)
@@ -2264,19 +2292,8 @@ main {
         if i < xtree.vis_count {
             ubyte idx = xtree.vis_idx[i]
             txt.plot(PICK_X0+2, srow)
-            if xtree.d_depth[idx] != 0
-                for g_ndx in 1 to xtree.d_depth[idx]
-                    txt.print("  ")
-            if xtree.has_kids(idx) {
-                if xtree.is_expanded(idx)
-                    txt.chrout('-')
-                else
-                    txt.chrout('+')
-            } else {
-                txt.spc()
-            }
-            txt.spc()
-            print_trunc(xtree.name_ptr(idx), 40)
+            build_tree_line(idx)                ; connectors (│ ├ └ ─) + expand marker + name
+            txt.print(treeline)
             if i == cur
                 hilite_row(PICK_X0+1, PICK_X1-1, srow, shared.HILITE)
         }
@@ -2305,11 +2322,11 @@ main {
             ui_draw_box(PICK_X0, PICK_Y0, PICK_X1, PICK_Y1)
             ui_box_header(PICK_X0, PICK_X1, PICK_Y0, " Pick a directory ")
         }
-        ; footer (40 visible chars) as ONE embedded-colour string instead of 8 colour + 8
+        ; footer (42 visible chars) as ONE embedded-colour string instead of 8 colour + 8
         ; print calls. In-string PETSCII codes: \x9e = shared.CLR_ACCENT (yellow), \x05 = shared.CLR_FG
         ; (white); ←┘ is the ENTER glyph. Ends white so the list rows below inherit shared.CLR_FG.
-        txt.plot(PICK_X0 + 1 + (BIW - 40) / 2, PICK_Y1)
-        txt.print(petscii:"\x9e >\x05Expand \x9e<\x05Collapse  \x9e←┘\x05Select  \x9eEsc\x05 Exit ")
+        txt.plot(PICK_X0 + 1 + (BIW - 42) / 2, PICK_Y1)
+        txt.print(petscii:"\x9e >\x05Expand \x9e<\x05Collapse  \x9e←┘\x05Select  \x9eEsc\x05 Cancel ")
         pick_draw_all(cur, top)                         ; initial full list
         repeat {
             g_key = wait_key()
@@ -2342,7 +2359,32 @@ main {
                         }
                     }
                 }
-                29 -> {                     ; right: expand (log on demand)
+                2 -> {                      ; PgDn: jump down one page (like the main dir pane)
+                    if xtree.vis_count != 0 {
+                        ubyte last = xtree.vis_count - 1
+                        if cur != last {
+                            if last - cur > PICK_VIS
+                                cur += PICK_VIS
+                            else
+                                cur = last
+                            if cur >= top + PICK_VIS
+                                top = cur - PICK_VIS + 1
+                            pick_draw_all(cur, top)
+                        }
+                    }
+                }
+                130 -> {                    ; PgUp: jump up one page
+                    if cur != 0 {
+                        if cur > PICK_VIS
+                            cur -= PICK_VIS
+                        else
+                            cur = 0
+                        if cur < top
+                            top = cur
+                        pick_draw_all(cur, top)
+                    }
+                }
+                29, '+' -> {                ; right / '+': expand (log on demand)
                     idx = xtree.vis_idx[cur]
                     if xtree.d_flags[idx] & xtree.FL_SCANNED == 0
                         void xscan.scan_dir(idx)
@@ -2355,7 +2397,7 @@ main {
                         pick_draw_all(cur, top)                 ; structure changed: repaint all
                     }
                 }
-                157 -> {                    ; left: collapse
+                157, '-' -> {               ; left / '-': collapse
                     idx = xtree.vis_idx[cur]
                     if xtree.is_expanded(idx) {
                         xtree.d_flags[idx] &= %11111110

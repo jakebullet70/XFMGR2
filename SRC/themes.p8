@@ -16,6 +16,7 @@
 
 %import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 %import strings
+%import textio             ; DEBUG: for the cfg-not-found halt message in cfg_read (remove with the debug block)
 
 themes {
     %option ignore_unused
@@ -24,7 +25,9 @@ themes {
     const ubyte LAST  = 5
 
     ; The UI colour INDICES a theme repaints (order matches the RGB rows below):
-    ;   0  = black            (shared.BLACK)
+    ;   0  = black / drop-shadow (shared.BLACK; box_shadow recolours cells to index 0, so a theme
+    ;                          with a pure-black field-bg must give index 0 a dark grey or the box
+    ;                          shadow is invisible - see High-Contrast below)
     ;   1  = body text        (shared.CLR_FG)
     ;   7  = hotkey accent     (shared.CLR_ACCENT)
     ;   11 = field background  (shared.CLR_BG)
@@ -38,7 +41,7 @@ themes {
         0,0,0,      15,10,0,     15,15,8,     2,1,0,       7,4,0,         ; 2 Amber Mono
         0,0,0,      2,15,2,      8,15,8,      0,2,0,       1,10,1,        ; 3 Green Mono
         0,0,0,      11,13,15,    15,13,2,     0,1,6,       3,6,13,        ; 4 X16 Blue
-        0,0,0,      15,15,15,    15,15,0,     0,0,0,       0,8,15         ; 5 High-Contrast
+        4,4,4,      15,15,15,    15,15,0,     0,0,0,       0,8,15         ; 5 High-Contrast (idx0 dark grey = visible drop-shadow on the black field)
     ]
 
     ; theme display names (used by the XFSETUP menu; harmless dead data in xfmgr)
@@ -83,6 +86,7 @@ themes {
         ubyte id = 1
         void strings.copy(diskio.curdir(), savedir)
         diskio.chdir("xfmgr")               ; lowercase: petscii a-z -> $41-5A, the bytes the FS matches
+        ; ===== end DEBUG =====
         uword endaddr = diskio.load_raw(CFG_NAME, &cfg_line)
         if endaddr != 0 {
             @(endaddr) = 0                  ; NUL-terminate the loaded bytes for the parser

@@ -6,6 +6,7 @@
 - [XFMGR2 run & persistence](xfmgr-run-and-persistence.md) — run.bat clean-launch + history file in data/
 - [Startup root anchor](xfmgr-startup-root-anchor.md) — tree always rooted at "/"; startup descends to + selects launch folder
 - [X16 ALT is the Commodore key](x16-alt-is-commodore-key.md) — ALT+letter returns a graphics code, not the letter
+- [VERA text matrix stride](x16-vera-text-matrix-stride.md) — cells are 256 bytes/row apart; use txt.getclr/setclr, never row*width*2
 - [Launching a PRG on exit](x16-launch-program-dynamic-keyboard.md) — 10-byte kbd buffer; dynamic-keyboard chain_run
 - [Prog8 static variable allocation](prog8-static-variable-allocation.md) — every local is its own byte; no overlap
 - [g_ndx shared loop counter](xfmgr-g-ndx-loop-counter.md) — one global reused by leaf for-loops; the safety rule

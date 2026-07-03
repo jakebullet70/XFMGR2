@@ -22,9 +22,17 @@ THEME_IDX order 0/1/7/11/14), each theme must pass ALL of these pairings, not ju
   A monochrome theme fails this easily — Amber Mono had FG `15,10,0` on title `12,8,0` (CR 1.55),
   an unreadable amber-on-amber highlighted row. Fixed by darkening title to `7,4,0`.
 
+- **index 0 (black) is ALSO the box drop-shadow colour** — `box_shadow` (uiutil.p8) recolours the
+  cells right/below a modal to attribute `$00` (bg+fg = idx 0). So a theme whose field-bg (idx 11)
+  is pure black makes the shadow invisible (black on black). Fixed 2026-07-03 (build 113) by giving
+  **High-Contrast idx 0 = `4,4,4`** (dark grey) instead of `0,0,0` — shadow now shows on the black
+  field, and idx 0's other uses (prompt text / find highlight, both on light bg) stay readable.
+  Rule: any theme with a near-black idx-11 field must set idx 0 to a visible dark grey, not `0,0,0`.
+
 Fixed values (2026-07-03): X16 Blue = FG `11,13,15` / accent `15,13,2` / bg `0,1,6` / title
-`3,6,13`; Amber Mono = FG `15,10,0` / accent `15,15,8` / bg `2,1,0` / title `7,4,0`. Classic (id 1)
-has no row — it is the exact ROM default (`cx16.set_default_palette()`); leave it alone.
+`3,6,13`; Amber Mono = FG `15,10,0` / accent `15,15,8` / bg `2,1,0` / title `7,4,0`; High-Contrast
+idx0 = `4,4,4` (shadow). Classic (id 1) has no row — it is the exact ROM default
+(`cx16.set_default_palette()`); leave it alone.
 
 Verify offline before building: a redmean-ΔE + WCAG script over the RGB444 rows is faster than
 eyeballing. Screen bg = idx 11 (`txt.color2(CLR_FG, CLR_BG)` at start). Related:
