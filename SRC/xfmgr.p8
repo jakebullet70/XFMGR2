@@ -39,7 +39,8 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 104          ; shown top-right; bump by 1 every build (dev aid)
+    const ubyte BUILD_NUM = 112          ; shown top-right; bump by 1 every build. Keep the About
+                                         ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
 
@@ -178,7 +179,7 @@ main {
     const ubyte VIEW_BANK = 2
     extsub @bank 2 $A000 = tview_init()
     extsub @bank 2 $A003 = view_file(uword nameptr @R0)
-    bool viewer_ok                          ; tview.bin loaded OK -> V uses the banked viewer
+    bool viewer_ok                          ; tview.ovl loaded OK -> V uses the banked viewer
 
     ; --- banked BMX image viewer (ximgview) overlay ---
     ; ximgview.p8 is a %output library blob loaded into reserved HIRAM bank 5. It displays a
@@ -187,7 +188,7 @@ main {
     const ubyte IMG_BANK = 5
     extsub @bank 5 $A000 = ximgview_init()
     extsub @bank 5 $A003 = view_image(uword nameptr @R0)
-    bool imgview_ok                         ; ximgview.bin loaded OK -> V shows .bmx images
+    bool imgview_ok                         ; ximgview.ovl loaded OK -> V shows .bmx images
 
     ; --- banked misc-utility overlay (miscutil) ---
     ; miscutil.p8 is a second %output library blob loaded into reserved HIRAM bank 3 at
@@ -220,7 +221,7 @@ main {
     extsub @bank 3 $A018 = crawl_begin(uword specptr @R0)
     extsub @bank 3 $A01B = crawl_next_hit(uword outptr @R0) -> ubyte @A
     extsub @bank 3 $A01E = crawl_trunc() -> ubyte @A
-    bool misc_ok                            ; miscutil.bin loaded OK
+    bool misc_ok                            ; miscutil.ovl loaded OK
 
     ; --- banked UI overlay (uiutil) ---
     ; uiutil.p8 is a %output library blob in reserved HIRAM bank 4; it holds the bottom-banner
@@ -245,7 +246,7 @@ main {
     ; the bottom command menu (all its label strings) draws here too; main passes the state it
     ; depends on (menu_mode / focus / del_char / sort_mode) since the overlay can't see globals.
     extsub @bank 4 $A027 = ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4)
-    bool ui_ok                              ; uiutil.bin loaded OK -> dialogs use the overlay
+    bool ui_ok                              ; uiutil.ovl loaded OK -> dialogs use the overlay
 
     sub start() {
         ; XFMGR2 depends on R49+ Kernal behaviour (notably the X16 Edit ROM API used by
@@ -283,7 +284,7 @@ main {
         ; shared buffer curdir() points into
         void strings.copy(diskio.curdir(), pathbuf)
 
-        ; the .bin overlays are staged in the program's own /XFMGR/ folder (run.bat), which is
+        ; the .ovl overlays are staged in the program's own /XFMGR/ folder (run.bat), which is
         ; NOT the boot cwd when launched via the root XT loader. Hop into it to load them; if
         ; there's no XFMGR subdir (dev/direct-run layout) chdir is a no-op and they load from cwd.
         diskio.chdir("xfmgr")           ; lowercase: prog8 petscii maps a-z -> $41-5A, the bytes the FS matches
@@ -291,33 +292,34 @@ main {
         ; load the tview viewer overlay into its reserved bank (VIEW_BANK) at $A000, then run
         ; its one-time library init.
         cx16.push_rambank(VIEW_BANK)
-        viewer_ok = diskio.loadlib("tview.bin", $a000) != 0
+        viewer_ok = diskio.loadlib("tview.ovl", $a000) != 0
         cx16.pop_rambank()
         if viewer_ok
             tview_init()                ; extsub @bank 2: clears the overlay's in-bank BSS ONCE
 
         ; load the miscutil overlay into its reserved bank (MISC_BANK) the same way
         cx16.push_rambank(MISC_BANK)
-        misc_ok = diskio.loadlib("miscutil.bin", $a000) != 0
+        misc_ok = diskio.loadlib("miscutil.ovl", $a000) != 0
         cx16.pop_rambank()
         if misc_ok
             miscutil_init()             ; extsub @bank 3: clears the overlay's in-bank BSS ONCE
 
         ; load the uiutil dialog overlay into its reserved bank (UI_BANK) the same way
         cx16.push_rambank(UI_BANK)
-        ui_ok = diskio.loadlib("uiutil.bin", $a000) != 0
+        ui_ok = diskio.loadlib("uiutil.ovl", $a000) != 0
         cx16.pop_rambank()
         if ui_ok
             uiutil_init()               ; extsub @bank 4: clears the overlay's in-bank BSS ONCE
 
         ; load the ximgview BMX image viewer overlay into its reserved bank (IMG_BANK) the same way
         cx16.push_rambank(IMG_BANK)
-        imgview_ok = diskio.loadlib("ximgview.bin", $a000) != 0
+        imgview_ok = diskio.loadlib("ximgview.ovl", $a000) != 0
         cx16.pop_rambank()
         if imgview_ok
             ximgview_init()             ; extsub @bank 5: clears the overlay's in-bank BSS ONCE
 
-        ; apply the saved colour theme (xfmgr.cfg lives in this /xfmgr/ folder, read before chdir back).
+        ; apply the saved colour theme. cfg_read() is self-contained - it hops into /xfmgr/ to LOAD
+        ; the cfg and restores the cwd itself - so it works regardless of where we are here.
         ; A palette remap - full_redraw below repaints in the themed colours. Missing cfg -> Classic.
         themes.apply_theme(themes.cfg_read())
 
@@ -1686,9 +1688,11 @@ main {
     }
 
     sub op_filespec() {
-        ; set the file-display wildcard (e.g. *.prg). Enter empty/* shows all files.
-        if not input_line("File spec (eg *.prg, * = all):", inputbuf, 31, "filespec", false)
+        ; set the file-display wildcard (e.g. *.prg). ENTER on a blank line inserts *.* (= all).
+        if not input_line(petscii:"File spec (eg *.prg, ←┘ = *.*):", inputbuf, 31, "filespec", false)
             return
+        if strings.length(inputbuf) == 0
+            void strings.copy("*.*", inputbuf)      ; blank ENTER -> DOS-style show-all
         xfiles.set_spec(inputbuf)
         void xfiles.build_index(cur_dir)
         file_top = 0

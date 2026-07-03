@@ -85,8 +85,12 @@ xfiles {
     }
 
     sub spec_all() -> bool {
-        ; true when the FileSpec is the match-everything pattern "*"
-        return spec_lc[0] == '*' and spec_lc[1] == 0
+        ; true when the FileSpec matches everything: bare "*" or the DOS-style "*.*".
+        ; Treating "*.*" as show-all means files WITHOUT an extension aren't hidden by the
+        ; literal '.' in the pattern (op_filespec inserts "*.*" on a blank-line ENTER).
+        if spec_lc[0] == '*' and spec_lc[1] == 0
+            return true
+        return spec_lc[0] == '*' and spec_lc[1] == '.' and spec_lc[2] == '*' and spec_lc[3] == 0
     }
 
     sub add_file(uword blocks, ubyte ftype, str name) -> bool {

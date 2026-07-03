@@ -35,9 +35,9 @@ themes {
     ; id 1 (Classic) has no row - it is just cx16.set_default_palette().
     ;                     black       FGtext       accent       field-bg     title/hilite
     ubyte[60] THEME_RGB = [
-        0,0,0,      15,10,0,     15,12,3,     2,1,0,       12,8,0,        ; 2 Amber Mono
+        0,0,0,      15,10,0,     15,15,8,     2,1,0,       7,4,0,         ; 2 Amber Mono
         0,0,0,      2,15,2,      8,15,8,      0,2,0,       1,10,1,        ; 3 Green Mono
-        0,0,0,      11,13,15,    7,14,15,     1,3,10,      4,6,12,        ; 4 X16 Blue
+        0,0,0,      11,13,15,    15,13,2,     0,1,6,       3,6,13,        ; 4 X16 Blue
         0,0,0,      15,15,15,    15,15,0,     0,0,0,       0,8,15         ; 5 High-Contrast
     ]
 
@@ -64,36 +64,39 @@ themes {
     }
 
     ; ---- config file: /xfmgr/xfmgr.cfg, a tiny "theme=N" text line ----
-    ; The caller must have chdir'd into the program's /xfmgr/ folder first (same place the .bin
+    ; The caller must have chdir'd into the program's /xfmgr/ folder first (same place the .ovl
     ; overlays live). Filenames are PETSCII (module default) so the host-fs matches them.
 
     str  CFG_NAME = "xfmgr.cfg"
-    ubyte[24] cfg_line                      ; f_readline scratch / write buffer
+    ubyte[24] cfg_line                      ; cfg load buffer (read) / write buffer
+    ubyte[80] savedir                       ; cfg_read: caller's cwd, saved across the /xfmgr/ hop
 
     sub cfg_read() -> ubyte {
         ; Return the saved theme id (1..LAST). Missing file / bad content -> 1 (Classic).
+        ; Self-contained: save the caller's current dir, hop into the program's /xfmgr/ folder (where
+        ; the cfg + overlays live), LOAD the cfg with a headerless KERNAL LOAD (diskio.load_raw - the
+        ; same cbm.LOAD the overlays' loadlib uses, just the honest name for raw data instead of a
+        ; library blob; NEVER f_open, whose read-channel traffic on an ABSENT file corrupted the
+        ; following UI draw / bottom-menu colours), then restore the original dir. load_raw returns 0
+        ; when the file isn't found. curdir() points into a transient shared buffer, so copy it out
+        ; BEFORE any other diskio call.
         ubyte id = 1
-        if diskio.f_open(CFG_NAME) {
-            uword ln
-            ubyte st
-            repeat {
-                ln, st = diskio.f_readline(&cfg_line)
-                if ln == 0
-                    break                   ; EOF or empty
-                ; parse "theme=N": find '=' then take the following digit
-                ubyte p = 0
-                while cfg_line[p] != 0 and cfg_line[p] != '='
-                    p++
-                if cfg_line[p] == '=' {
-                    ubyte d = cfg_line[p+1]
-                    if d >= '1' and d <= '9'
-                        id = d - '0'
-                }
-                if st != 0
-                    break
+        void strings.copy(diskio.curdir(), savedir)
+        diskio.chdir("xfmgr")               ; lowercase: petscii a-z -> $41-5A, the bytes the FS matches
+        uword endaddr = diskio.load_raw(CFG_NAME, &cfg_line)
+        if endaddr != 0 {
+            @(endaddr) = 0                  ; NUL-terminate the loaded bytes for the parser
+            ; parse "theme=N": find '=' then take the following digit
+            ubyte p = 0
+            while cfg_line[p] != 0 and cfg_line[p] != '='
+                p++
+            if cfg_line[p] == '=' {
+                ubyte d = cfg_line[p+1]
+                if d >= '1' and d <= '9'
+                    id = d - '0'
             }
-            diskio.f_close()
         }
+        diskio.chdir(savedir)               ; back to where the caller was
         if id < FIRST or id > LAST
             id = 1
         return id

@@ -141,8 +141,11 @@ xtree {
         ; the tree is always anchored at the drive root, so paths built from node 0 are
         ; absolute regardless of which subdirectory XFMGR was launched from
         void strings.copy("/", base_path)
-        ; create the root node (its on-screen name is the disk/volume name)
-        ubyte root = new_node(diskio.diskname(), NONE)
+        ; create the root node. Its on-screen name is just "/" (the drive root): on the emulator
+        ; host-fs diskio.diskname() returns the CURRENT folder (the launch dir, e.g. "1111"), not a
+        ; volume label, so it mislabels the root. build_path stops at node 0 and prefixes base_path
+        ; ("/"), so this name is display-only and never enters a path.
+        ubyte root = new_node("/", NONE)
         d_flags[root] |= FL_EXPANDED
         rebuild_visible()
     }

@@ -324,7 +324,7 @@ main {
         aboutln(2,  "X F M G R")
         aboutln(4,  "An XTree-style file manager")
         aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Version 1.0.0")
+        aboutln(7,  "Version 1.0.112")     ; bump the last number with BUILD_NUM in xfmgr.p8
         ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
         txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
         txt.print("Banked RAM: ")
@@ -443,6 +443,10 @@ main {
     sub menu_alt_items(ubyte focus, ubyte sort_mode) {
         if focus == FOCUS_TREE {
             txt.print(petscii:"\x9eF3\x05 relog  \x9eP\x05rune  \x9eR\x05elease")
+            ; Config hotkey right-justified at the row's right edge (ends at col 78, like "About").
+            ; Tree pane only - the file pane's ALT row is already full (eXecute/Sort/relog/Release).
+            txt.plot(69, CMDROW1)
+            txt.print(petscii:"\x9eF10\x05 Config")
         } else {
             txt.print(petscii:"e\x9eX\x05ecute  \x9eS\x05ort: ")
             when sort_mode {
@@ -452,9 +456,6 @@ main {
             }
             txt.print(petscii:"\x9e  F3\x05 relog  \x9eR\x05elease")
         }
-        ; Config hotkey right-justified at the row's right edge (ends at col 78, like "About")
-        txt.plot(69, CMDROW1)
-        txt.print(petscii:"\x9eF10\x05 Config")
     }
 
     ; ------------------------------------------------------------------ in-bank helpers

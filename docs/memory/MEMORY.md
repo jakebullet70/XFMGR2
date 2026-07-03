@@ -1,5 +1,6 @@
 # Project Memory
 
+- [Bump build + run after changes](xfmgr-bump-build-and-run.md) — standing rule: +1 BUILD_NUM then run.bat so user can test
 - [Prog8/X16 build & test toolchain](prog8-build-toolchain.md) — how to compile and run X16 Prog8 here
 - [XFMGR2 architecture](xfmgr-architecture.md) — the XTree-clone module layout and memory model
 - [XFMGR2 run & persistence](xfmgr-run-and-persistence.md) — run.bat clean-launch + history file in data/
@@ -28,6 +29,9 @@
 - [Overlay RAM strategy](xfmgr-overlay-ram-strategy.md) — bank map (2=tview 3=miscutil 4=uiutil), UI-in-overlay pattern, 5.9 KB free, backlog
 - [BMX image viewer](xfmgr-bmx-image-viewer.md) — V on *.bmx -> bank-5 ximgview overlay; png2bmx converter in tools/ (Python off-PATH)
 - [Colour theme setup](xfmgr-color-theme-setup.md) — Alt-F10 -> standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
+- [Cfg read via loadlib](xfmgr-cfg-read-exists-guard.md) — cfg_read LOADs xfmgr.cfg like an overlay; never f_open (absent file corrupts menu draw)
+- [Overlays are .OVL](xfmgr-overlay-extension-ovl.md) — bank overlays ship as .ovl; build.bat renames prog8's .bin
+- [Theme contrast rules](xfmgr-theme-contrast-rules.md) — keys(7) must pop off text(1); idx14 is both border-fg and selbar-bg
 - [Find file (Ctrl-F)](xfmgr-find-file.md) — whole-disk crawler overlay yields match-dirs; log-on-match; flat modal + jump-to-file
 - [CP437/ISO keyboard](x16-cp437-iso-keyboard.md) — why XFMGR stays PETSCII: ISO mode breaks the ALT/CTRL command keys
 - [Custom fonts (V2)](xfmgr-custom-fonts-v2.md) — backlog: upload a custom charset for double-line DOS boxes, staying PETSCII

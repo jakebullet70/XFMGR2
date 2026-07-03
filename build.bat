@@ -33,22 +33,27 @@ IF NOT "%ERR%"=="0" ( ENDLOCAL & EXIT /B %ERR% )
 REM --- memory-stats block parsed from the segment map ---
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0memstats.ps1" -Log "%BUILDLOG%" -Prg "%PRGFILE%"
 
-REM --- companion build: the tview viewer overlay (%output library -> headerless tview.bin at
-REM     $A000, loaded into HIRAM bank 2 at runtime and called via extsub @bank). Only when
-REM     building the app itself. %memtop $C000 in tview.p8 fails the build if it outgrows the bank.
+REM --- companion build: the tview viewer overlay (%output library -> headerless tview.bin, which
+REM     this script renames to tview.ovl) at $A000, loaded into HIRAM bank 2 at runtime and called
+REM     via extsub @bank. Only when building the app itself. %memtop $C000 in tview.p8 fails the
+REM     build if it outgrows the bank. (All four overlays are renamed .bin -> .ovl below.)
 IF /I "%SRC%"=="xfmgr.p8" (
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\tview.p8" > "%TEMP%\tview_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\tview_build.txt" & ECHO *** tview overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    ECHO tview overlay: tview.bin built ^($A000 HIRAM bank overlay^).
+    MOVE /Y "%~dp0tview.bin" "%~dp0tview.ovl" >NUL
+    ECHO tview overlay: tview.ovl built ^($A000 HIRAM bank overlay^).
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\miscutil.p8" > "%TEMP%\miscutil_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\miscutil_build.txt" & ECHO *** miscutil overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    ECHO miscutil overlay: miscutil.bin built ^($A000 HIRAM bank overlay^).
+    MOVE /Y "%~dp0miscutil.bin" "%~dp0miscutil.ovl" >NUL
+    ECHO miscutil overlay: miscutil.ovl built ^($A000 HIRAM bank overlay^).
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\uiutil.p8" > "%TEMP%\uiutil_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\uiutil_build.txt" & ECHO *** uiutil overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    ECHO uiutil overlay: uiutil.bin built ^($A000 HIRAM bank overlay^).
+    MOVE /Y "%~dp0uiutil.bin" "%~dp0uiutil.ovl" >NUL
+    ECHO uiutil overlay: uiutil.ovl built ^($A000 HIRAM bank overlay^).
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\ximgview.p8" > "%TEMP%\ximgview_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\ximgview_build.txt" & ECHO *** ximgview overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    ECHO ximgview overlay: ximgview.bin built ^($A000 HIRAM bank overlay^).
+    MOVE /Y "%~dp0ximgview.bin" "%~dp0ximgview.ovl" >NUL
+    ECHO ximgview overlay: ximgview.ovl built ^($A000 HIRAM bank overlay^).
     REM companion: the standalone colour-theme setup utility (a full $0801 PRG, not an overlay).
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\xfsetup.p8" > "%TEMP%\xfsetup_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\xfsetup_build.txt" & ECHO *** xfsetup build FAILED *** & ENDLOCAL & EXIT /B 1 )

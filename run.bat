@@ -22,18 +22,18 @@ SET RUNDIR=%~dp0run
 IF NOT EXIST "%RUNDIR%" MKDIR "%RUNDIR%"
 rem 'COPY /Y "%~dp0xfmgr.prg" "%RUNDIR%\xfmgr.prg" >NUL
 rem 'REM stage the tview viewer overlay (loaded into HIRAM bank 2 at runtime) alongside it
-rem 'COPY /Y "%~dp0tview.bin" "%RUNDIR%\tview.bin" >NUL
+rem 'COPY /Y "%~dp0tview.ovl" "%RUNDIR%\tview.ovl" >NUL
 REM stage the miscutil overlay (loaded into HIRAM bank 3 at runtime)
-rem 'COPY /Y "%~dp0miscutil.bin" "%RUNDIR%\miscutil.bin" >NUL
+rem 'COPY /Y "%~dp0miscutil.ovl" "%RUNDIR%\miscutil.ovl" >NUL
 
 REM 2b) also copy all built files into run\xfmgr
 SET XFMGRDIR=%RUNDIR%\xfmgr
 IF NOT EXIST "%XFMGRDIR%" MKDIR "%XFMGRDIR%"
 COPY /Y "%~dp0xfmgr.prg" "%XFMGRDIR%\xfmgr.prg" >NUL
-COPY /Y "%~dp0tview.bin" "%XFMGRDIR%\tview.bin" >NUL
-COPY /Y "%~dp0miscutil.bin" "%XFMGRDIR%\miscutil.bin" >NUL
-COPY /Y "%~dp0uiutil.bin" "%XFMGRDIR%\uiutil.bin" >NUL
-COPY /Y "%~dp0ximgview.bin" "%XFMGRDIR%\ximgview.bin" >NUL
+COPY /Y "%~dp0tview.ovl" "%XFMGRDIR%\tview.ovl" >NUL
+COPY /Y "%~dp0miscutil.ovl" "%XFMGRDIR%\miscutil.ovl" >NUL
+COPY /Y "%~dp0uiutil.ovl" "%XFMGRDIR%\uiutil.ovl" >NUL
+COPY /Y "%~dp0ximgview.ovl" "%XFMGRDIR%\ximgview.ovl" >NUL
 COPY /Y "%~dp0xfsetup.prg" "%XFMGRDIR%\xfsetup.prg" >NUL
 
 REM 2c) stage the sample BMX images (tracked in samples\) into the browse root so the
