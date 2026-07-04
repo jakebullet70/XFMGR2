@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 152          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 154          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -2179,15 +2179,14 @@ main {
     }
 
     ; ---- unified bottom dialog box: white bg, black text, hotkeys in light blue (same look as
-    ;      ask_overwrite). Every prompt/banner writes ONLY to the two command rows (CMDROW1/2),
-    ;      so box_open whitens just those - and only the INTERIOR (cols 1..78), leaving the side
-    ;      borders (cols 0/79) and the divider/bottom-border rows (DIVBOT/SCR_BOT) in place so the
-    ;      box sits framed on all four sides. Nothing box-related touches those frame cells, so
-    ;      box_close has no snap-back to fix.
+    ;      ask_overwrite). A full-width 4-line white box spanning DIVBOT..SCR_BOT (rows 26..29),
+    ;      every column 0..79 - it covers the side borders too. Prompts/banners write their text on
+    ;      the two middle rows (CMDROW1/2); DIVBOT/SCR_BOT are the box's own blank top/bottom margin.
+    ;      box_close's draw_frame restores every border cell the box erased.
     sub box_open() {
         ubyte r
-        for r in CMDROW1 to CMDROW2 {        ; outer stays local; inner leaf loop uses g_ndx
-            for g_ndx in 1 to 78 {           ; interior only - never the col-0/79 side borders
+        for r in DIVBOT to SCR_BOT {         ; 4 lines; outer stays local, inner leaf loop uses g_ndx
+            for g_ndx in 0 to 79 {           ; full width, side borders included
                 txt.setchr(g_ndx, r, sc:' ')
                 txt.setclr(g_ndx, r, shared.CLR_BOTTOM_PROMPT_BG)
             }
@@ -2196,18 +2195,17 @@ main {
     }
 
     sub box_close() {
-        ; box_open left every frame cell intact (interior-only whiten), but callers repaint the
-        ; command menu over CMDROW1/2 via dirty_cmd; draw_frame keeps the borders authoritative.
+        ; the box erased the four bottom rows edge-to-edge (borders included); draw_frame restores
+        ; every border cell. Callers repaint the command menu over CMDROW1/2 via dirty_cmd.
         draw_frame()
     }
 
     sub box_left(ubyte row, str s) {
         ; print s left-aligned at BANNER_LEFT on row, then force that row black-on-white.
-        ; the house style for every bottom-banner line (see BANNER_LEFT). Interior only (1..78)
-        ; so the col-0/79 side borders stay put.
+        ; the house style for every bottom-banner line (see BANNER_LEFT). Full width (0..79).
         txt.plot(BANNER_LEFT, row)
         txt.print(s)
-        hilite_row(1, 78, row, shared.CLR_BOTTOM_PROMPT_BG)
+        hilite_row(0, 79, row, shared.CLR_BOTTOM_PROMPT_BG)
     }
 
     sub box_compose_name(str prefix, str name, str suffix) {
@@ -2527,7 +2525,7 @@ main {
         box_open()
         txt.plot(BANNER_LEFT, MSGROW)
         txt.print(prompt)
-        hilite_row(1, 78, MSGROW, shared.CLR_BOTTOM_PROMPT_BG)     ; interior only - keep the col-0/79 borders
+        hilite_row(0, 79, MSGROW, shared.CLR_BOTTOM_PROMPT_BG)     ; full width (0..79)
         prompt_hint(usehist, dirpick)
     }
 
