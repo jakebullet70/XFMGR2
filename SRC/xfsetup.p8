@@ -47,7 +47,7 @@ main {
 
         ; the config lives in the program's own /xfmgr/ folder (alongside the .prg + overlays).
         ; chdir is a harmless no-op if we were launched directly from that folder.
-        diskio.chdir("xfmgr")
+        diskio.chdir("/xfmgr")
         sel = themes.cfg_read()
 
         draw_static()

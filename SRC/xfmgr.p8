@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 138          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 146          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -290,7 +290,7 @@ main {
         ; the .ovl overlays are staged in the program's own /XFMGR/ folder (run.bat), which is
         ; NOT the boot cwd when launched via the root XT loader. Hop into it to load them; if
         ; there's no XFMGR subdir (dev/direct-run layout) chdir is a no-op and they load from cwd.
-        diskio.chdir("xfmgr")           ; lowercase: prog8 petscii maps a-z -> $41-5A, the bytes the FS matches
+        diskio.chdir("/xfmgr")           ; lowercase: prog8 petscii maps a-z -> $41-5A, the bytes the FS matches
 
         ; load the tview viewer overlay into its reserved bank (VIEW_BANK) at $A000, then run
         ; its one-time library init.
@@ -368,6 +368,10 @@ main {
                                 break
                             }
                             dirty_cmd = true        ; restore the menu the prompt covered
+                        }
+                        133  -> {                                  ; F1: show the help file
+                            op_help()
+                            dirty_full = true                      ; viewer took the whole screen
                         }
                         9    -> change_focus(FOCUS_FILE - focus)   ; TAB toggles pane
                         29   -> {                                  ; cursor-right: enter files,
@@ -734,7 +738,7 @@ main {
                     dirty_status = true
                 }
             }
-            'k' -> {
+            'm' -> {                    ; M: make a new directory
                 op_mkdir()
                 dirty_tree = true
                 dirty_files = true
@@ -1624,7 +1628,7 @@ main {
         ; is exactly what copy_one needs - it writes each file by bare name into the CWD.
         if dir_exists(path)
             return true
-        if not confirm("Dest dir missing. Create it?", true)     ; default Yes
+        if not confirm_enter("Dest dir missing. Create it?")     ; ENTER = create, ESC = cancel
             return false
         make_dirs(path)                         ; create the whole chain, not just the leaf
         if dir_exists(path)                     ; confirm it really got created (and enter it)
@@ -1971,6 +1975,20 @@ main {
         if confirm_enter("Setup? loses logged dirs + tags") {
             setup_exit = true
         }
+    }
+
+    sub op_help() {
+        ; F1: show the help text (xfmgr.hlp, shipped alongside the .prg) in the text viewer.
+        ; Mirrors the V text path: chdir to /xfmgr, view by bare name, restore the theme colour
+        ; the viewer left blue. Caller sets dirty_full - the viewer took the whole screen.
+        if not viewer_ok {
+            flash("viewer overlay missing")
+            return
+        }
+        diskio.chdir("/xfmgr")                      ; the help file lives with the .prg + overlays
+        void strings.copy("xfmgr.hlp", namebuf)
+        view_file(&namebuf)                         ; returns on Q/ESC
+        txt.color2(shared.CLR_FG, shared.CLR_BG)    ; viewer left the colour blue; restore app theme
     }
 
     sub op_execute() {
@@ -2621,8 +2639,10 @@ main {
     }
 
     sub bar_key(str s) {
-        ; a highlighted hotkey on the bar (dark-gray on blue), then revert to white-on-blue
-        txt.color2(shared.BAR_KEY, shared.BAR_BG)
+        ; a highlighted hotkey on the bar, accent colour on blue (matches the main command menu's
+        ; hotkey look), then revert to white-on-blue. Single-letter keys are printed letter-in-word:
+        ; bar_key("U") then the rest of "Untag", so only the U is picked out - like "MENU:" below.
+        txt.color2(shared.CLR_ACCENT, shared.BAR_BG)
         txt.print(s)
         txt.color2(shared.BAR_FG, shared.BAR_BG)
     }
@@ -2742,15 +2762,15 @@ main {
         bar_fill(SCR_BOT)                               ; footer bar
         txt.plot(2, SCR_BOT)
         bar_key("Up/Dn")
-        txt.print("  ")
+        txt.print(" Move  ")
         bar_key(petscii:"←┘")
         txt.print(" Go Dir  ")
         bar_key("U")
-        txt.print(" Untag  ")
+        txt.print("ntag  ")
         bar_key("C")
-        txt.print(" Copy all  ")
+        txt.print("opy all  ")
         bar_key("M")
-        txt.print(" Move all  ")
+        txt.print("ove all  ")
         bar_key("ESC")
         txt.print(" Exit")
     }

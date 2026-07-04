@@ -57,9 +57,12 @@ main {
     const ubyte ABOUT_BOTTOM = 20
 
     ubyte[132] cm_dst                       ; message-compose scratch (UNINITIALIZED -> BSS tail)
+    ubyte[16] MSG_PRESS_ANY                  ; " Press any key " - filled in start() (see below)
 
     sub start() {
-        ; library init ($A000): the compiler emits the BSS-clear here. No UI / system init.
+        ; library init ($A000): the compiler emits the BSS-clear here. We also seed MSG_PRESS_ANY
+        ; from an INLINE literal (inline literals are safe; a named `str =` would shove the jmptable).
+        void strings.copy(" Press any key ", MSG_PRESS_ANY)
     }
 
     ; ------------------------------------------------------------------ public entries
@@ -70,7 +73,7 @@ main {
     }
     sub do_flash(str m) {
         box_left(CMDROW1, m)
-        box_left(CMDROW2, " Press any key ")
+        box_left(CMDROW2, MSG_PRESS_ANY)
         void wait_key()
     }
 
@@ -237,7 +240,7 @@ main {
             else -> void strings.append(cm_dst, " - nothing selected")
         }
         box_left(CMDROW1, cm_dst)
-        box_left(CMDROW2, " Press any key ")
+        box_left(CMDROW2, MSG_PRESS_ANY)
         void wait_key()
     }
 
@@ -324,7 +327,7 @@ main {
         aboutln(2,  "X F M G R")
         aboutln(4,  "An XTree-style file manager")
         aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Version 1.0.138")     ; bump the last number with BUILD_NUM in xfmgr.p8
+        aboutln(7,  "Version 1.0.146")     ; bump the last number with BUILD_NUM in xfmgr.p8
         ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
         txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
         txt.print("Banked RAM: ")
@@ -336,7 +339,7 @@ main {
         aboutln(11, "(c)2025-26 sadLogic")
         txt.plot(about_col(15), ABOUT_BOTTOM-1)         ; centered " Press any key " (15 chars)
         txt.color(shared.CLR_ACCENT)
-        txt.print(" Press any key ")
+        txt.print(MSG_PRESS_ANY)
         txt.color(shared.CLR_FG)
         void wait_key()
     }
@@ -399,7 +402,7 @@ main {
         }
     }
 
-    sub hk(ubyte c) {
+    sub draw_hkey(ubyte c) {
         ; print a hotkey letter highlighted in the accent colour (yellow)
         txt.color(shared.CLR_ACCENT)
         txt.chrout(c)
@@ -408,9 +411,9 @@ main {
 
     sub menu_plain_items(ubyte focus) {
         if focus == FOCUS_TREE {
-            txt.print(petscii:"\x9e←┘\x05log  m\x9eK\x05dir  \x9eR\x05ename  \x9eD\x05elete  \x9eTAB\x05 files")
-            txt.plot(74, CMDROW1)
-            txt.print(petscii:"\x9eA\x05bout")
+            txt.print(petscii:"\x9e←┘\x05log  \x9eM\x05kdir  \x9eR\x05ename  \x9eD\x05elete  \x9eTAB\x05 files")
+            txt.plot(65, CMDROW1)
+            txt.print(petscii:"\x9eF1\x05 Help  \x9eA\x05bout")
         } else {
             txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eV\x05iew \x9eE\x05dit \x9eC\x05opy \x9eM\x05ove \x9eF\x05ilespec \x9eR\x05ename \x9eD\x05elete")
         }
@@ -425,7 +428,7 @@ main {
         txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eI\x05nvert \x9eG\x05lobal ")
         find_label(find_char)
         txt.print(petscii:" \x9eC\x05opy m\x9eO\x05ve \x9eW\x05ildcard ")
-        hk(del_char)
+        draw_hkey(del_char)
         txt.print(" Del")                   ; Ctrl-X (emu) / Ctrl-D (hw)
     }
 
@@ -435,7 +438,7 @@ main {
         if find_char == 'F' {
             txt.print(petscii:"\x9eF\x05ind")
         } else {
-            hk(find_char)
+            draw_hkey(find_char)
             txt.print(" Find")
         }
     }

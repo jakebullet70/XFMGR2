@@ -35,6 +35,8 @@ COPY /Y "%~dp0miscutil.ovl" "%XFMGRDIR%\miscutil.ovl" >NUL
 COPY /Y "%~dp0uiutil.ovl" "%XFMGRDIR%\uiutil.ovl" >NUL
 COPY /Y "%~dp0ximgview.ovl" "%XFMGRDIR%\ximgview.ovl" >NUL
 COPY /Y "%~dp0xfsetup.prg" "%XFMGRDIR%\xfsetup.prg" >NUL
+REM stage the F1 help text (a static asset, not built) alongside the .prg
+COPY /Y "%~dp0xfmgr.hlp" "%XFMGRDIR%\xfmgr.hlp" >NUL
 
 REM 2c) stage the sample BMX images (tracked in samples\) into the browse root so the
 REM     V image viewer has something to open. run\ is gitignored; samples\ is the source of truth.

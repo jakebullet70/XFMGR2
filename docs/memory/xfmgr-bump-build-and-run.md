@@ -23,7 +23,9 @@ explicitly (2026-07-03) and wants to test in the emulator themselves.
 
 **How to apply:** Edit BUILD_NUM (+1), then `& ".\run.bat" xfmgr.p8` from the repo root. run.bat is
 non-blocking (START launches the GUI) — report the new build number and what to check, don't drive
-the GUI. The `'Fastboot++\' is not recognized` line at the top of build/run output is a harmless
-stray PATH echo, not an error. Include the build memory-stats block in the reply
+the GUI. (Historical: a `'Fastboot++\' is not recognized` line used to print at the top of
+build/run output - caused by an '&' in a system PATH entry ("ADB & Fastboot++") breaking build.bat's
+`SET PATH=%PATH%`; fixed in build 146 by quoting the assignment `SET "PATH=..."`.) Include the build
+memory-stats block in the reply
 ([[always-report-mem-stats]]). Related: [[prog8-build-toolchain]],
 [[user-tests-in-emulator-themselves]].

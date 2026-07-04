@@ -14,7 +14,10 @@ REM and grows as directories are logged.
 SETLOCAL
 SET JAVABIN=C:\dev\b4x\java19\bin
 SET TASSBIN=C:\8bitProgramming\64tass-1.60
-SET PATH=%JAVABIN%;%TASSBIN%;%PATH%
+REM quote the whole assignment: an existing PATH entry may contain '&' (e.g. "ADB & Fastboot++"),
+REM which cmd would otherwise treat as a command separator and try to run - printing a stray
+REM "'Fastboot++\' is not recognized" error. Quoting makes '&' literal.
+SET "PATH=%JAVABIN%;%TASSBIN%;%PATH%"
 
 SET SRCDIR=%~dp0SRC
 SET SRC=%1

@@ -1,0 +1,101 @@
+==============================================================================
+ XFMGR2 - an XTree-style file manager for the Commander X16
+==============================================================================
+
+ A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
+ the left, the selected directory's FILES on the right, with file tagging, a
+ banked text/hex viewer, a BMX image viewer, a whole-disk Find, and a full set
+ of file operations - copy, move, rename, delete, mkdir and prune - plus edit
+ via the ROM X16 Edit and switchable colour themes.
+
+ The bottom command menu is MODIFIER-DRIVEN. By default it shows MENU (plain
+ keys). Hold CTRL for the CTRL menu, hold ALT (the Commodore key) for the ALT
+ menu; release to return to MENU. The plain menu is context-sensitive: the
+ DIRECTORY pane and the FILE pane offer different commands.
+
+------------------------------------------------------------------------------
+ NAVIGATION (either pane)
+------------------------------------------------------------------------------
+   Up / Dn     Move the cursor within the focused pane
+   TAB         Switch focus between the DIRECTORY and FILE panes
+   Right       Focus the FILE pane (logs the dir's files on the fly)
+   Left        Focus the DIRECTORY pane
+   F1          Show this help
+   Q           Quit, leaving the shell in the LAUNCH directory
+
+------------------------------------------------------------------------------
+ DIRECTORY pane (plain keys)
+------------------------------------------------------------------------------
+   Enter       Log the directory if new; else expand / collapse it
+   M           Make a new subdirectory in the selected folder
+   R           Rename the selected directory
+   D           Delete the selected folder (empty folders only)
+   P           Prune - recursively delete the folder and all its contents
+               (type 'prune' to confirm)
+   F3          Re-log sub-folders (picks up folders made since logging)
+   A           About box (version, banked-RAM usage, credits)
+
+------------------------------------------------------------------------------
+ FILE pane (plain keys)
+------------------------------------------------------------------------------
+   T           Tag current file, then advance
+   U           Untag current file, then advance
+   V           View - .bmx in the image viewer, else the text/hex viewer
+   E           Edit file in the ROM X16 Edit, then return
+   C           Copy selected (or all tagged) file(s) to a directory
+   M           Move selected (or all tagged) file(s) to a directory
+   R           Rename (supports * and ? wildcards)
+   D           Delete current file (confirm)
+   F           Set the file-spec filter (e.g. *.prg, Enter = * = all)
+
+------------------------------------------------------------------------------
+ CTRL menu (acts on the current directory / all tagged)
+------------------------------------------------------------------------------
+   Ctrl-T      Tag all files in this directory
+   Ctrl-U      Untag all files in this directory
+   Ctrl-I      Invert tags in this directory
+   Ctrl-W      Tag files matching a wildcard
+   Ctrl-G      ShowAll - modal list of every tagged file across all dirs
+   Ctrl-F      Find files across the whole disk
+               (Ctrl-N in the emulator, Ctrl-F on hardware)
+   Ctrl-C      Copy all tagged files (from all dirs) to one destination
+   Ctrl-O      Move all tagged files (from all dirs) to one destination
+   Ctrl-X      Delete all tagged files in this directory
+               (Ctrl-X in the emulator, Ctrl-D on hardware)
+
+------------------------------------------------------------------------------
+ ALT menu  (ALT = the Commodore key)
+------------------------------------------------------------------------------
+   Alt-S       Cycle sort order: name -> extension -> size
+   Alt-X       Execute - quit XFMGR and chain-run the selected program
+   Alt-Q       Quit, leaving the shell in the CURRENTLY SELECTED directory
+   Alt-F3      Re-log the current context (sub-folders in DIR, files in FILE)
+   Alt-F10     Open the colour-theme setup (quits to XFSETUP.PRG)
+
+------------------------------------------------------------------------------
+ In text prompts (Copy, Move, Rename, Mkdir, Filespec, Tag-spec, Find)
+------------------------------------------------------------------------------
+   Up          Pop up the recent-entry history for this prompt
+   F2          Open the directory picker (Copy/Move destinations)
+   Left/Right  Move the cursor in the field   (Home = start)
+   Enter       Accept (saved to history)
+   Esc         Cancel
+
+------------------------------------------------------------------------------
+ In the ShowAll / Find / directory-picker modals
+------------------------------------------------------------------------------
+   Up / Dn     Move          Enter  Select / jump to the file
+   +           Expand (picker, logs on demand)     - Collapse
+   Esc / Q     Cancel        U      Untag the highlighted entry (ShowAll)
+
+------------------------------------------------------------------------------
+ In the text / hex viewer (V, and this help)
+------------------------------------------------------------------------------
+   PgDn/PgUp   Page          T  Top        B  Bottom
+   H           Toggle hex / text
+   F           Find a string     N  Repeat the search
+   Q / Esc     Exit back to the file list
+
+==============================================================================
+ (c) 2025-26 sadLogic  -  written in Prog8
+==============================================================================

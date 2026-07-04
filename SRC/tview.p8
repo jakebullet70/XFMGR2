@@ -150,13 +150,18 @@ main {
 
     sub scr_of(ubyte b) -> ubyte {
         ; ASCII (already clamped to $20..$7E) -> screen code for setchr, which writes the screen
-        ; matrix directly (no PETSCII interpretation -> no control-code scroll). $20-$3F stay put;
-        ; $40-$5F subtract $40; $60-$7E subtract $20.
+        ; matrix directly (no PETSCII interpretation -> no control-code scroll). The viewer runs
+        ; in the PETSCII-LOWERCASE charset (txt.lowercase), where sc $01..$1A are lowercase a-z and
+        ; sc $41..$5A are uppercase A-Z. So: a-z fold DOWN to $01..$1A, A-Z are already their own
+        ; screen codes ($41..$5A) and stay put, and space/digits/punctuation ($20..$3F) map 1:1.
+        ; (The old blanket "$40-$5F -$40 / $60-$7E -$20" fold SWAPPED letter case.)
+        if b >= $61 and b <= $7A
+            return b - $60              ; a-z -> $01..$1A (lowercase glyphs)
+        if b >= $41 and b <= $5A
+            return b                    ; A-Z -> $41..$5A (uppercase glyphs, unchanged)
         if b < $40
-            return b
-        if b < $60
-            return b - $40
-        return b - $20
+            return b                    ; $20..$3F: space, digits, punctuation - identical
+        return b - $40                  ; @ ($40->$00), [ \ ] ^ _ ($5B-$5F -> $1B-$1F)
     }
 
     ; ---------- text page render ----------
@@ -646,21 +651,21 @@ main {
             bar_fill(SCR_BOT)
             txt.plot(0, SCR_BOT)
             txt.spc()
-            bar_key("PgDn/PgUp   ")
-            txt.spc()
+            bar_key("PgDn/PgUp")
+            txt.print("  ")
             bar_key("T")
-            txt.print("op ")
+            txt.print("op  ")
             bar_key("B")
-            txt.print("ottom ")
+            txt.print("ottom  ")
             bar_key("H")                    ; H toggles hex<->text in BOTH directions (T is Top!)
             if view_hex
-                txt.print(" text ")         ; in hex mode, H returns to text
+                txt.print(" text  ")        ; in hex mode, H returns to text
             else
-                txt.print("ex ")            ; in text mode, H shows hex
+                txt.print("ex  ")           ; in text mode, H shows hex
             bar_key("F")
-            txt.print("ind ")
+            txt.print("ind  ")
             bar_key("N")
-            txt.print("ext ")
+            txt.print("ext  ")
             bar_key("Q")
             txt.print("uit")
             ; Space=find-next hint, shown only while a search term is active (view_find non-empty)
