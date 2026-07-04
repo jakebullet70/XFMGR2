@@ -43,5 +43,23 @@ like `miscutil.do_stream_copy`).
 **RAM:** the modal UI now lives in the overlay (b128). Main free-to-$9F00 ~1.8 KB; the xar bank
 tops at ~$BD62 (~414 B headroom under $BF00) — trim MEMBER_MAX 64->48 (+384 B) if it needs more.
 
+**LZSA2 DECOMPRESS (build 131 primitive + build 132 XAR2 codec — DONE, verified in emulator):**
+- Primitive: overlay entry `xar_lz_decompress(input @R0, output @R1) -> uword` at jmptable **$A00F**
+  (extsub in xfmgr `-> uword @AY`) — thin wrapper over X16 ROM `cx16.memory_decompress` ($FEED,
+  LZSA2). DECOMPRESS-ONLY (no X16 compressor).
+- **Codec-in-magic (build 132):** the magic's 4th byte selects the block codec — **"XAR1" = RLE**
+  (PackBits, what CREATE writes; X16 compresses+decompresses), **"XAR2" = LZSA2** (EXTRACT-ONLY,
+  decoded via the ROM). SAME framing for both. `do_extract` reads magic[3], dispatches per block
+  (`$32`->`cx16.memory_decompress(&bufA,&bufB)`, else `compression.decode_rle`); `do_open` +
+  `file_is_xar` accept `$31` or `$32`. XAR2 blocks must be <= CHUNK(250) raw (bufB is 256) - so
+  LZSA2's window is capped at 250 here; bigger-window LZSA2 needs standalone `.LZ16` (VRAM streaming).
+- **Authoring XAR2 (desktop-only):** `lzsa -r -f2` per <=250B chunk (the exact opts MAKECPLZ/the ROM
+  use). Verified with a hand-built 3-block XAR2 (`scratchpad/mkxar2.py` + lzsa 1.4.1): browse lists
+  member, extract -> byte-exact 600B/12-line file. lzsa.exe was only in the session scratchpad.
+- Tooling reviewed under `tools/CPLZ-APPS/`: XCPLZ (prog8, decompressor-only, `memory_decompress_from_func`),
+  MAKECPLZ (qb64pe desktop compressor, needs external `lzsa`), `HANG.LZ16`, `LZ16-COMPRESSED-FORMAT.TXT`.
+  LZ16 = cpio-newc archive wrapped in LZSA2 chunks. Possible next: standalone `.LZ16` file support
+  (header + `zc` chunks -> `memory_decompress` into VRAM + cpio extract, like XCPLZ). See [[xfmgr-zip-arc-v2]].
+
 **KNOWN FOLLOW-UP:** extract has no dest-dir picker or overwrite confirm yet (writes into the
 archive's dir, silently overwriting). See [[xfmgr-overlay-ram-strategy]], [[always-report-mem-stats]].

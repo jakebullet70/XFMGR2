@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 128          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 132          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -205,6 +205,10 @@ main {
     extsub @bank 6 $A006 = xar_create_begin(uword nameptr @R0, ubyte count @R1) -> ubyte @A
     extsub @bank 6 $A009 = xar_create_add(uword srcpath @R0, uword membername @R1) -> ubyte @A
     extsub @bank 6 $A00C = xar_create_end() -> ubyte @A
+    ; $A00F = xar_lz_decompress(input, output) -> end-ptr: LZSA2 block decompressor (ROM $FEED).
+    ; Decompress-only primitive (no X16 compressor); not wired to a feature yet - future LZSA2/LZ16
+    ; extract path. See tools/CPLZ-APPS + the xfmgr-xar-format memory.
+    extsub @bank 6 $A00F = xar_lz_decompress(uword input @R0, uword output @R1) -> uword @AY
     bool xar_ok                             ; xar.ovl loaded OK -> archive create/browse/extract enabled
 
     ; --- banked misc-utility overlay (miscutil) ---
@@ -2653,16 +2657,16 @@ main {
     }
 
     sub file_is_xar(uword nameptr) -> bool {
-        ; True if the file starts with the ".xar" magic "XAR1" ($58,$41,$52,$31), sniffed from
-        ; the raw content (name-encoding independent). The caller must have chdir'd into the
-        ; file's directory. Mirrors file_is_bmx.
+        ; True if the file starts with the ".xar" magic - "XAR1" ($58,$41,$52,$31, RLE blocks) or
+        ; "XAR2" (...,$32, LZSA2 blocks). Sniffed from raw content (name-encoding independent). The
+        ; caller must have chdir'd into the file's directory. Mirrors file_is_bmx.
         ubyte[4] magic
         magic[0] = 0
         if not diskio.f_open(nameptr)
             return false
         ubyte got = lsb(diskio.f_read(&magic, 4))
         diskio.f_close()
-        return got >= 4 and magic[0]==$58 and magic[1]==$41 and magic[2]==$52 and magic[3]==$31
+        return got >= 4 and magic[0]==$58 and magic[1]==$41 and magic[2]==$52 and (magic[3]==$31 or magic[3]==$32)
     }
 
     sub op_archive() {

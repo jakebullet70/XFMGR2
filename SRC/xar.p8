@@ -1,19 +1,23 @@
 ; xar - .XAR archive engine overlay for XFMGR2 (create / browse / extract).
 ;
-; A custom, X16-native archive format (magic "XAR1") using ByteRun1 / PackBits RLE
-; from the vendored prog8 `compression` module. X16-to-X16 only - no DEFLATE/ARC.
+; A custom, X16-native archive format. Two block codecs, distinguished by the magic's 4th byte:
+; "XAR1" = ByteRun1 / PackBits RLE (vendored prog8 `compression` module) - what CREATE writes and
+; the X16 can both compress AND decompress. "XAR2" = LZSA2 blocks - EXTRACT-ONLY (decoded via the
+; X16 ROM `memory_decompress` $FEED; the X16 has no LZSA2 compressor, so XAR2 files are authored
+; off-device, e.g. with `lzsa -r -f2` per block). Same framing for both. X16-to-X16; no DEFLATE/ARC.
 ; Built as a %output library headerless blob (org $A000), loaded into reserved HIRAM
 ; bank 6 (XAR_BANK in xfmgr) at startup via diskio.loadlib, called via `extsub @bank 6`
 ; (JSRFAR maps the bank around each call). Keeps the codec + all archive logic out of
 ; scarce main RAM - same overlay pattern as SRC/miscutil.p8 (see its header).
 ;
 ; --- .XAR ON-DISK FORMAT (all little-endian, fully sequential - NO seek needed) ---
-;   "XAR1"                    magic (4 bytes: $58 $41 $52 $31)
+;   "XAR1"/"XAR2"             magic (4 bytes: $58 $41 $52, then $31=RLE or $32=LZSA2)
 ;   member_count             (1 byte, 1..MEMBER_MAX)
-;   then member_count PAYLOADS in order, each a stream of RLE BLOCKS:
+;   then member_count PAYLOADS in order, each a stream of BLOCKS (codec per the magic):
 ;        raw_len (2)          uncompressed length of this block (1..CHUNK); 0 ends the payload
-;        enc_len (2)          length of the PackBits data that follows (only if raw_len != 0)
-;        enc[enc_len]         one self-contained PackBits stream (encode_rle is_last_block=true)
+;        enc_len (2)          length of the compressed data that follows (only if raw_len != 0)
+;        enc[enc_len]         one self-contained block: PackBits stream (XAR1) or LZSA2 raw block
+;                             (XAR2, `lzsa -r -f2`), each decoding to exactly raw_len bytes
 ;      ...payload terminated by a raw_len==0 word.
 ;   then the DIRECTORY: member_count entries, each:
 ;        blocks (2)           member's uncompressed size in 256-byte blocks (for the size column)
@@ -42,12 +46,13 @@ main {
 
     ; Fixed callable offsets via %jmptable (compiler prepends `jmp start` at $A000):
     ;   $A000 start(init) $A003 xar_browse $A006 xar_create_begin $A009 xar_create_add
-    ;   $A00C xar_create_end
+    ;   $A00C xar_create_end $A00F xar_lz_decompress
     ; The whole browse modal (frame + key loop + extract) is self-contained here now: main just
     ; calls xar_browse(nameptr) and repaints on return. KEEP ALL MODULE VARS UNINITIALIZED
     ; (no "= ..."): prog8 emits a block's initialized vars inline BEFORE its jumptable, which
-    ; would shove the table off $A003 (same gotcha as tview).
-    %jmptable ( main.xar_browse, main.xar_create_begin, main.xar_create_add, main.xar_create_end )
+    ; would shove the table off $A003 (same gotcha as tview). NEW entries go at the END of the
+    ; jmptable so the existing offsets never move.
+    %jmptable ( main.xar_browse, main.xar_create_begin, main.xar_create_add, main.xar_create_end, main.xar_lz_decompress )
 
     const ubyte CHUNK      = 250       ; per-block raw size (<255 so f_read/f_write take one call)
     const ubyte MEMBER_MAX = 64        ; max members held for browse/create (bank-space bound)
@@ -116,8 +121,8 @@ main {
         trunc_flag = 0
         if not diskio.f_open(&arcname)
             return 0
-        ; verify magic "XAR1"
-        if diskio.f_read(&bufA, 4) != 4 or bufA[0] != $58 or bufA[1] != $41 or bufA[2] != $52 or bufA[3] != $31 {
+        ; verify magic: "XAR1" (RLE blocks) or "XAR2" (LZSA2 blocks) - the 4th byte is the block codec
+        if diskio.f_read(&bufA, 4) != 4 or bufA[0] != $58 or bufA[1] != $41 or bufA[2] != $52 or (bufA[3] != $31 and bufA[3] != $32) {
             diskio.f_close()
             return 0
         }
@@ -178,6 +183,9 @@ main {
             diskio.f_close()
             return 2
         }
+        ubyte codec = 0                    ; magic 4th byte: '1'=RLE, '2'=LZSA2
+        if bufA[3] == $32
+            codec = 1
         void rd8()                         ; member_count byte (already known)
         ; skip the payloads before the one we want
         if idx != 0 {
@@ -198,7 +206,10 @@ main {
                 break
             uword enc = rd16()
             void diskio.f_read(&bufA, enc)               ; compressed block (<= 253 bytes)
-            void compression.decode_rle(&bufA, &bufB, raw)   ; target @R0, maxsize @R1
+            if codec == 0
+                void compression.decode_rle(&bufA, &bufB, raw)      ; RLE: target @R0, maxsize @R1
+            else
+                void cx16.memory_decompress(&bufA, &bufB)           ; LZSA2 raw block -> ROM $FEED
             if not diskio.f_write(&bufB, raw) {
                 fail = 4
                 break
@@ -207,6 +218,19 @@ main {
         diskio.f_close_w()
         diskio.f_close()
         return fail
+    }
+
+    ; ---------- LZSA2 decompression primitive ----------
+    sub xar_lz_decompress(uword input @R0, uword output @R1) -> uword {
+        ; Decompress ONE raw LZSA2 block from `input` into `output` via the X16 ROM ($FEED).
+        ; Returns the end address (output + decompressed length), i.e. `output`+size.
+        ;
+        ; DECOMPRESS-ONLY: the X16 ROM has no LZSA2 compressor, so LZSA2 payloads must be produced
+        ; off-device (the desktop `lzsa` tool / the LZ16 pipeline - see tools/CPLZ-APPS). XAR CREATE
+        ; still uses RLE (compression.encode_rle); this is the standalone primitive for a future
+        ; LZSA2 EXTRACT path. `output` may be &cx16.VERA_DATA0 to stream straight into VRAM (the
+        ; return value is then meaningless - track the expected size yourself, as XCPLZ does).
+        return cx16.memory_decompress(input, output)
     }
 
     ; ---------- browser modal (self-contained UI-in-overlay) ----------
