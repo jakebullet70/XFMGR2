@@ -89,11 +89,26 @@
    Esc / Q     Cancel        U      Untag the highlighted entry (ShowAll)
 
 ------------------------------------------------------------------------------
+ File formats the viewer handles
+------------------------------------------------------------------------------
+   Text        ANY file opens as text. Non-printable bytes show as '.'.
+               Press H at any time for a raw hex dump, H again for text.
+   Hex         Any file, as a hex + ASCII dump (H toggles text <-> hex).
+   ZSM music   .zsm files (auto-detected) show a parsed header breakout -
+               version, tick rate, loop point, PCM, FM (YM) and PSG voices.
+               Press H for the raw hex bytes.
+   BMX image   .bmx bitmaps do NOT open here - V sends them full-screen to
+               the BMX image viewer; any key returns to the file list.
+
+   Big files that are too large for the pager fall back to the ROM X16 Edit.
+
+------------------------------------------------------------------------------
  In the text / hex viewer (V, and this help)
 ------------------------------------------------------------------------------
    PgDn/PgUp   Page          T  Top        B  Bottom
    H           Toggle hex / text
-   F           Find a string     N  Repeat the search
+   F           Find a string
+   N / Space    Repeat the search (find next)
    Q / Esc     Exit back to the file list
 
 ==============================================================================
