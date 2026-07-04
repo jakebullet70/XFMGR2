@@ -7,7 +7,8 @@ viewer**, a whole-disk **Find**, and a full set of file operations — copy, mov
 rename, delete, mkdir and prune — plus editing via the ROM-resident X16 Edit and
 switchable **colour themes**.
 
-<img width="802" height="633" alt="image" src="https://github.com/user-attachments/assets/817859a9-4dc9-4e4c-bc4a-76ed56dec40f" />
+<img width="642" height="507" alt="image" src="https://github.com/user-attachments/assets/c4acdb79-510c-4650-8d78-15b4cee30b13" />
+
 
 
 ## Features
@@ -45,52 +46,6 @@ switchable **colour themes**.
   the currently selected dir (`Alt-Q`).
 - **Input history** — every text prompt remembers recent entries (`↑` to pick),
   persisted per prompt-category under `hist/` on the drive root.
-
-
-## Build & run
-
-Requires **Java** (JRE) and the **64tass** assembler (v1.60); their paths are baked
-into `build.bat`, which drives the bundled `prog8c.jar` Prog8 compiler:
-
-```
-build.bat xfmgr.p8        # -> xfmgr.prg + the four .ovl overlays + xfsetup.prg
-```
-
-Building `xfmgr.p8` also compiles its companions:
-
-- **four banked overlays** — `tview.ovl` (text/hex viewer), `miscutil.ovl` (wildcard
-  rename / prune / history / copy pump / Find crawler), `uiutil.ovl` (dialogs, menu,
-  About) and `ximgview.ovl` (BMX image viewer). Each is a headerless `%output`
-  library loaded into a reserved HIRAM bank at runtime (the build renames prog8's
-  `.bin` to `.ovl`).
-- **`xfsetup.prg`** — the standalone colour-theme picker launched by `Alt-F10`.
-
-The build prints a memory-stats block (image size, BSS/slab, main-RAM high-water,
-free low RAM below `$9F00`, and the on-disk `.prg` size). Banked HIRAM is not counted —
-it holds the overlays and the dynamically-growing file arena.
-
-`run.bat` compiles, stages `xfmgr.prg`, all four `.ovl` overlays and `xfsetup.prg`
-into `run/xfmgr/`, copies the sample `.bmx` images into the browse root, and launches
-the emulator:
-
-```
-run.bat                   # build + stage + launch in the emulator
-```
-
-- It boots from the clean `run/` folder as the X16 host filesystem root (no
-  `AUTOBOOT.X16` there to hijack boot) via a small loader stub that `LOAD`+`RUN`s
-  `/XFMGR/XFMGR.PRG`. `run/` ships with sample folders and files to browse.
-- `-ram 512` pins the machine to 512 KB (banks 0–63) to exercise bank detection and
-  the "of 63 banks" About readout.
-- `-rtc` drives the live clock; `-joy1` enables joystick input.
-
-**Kernal R49 or newer is required.** XFMGR2 refuses to launch on older/pre-release
-ROMs because it depends on R49+ behavior — notably the X16 Edit ROM API used by the
-`E` (edit) command. It also detects the emulator at startup (`emudbg.is_emulator()`)
-to choose the environment-specific CTRL keys the emulator would otherwise swallow:
-**delete-tagged** is `Ctrl-X` in the emulator / `Ctrl-D` on hardware, and **Find** is
-`Ctrl-N` in the emulator / `Ctrl-F` on hardware.
-
 
 ## Keys / commands
 
@@ -248,6 +203,52 @@ returns the shell to the **launch** directory, while `Alt-Q` returns it to the
 (e.g. `hist/copy.his`, `hist/move.his`). Each ring keeps the most-recent entries,
 newest first; the folder is created on first save and missing files load silently as
 empty. The **colour theme** is stored in `xfmgr.cfg` next to the program.
+
+## Build & run
+
+Requires **Java** (JRE) and the **64tass** assembler (v1.60); their paths are baked
+into `build.bat`, which drives the bundled `prog8c.jar` Prog8 compiler:
+
+```
+build.bat xfmgr.p8        # -> xfmgr.prg + the four .ovl overlays + xfsetup.prg
+```
+
+Building `xfmgr.p8` also compiles its companions:
+
+- **four banked overlays** — `tview.ovl` (text/hex viewer), `miscutil.ovl` (wildcard
+  rename / prune / history / copy pump / Find crawler), `uiutil.ovl` (dialogs, menu,
+  About) and `ximgview.ovl` (BMX image viewer). Each is a headerless `%output`
+  library loaded into a reserved HIRAM bank at runtime (the build renames prog8's
+  `.bin` to `.ovl`).
+- **`xfsetup.prg`** — the standalone colour-theme picker launched by `Alt-F10`.
+
+The build prints a memory-stats block (image size, BSS/slab, main-RAM high-water,
+free low RAM below `$9F00`, and the on-disk `.prg` size). Banked HIRAM is not counted —
+it holds the overlays and the dynamically-growing file arena.
+
+`run.bat` compiles, stages `xfmgr.prg`, all four `.ovl` overlays and `xfsetup.prg`
+into `run/xfmgr/`, copies the sample `.bmx` images into the browse root, and launches
+the emulator:
+
+```
+run.bat                   # build + stage + launch in the emulator
+```
+
+- It boots from the clean `run/` folder as the X16 host filesystem root (no
+  `AUTOBOOT.X16` there to hijack boot) via a small loader stub that `LOAD`+`RUN`s
+  `/XFMGR/XFMGR.PRG`. `run/` ships with sample folders and files to browse.
+- `-ram 512` pins the machine to 512 KB (banks 0–63) to exercise bank detection and
+  the "of 63 banks" About readout.
+- `-rtc` drives the live clock; `-joy1` enables joystick input.
+
+**Kernal R49 or newer is required.** XFMGR2 refuses to launch on older/pre-release
+ROMs because it depends on R49+ behavior — notably the X16 Edit ROM API used by the
+`E` (edit) command. It also detects the emulator at startup (`emudbg.is_emulator()`)
+to choose the environment-specific CTRL keys the emulator would otherwise swallow:
+**delete-tagged** is `Ctrl-X` in the emulator / `Ctrl-D` on hardware, and **Find** is
+`Ctrl-N` in the emulator / `Ctrl-F` on hardware.
+
+
 
 ## Status & known limitations
 
