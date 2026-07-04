@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 156          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 157          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -1833,7 +1833,7 @@ main {
         for i in 0 to xfiles.sa_count-1 {
             cur++
             box_progress(cur, total)
-            xtree.build_path(xfiles.sa_dir[i], cm_sdir)     ; this file's source dir
+            xtree.build_path(xfiles.sa_get_dir(i), cm_sdir)     ; this file's source dir
             if strings.compare(cm_sdir, cm_ddir) == 0 {
                 failed++                                     ; same dir: skip
                 continue
@@ -3018,7 +3018,7 @@ main {
                 txt.chrout('>')
             else
                 txt.spc()
-            xtree.build_path(xfiles.sa_dir[i], sa_line)
+            xtree.build_path(xfiles.sa_get_dir(i), sa_line)
             xfiles.sa_name(i, namebuf)
             ubyte sl = lsb(strings.length(sa_line))     ; append the filename with a cap so
             if sl < 99                                  ; path+name can't overflow the 100-byte
@@ -3137,7 +3137,7 @@ main {
         ; land the dual-pane view on the file at sa_ index i: expand every ancestor of its dir,
         ; put the tree cursor on the dir, filter the file pane to the search spec (so the match
         ; shows), and drop focus into the file pane on the matching row.
-        ubyte dir = xfiles.sa_dir[i]
+        ubyte dir = xfiles.sa_get_dir(i)
         xfiles.sa_name(i, namebuf)                   ; the matched filename
         ubyte a = xtree.d_parent[dir]
         while a != xtree.NONE {

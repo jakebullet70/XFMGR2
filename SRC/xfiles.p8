@@ -60,11 +60,44 @@ xfiles {
     ; case-insensitive matching. "*" means "show everything".
     str spec_lc = "?" * 32
 
-    ; ShowAll: tagged files gathered from every logged directory
-    ubyte[GLOBAL_MAX] sa_bank
-    uword[GLOBAL_MAX] sa_off
-    ubyte[GLOBAL_MAX] sa_dir
+    ; ShowAll / Find: files gathered from every logged directory. The index lives in BANKED RAM to
+    ; keep ~1 KB of this cold data (only touched during a ShowAll/Find + its result browser) out of
+    ; main RAM. It shares bank 1 with xtree's dir-extras: those sit at $a000..~$a6f2, so this table
+    ; is parked at $b000, well clear. Per-entry 4-byte record:  +0 bank(ubyte) +1 off(uword) +3 dir(ubyte).
+    const ubyte SA_BANK = 1
+    const uword SA_BASE = $b000
+    const ubyte SA_REC  = 4
     ubyte sa_count
+
+    sub sa_rec(ubyte i) -> uword {
+        return SA_BASE + (i as uword) * SA_REC
+    }
+    sub sa_set(ubyte i, ubyte bank, uword off, ubyte dir) {
+        cx16.push_rambank(SA_BANK)
+        uword p = sa_rec(i)
+        @(p)     = bank
+        pokew(p + 1, off)
+        @(p + 3) = dir
+        cx16.pop_rambank()
+    }
+    sub sa_get_bank(ubyte i) -> ubyte {
+        cx16.push_rambank(SA_BANK)
+        ubyte v = @(sa_rec(i))
+        cx16.pop_rambank()
+        return v
+    }
+    sub sa_get_off(ubyte i) -> uword {
+        cx16.push_rambank(SA_BANK)
+        uword v = peekw(sa_rec(i) + 1)
+        cx16.pop_rambank()
+        return v
+    }
+    sub sa_get_dir(ubyte i) -> ubyte {
+        cx16.push_rambank(SA_BANK)
+        ubyte v = @(sa_rec(i) + 3)
+        cx16.pop_rambank()
+        return v
+    }
 
     sub reset() {
         prev_bank = 0
@@ -337,9 +370,7 @@ xfiles {
                 }
                 ubyte fl = xarena.far_peek(bank, off + 4)
                 if fl & REC_TAGGED != 0 and fl & REC_HIDDEN == 0 {
-                    sa_bank[sa_count] = bank
-                    sa_off[sa_count]  = off
-                    sa_dir[sa_count]  = d
+                    sa_set(sa_count, bank, off, d)
                     sa_count++
                 }
                 off += rl
@@ -372,9 +403,7 @@ xfiles {
                 if fl & REC_HIDDEN == 0 {
                     xarena.read_str(bank, off + 5, cmpa, NAME_RD_CAP)
                     if strings.pattern_match_nocase(cmpa, lc_pattern, false) {
-                        sa_bank[sa_count] = bank
-                        sa_off[sa_count]  = off
-                        sa_dir[sa_count]  = d
+                        sa_set(sa_count, bank, off, d)
                         sa_count++
                     }
                 }
@@ -385,23 +414,27 @@ xfiles {
     }
 
     sub sa_name(ubyte i, str dest) {
-        xarena.read_str(sa_bank[i], sa_off[i] + 5, dest, NAME_RD_CAP)
+        xarena.read_str(sa_get_bank(i), sa_get_off(i) + 5, dest, NAME_RD_CAP)
     }
 
     sub sa_blocks(ubyte i) -> uword {
-        cx16.push_rambank(sa_bank[i])
-        uword b = peekw(sa_off[i] + 1)
+        ubyte bank = sa_get_bank(i)
+        uword off  = sa_get_off(i)
+        cx16.push_rambank(bank)
+        uword b = peekw(off + 1)
         cx16.pop_rambank()
         return b
     }
 
     sub sa_untag(ubyte i) {
         ; untag a ShowAll entry and decrement its owning directory's tagged count
-        ubyte fl = xarena.far_peek(sa_bank[i], sa_off[i] + 4)
+        ubyte bank = sa_get_bank(i)
+        uword off  = sa_get_off(i)
+        ubyte fl = xarena.far_peek(bank, off + 4)
         if fl & REC_TAGGED != 0 {
             fl &= %11111110
-            xarena.far_poke(sa_bank[i], sa_off[i] + 4, fl)
-            xtree.dx_dec_tag(sa_dir[i])
+            xarena.far_poke(bank, off + 4, fl)
+            xtree.dx_dec_tag(sa_get_dir(i))
         }
     }
 
