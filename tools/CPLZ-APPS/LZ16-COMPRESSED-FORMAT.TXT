@@ -1,0 +1,117 @@
+QB64PE LZ16 Header Definition
+
+Type LZXHEADERTYPE
+ LZID As String * 4                    ' Always "LZ16"
+ OUTSIZE As String * 5                 ' Uncompressed File Size CBM Float
+ NUMCHUNKS As String * 5               ' Number of compressed chunks CBM Float
+ DEFAULTCHUNK_SIZE As _Unsigned Integer ' Uncompressed Size default chunk
+ LASTCHK_SIZE As _Unsigned Integer      ' Uncompressed Size, Last chunk in file 
+ OUTNAMELENGTH As _Unsigned _Byte       ' Length byte of uncompressed FileName
+End Type                                ' FileName immediately follows 
+                                        ' (NO zero byte terminator)
+
+QB64PE ChunkHeader Definition.
+Prepends each compressed chunk !
+
+Type CHKHEADER
+    CHKID As String * 2                      ' always "zc" (lower case!)
+    CHK_COMPRESSED_SIZE As _Unsigned Integer ' Size of COMPRESSED Chunk data 
+End Type                                     ' All but last chunk will 
+                                             ' uncompress to DEFAULTCHUNK_SIZE.
+                                             ' The very Last Chunk will 
+                                             ' uncompress to LASTCHK_SIZE
+
+   Compressed Chunk size vary's with actual data that is compressed.
+Ratio's can be from 70 or 80% to NO compression at all ! 
+
+Typical average is 20 to 50% compression ratio.    
+
+File will be 
+
+     LZ16 FILE HEADER
+     "Uncompressed source FileName" 
+
+FOR NUM CHUNKS
+--------------
+     CHUNK HEADER
+     COMPRESSED DATA
+
+     CHUNK HEADER
+     COMPRESSED DATA
+
+     CHUNK HEADER
+     COMPRESSED DATA
+
+     CHUNK HEADER
+     COMPRESSED DATA......................
+
+
+prog8 Code definitions when reading these constructs !
+
+zHDR {
+&ubyte[19] HdrBytes = $450
+
+        &ubyte[4] id = $450 ; The "LZ16" "magic" string.    
+     &float FullSize = $454 ; Size of Uncompressed Output
+      &float NumChks = $459 ; Number of Compressed Chunk
+ &uword Def_Chk_Size = $45E ; Uncompressed size of all chunks except Last
+&uword Last_Chk_Size = $460 ; Uncompressed size of Last chunk  
+   &ubyte OutNameLEN = $462 ; Len byte for Uncompressed File Name
+   &ubyte[255] OName = $463 ; The uncompressed filename (NOT zero term)
+
+The Header is always read in at address $450 on the X16.
+
+Chunk Header definition
+    &ubyte[2] id = $470  ; Should always be "zc"
+  &uword IN_SIZE = $472  ; The IN Chunk Size (Uncompressed Outsize is 
+                         ; Def_Chk_Size
+                         ; or Last_Chk_Size for the last compressed Chunk)
+
+ These chunks are compressed individually with the "lzsa" utility & each
+ is decompressed individually with memory_decompress in X16 ROM. 
+
+In case it's causing confusion that the Float fields are 
+a String type in the QB64 code.  That's because
+It's the only way to get a 5 byte field.  The
+Data actually stored there is a CBM Float !
+
+(Source excerpt for MAKECPLZ) 
+-----------------------------
+    TMP$ = ""
+    DoubleToC64Float (INSIZE)
+    For I = 0 To 4
+        ' FAC is 5 byte array where
+        ' C64 float output is stored
+        TMP$ = TMP$ + Chr$(FAC(I))
+    Next
+    OUTHEADER.OUTSIZE = TMP$
+    TMP$ = ""
+    DoubleToC64Float (NUM_CHUNKS)
+    For I = 0 To 4
+        TMP$ = TMP$ + Chr$(FAC(I))
+    Next
+    ' Dynamic string to fixed header string. 
+    OUTHEADER.NUMCHUNKS = TMP$
+    OUTHEADER.OUTNAMELENGTH = Len(OUTNAME$)
+
+    TMP1$ = GetFileName(IN_FILENAME$)
+
+    OUTFILE$ = TMP1$ + ".LZ16"
+    If _FileExists(OUTFILE$) Then Kill OUTFILE$
+    Locate 1, 1
+    Print " CREATING -> "; OUTFILE$
+    Print
+    Open OUTFILE$ For Binary As #12
+    Locate 2, 1
+    Print " WRITING HEADER.....";
+    Put 12, , OUTHEADER
+    Print " Storing FileName...."
+    For I = 1 To Len(OUTNAME$)
+        BYT = Asc(Mid$(OUTNAME$, I, 1))
+        Put 12, , BYT
+    Next
+
+
+
+
+

@@ -1,0 +1,82 @@
+$INCLUDEONCE
+
+FUNCTION GETFILESIZE~&(FiName$)
+DIM FNUM AS LONG
+DIM TMP AS _UNSIGNED LONG
+   IF _FILEEXISTS(FiName$) THEN
+      FNUM = FREEFILE
+      OPEN FiName$ FOR BINARY AS FNUM
+      TMP = LOF(FNUM)
+      CLOSE FNUM
+   ELSE
+      TMP = 0
+   END IF
+   GETFILESIZE = TMP 
+END FUNCTION
+
+Function GetFileExt$ (FName$)
+    Dim DOT$, TMP$, C$
+    Dim L As Integer
+    Dim I As Integer
+
+    DOT$ = "."
+    L = Len(FName$)
+    TMP$ = ""
+    If InStr(1, FName$, DOT$) = 0 Then GoTo Skipall
+    For I = L To 1 Step -1
+        C$ = Mid$(FName$, I, 1)
+        TMP$ = C$ + TMP$
+        If C$ = DOT$ Then Exit For
+    Next I
+    Skipall:
+    GetFileExt = TMP$
+End Function
+
+
+Function GetFileName$ (FName$)
+    Dim SLASH As String
+    Dim NAME$, TMP$, C$, T$
+    Dim CUT As Integer
+    Dim L As Integer
+    Dim I As Integer
+
+    $If WINDOWS Then
+        Slash = "\"
+    $Else
+        SLASH = "/"
+    $End If
+
+    TMP$ = ""
+    T$ = GetFileExt(FName$)
+    CUT = Len(T$)
+    L = Len(FName$)
+    NAME$ = Left$(FName$, L - CUT)
+    If InStr(1, NAME$, SLASH) = 0 Then
+        TMP$ = NAME$
+        GoTo Skiploop
+    End If
+    For I = Len(NAME$) To 1 Step -1
+        C$ = Mid$(NAME$, I, 1)
+        If C$ <> SLASH Then
+            TMP$ = C$ + TMP$
+        Else
+            Exit For
+        End If
+    Next I
+    Skiploop:
+    GetFileName = TMP$
+End Function
+
+Function GetFilePath$ (FName$)
+    Dim t1$, t2$
+    Dim L As Integer
+    t1$ = GetFileExt(FName$)
+    t2$ = GetFileName(FName$)
+    L = Len(FName$) - (Len(t1$) + Len(t2$))
+    If L > 0 Then
+        GetFilePath$ = Left$(FName$, L)
+    Else
+        GetFilePath$ = ""
+    End If
+End Function
+

@@ -1,0 +1,84 @@
+$INCLUDEONCE
+Dim Shared FAC(4) As _Unsigned _Byte
+
+' Function to convert C64 5-byte float to standard DOUBLE
+Function C64FloatToDouble## (bytes() As _Unsigned _Byte)
+    If UBound(bytes) <> 4 Then
+        Print "Input must be 5 bytes."
+        C64FloatToDouble## = 0
+        Exit Function
+    End If
+
+    Dim exponent As Integer
+    Dim mantissa As Double
+    Dim sign As Integer
+
+    ' Extract exponent (bias 129)
+    exponent = bytes(0) - 129
+
+    ' Extract sign from bit 7 of byte 1
+    sign = (bytes(1) And &H80) > 0
+    bytes(1) = bytes(1) And &H7F ' Clear sign bit
+
+    ' Reconstruct mantissa from remaining bytes
+    mantissa = bytes(1) / 128## + _
+               bytes(2) / 32768## + _
+               bytes(3) / 8388608## + _
+               bytes(4) / 2147483648##
+
+    ' Add implicit leading 1
+    mantissa = mantissa + 1
+
+    ' Apply exponent
+    mantissa = mantissa * (2 ^ exponent)
+
+    ' Apply sign
+    If sign Then mantissa = -mantissa
+
+    C64FloatToDouble## = mantissa
+End Function
+
+
+Sub DoubleToC64Float (value As Double)
+    Dim i As Integer
+    If value = 0 Then
+        For i = 0 To 4
+            FAC(i) = 0
+        Next
+        Exit Sub
+    End If
+
+    Dim sign As Integer
+    Dim exponent As Integer
+    Dim mantissa As Double
+
+    ' Handle sign
+    If value < 0 Then
+        sign = &H80
+        value = -value
+    Else
+        sign = 0
+    End If
+
+    ' Get base-2 exponent and mantissa
+    exponent = Int(Log(value) / Log(2))
+    mantissa = value / (2 ^ exponent)
+    exponent = exponent + 129 ' Add C64 bias
+
+    ' Remove implicit 1 from mantissa
+    mantissa = mantissa - 1
+
+    ' Scale mantissa to 32 bits
+    mantissa = mantissa * 2147483648##
+
+    Dim m As _Unsigned Long
+    m = mantissa
+
+    FAC(0) = exponent
+    FAC(1) = sign Or ((m And &HFF000000) \ &H1000000)
+    FAC(2) = (m And &H00FF0000) \ &H10000
+    FAC(3) = (m And &H0000FF00) \ &H100
+    FAC(4) = m And &H000000FF
+End Sub
+
+

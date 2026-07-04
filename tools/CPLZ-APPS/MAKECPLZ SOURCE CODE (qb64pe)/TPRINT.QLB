@@ -1,0 +1,251 @@
+$IncludeOnce
+$IncludeOnce
+
+Dim Shared CString(0 To 15) As String
+Dim Shared CString_AKA(0 To 15) As String
+Dim Shared HiColors(0 To 15) As _Unsigned Long
+
+CString(0) = "BLACK"
+CString(1) = "BLUE"
+CString(2) = "GREEN"
+CString(3) = "CYAN"
+CString(4) = "RED"
+CString(5) = "PURPLE"
+CString(6) = "ORANGE"
+CString(7) = "GRAY 1"
+CString(8) = "GRAY 2"
+CString(9) = "LIGHT BLUE"
+CString(10) = "LIGHT GREEN"
+CString(11) = "LIGHT CYAN"
+CString(12) = "LIGHT RED"
+CString(13) = "MAGENTA"
+CString(14) = "YELLOW"
+CString(15) = "WHITE"
+
+CString_AKA(0) = "BLK"
+CString_AKA(1) = "BLU"
+CString_AKA(2) = "GRN"
+CString_AKA(3) = "CYN"
+CString_AKA(4) = "RED"
+CString_AKA(5) = "PURP"
+CString_AKA(6) = "ORG"
+CString_AKA(7) = "LIGHT GRAY"
+CString_AKA(8) = "DARK GRAY"
+CString_AKA(9) = "LIGHT BLU"
+CString_AKA(10) = "LIGHT GRN"
+CString_AKA(11) = "LIGHT CYN"
+CString_AKA(12) = "LIGHT RED"
+CString_AKA(13) = "MAG"
+CString_AKA(14) = "YEL"
+CString_AKA(15) = "WHT"
+
+HiColors(0) = _RGB32(0, 0, 0, 255)
+HiColors(1) = _RGB32(0, 0, 220, 255)
+HiColors(2) = _RGB32(0, 155, 0, 255)
+HiColors(3) = _RGB32(0, 139, 139, 255)
+HiColors(4) = _RGB32(220, 20, 60, 255)
+HiColors(5) = _RGB32(139, 0, 139, 255)
+HiColors(6) = _RGB32(255, 140, 0, 255)
+HiColors(7) = _RGB32(205, 197, 194, 255)
+HiColors(8) = _RGB32(125, 125, 125, 255)
+HiColors(9) = _RGB32(30, 144, 255, 255)
+HiColors(10) = _RGB32(127, 255, 0, 255)
+HiColors(11) = _RGB32(0, 245, 245, 255)
+HiColors(12) = _RGB32(255, 43, 43, 255)
+HiColors(13) = _RGB32(255, 0, 255, 255)
+HiColors(14) = _RGB32(255, 255, 0, 255)
+HiColors(15) = _RGB32(255, 255, 255, 255)
+
+
+
+Sub ShowTime (Seconds As Double)
+    Static Secs As Integer
+    Static Mins As Integer
+    Static Hrs As _Unsigned Integer
+    Static LastSecs As Integer
+    Static LastMins As Integer
+    Static Fmt$
+    Mins = Seconds \ 60
+    Secs = Seconds - (Mins * 60)
+    Hrs = Mins \ 60
+    Mins = Mins - (Hrs * 60)
+    If Hrs < 10 Then
+        Fmt$ = "_0#"
+    Else
+        Fmt$ = "##"
+    End If
+    If Hrs > 99 Then Fmt$ = "###"
+    Print Using Fmt$; Hrs;
+    Print ":";
+    If Mins < 10 Then
+        Fmt$ = "_0#"
+    Else
+        Fmt$ = "##"
+    End If
+    Print Using Fmt$; Mins;
+    Print ":";
+    If Secs < 10 Then
+        Fmt$ = "_0#"
+    Else
+        Fmt$ = "##"
+    End If
+    Print Using Fmt$; Secs;
+End Sub
+
+
+
+Sub Tprint (TStr$)
+    Static ForeColor As _Unsigned Long
+    Static Inprog
+    Dim TMP$
+    Dim Token$
+    Dim T$
+    Dim c$
+    Dim I As Integer
+    Dim L As Integer
+    Dim InToken As Integer
+
+
+    If Not Inprog Then
+        ForeColor = 15
+        Inprog = -1
+    Else
+        Color ForeColor
+    End If
+    I = 1
+    L = Len(TStr$)
+    TMP$ = ""
+    Token$ = ""
+    InToken = 0
+    Do
+        GETNEXTCHAR:
+        c$ = Mid$(TStr$, I, 1)
+        If c$ = "{" And Not InToken Then InToken = -1: I = I + 1: GoTo GETNEXTCHAR
+
+        If Not InToken Then
+            Print c$;
+        End If
+
+        If (c$ <> "}") And InToken Then
+            Token$ = Token$ + c$
+        End If
+
+        If InToken And c$ = "}" Then
+            If Token$ = "" Then
+                T$ = Mid$(TStr$, I + 1, 1)
+                If T$ = "}" Then
+                    Print "}";
+                    InToken = 0
+                    I = I + 1: GoTo nextloop
+                End If
+            End If
+
+            If IsNum(Token$) Then
+                Print Chr$(Val(Token$));
+                Token$ = "": InToken = 0
+                GoTo nextloop
+            End If
+
+            If CNum(Token$) <> -1 Then
+                If _PixelSize < 4 Then
+                    ForeColor = CNum(Token$)
+                Else
+                    ForeColor = HiColors(CNum(Token$))
+                End If
+                Color ForeColor
+                InToken = 0
+                Token$ = ""
+                GoTo nextloop
+            End If
+
+            If Token$ = "{" Then
+                Print "{";
+                InToken = 0
+                Token$ = ""
+            Else
+                Color 4
+                Print "{"; Token$; "}";
+                Color ForeColor
+                InToken = 0
+                Token$ = ""
+            End If
+        End If
+        nextloop:
+        I = I + 1
+    Loop Until I > L
+    Exit Sub
+End Sub
+
+Function CNum (Token$)
+    Dim c$
+    Dim I As Integer
+
+    c$ = UCase$(Token$)
+    For I = 0 To 15
+        If c$ = CString(I) Or c$ = CString_AKA(I) Then
+            CNum = I
+            Exit Function
+        End If
+    Next
+    CNum = -1
+End Function
+
+Function IsNum% (PassedText As String)
+    Dim text$, temp$
+    Dim special$
+    Dim r$
+    Dim r2$
+    Dim r3$
+    Dim check$
+    Dim I As Integer
+
+    text$ = PassedText
+    special$ = UCase$(Left$(text$, 2))
+    Select Case special$
+        Case "&H", "&B", "&O"
+            'check for symbols on right side of value
+            r3$ = Right$(text$, 3)
+            Select Case r3$
+                Case "~&&", "~%%", "~%&" 'unsigned int64, unsigned byte, unsigned offset
+                    text$ = Left$(text$, Len(text$) - 3)
+                Case Else
+                    r2$ = Right$(text$, 2)
+                    Select Case r2$
+                        Case "~&", "##", "%&", "%%", "~%", "&&" 'unsigned long, float, offset, byte, unsigned integer, int64
+                            text$ = Left$(text$, Len(text$) - 2)
+                        Case Else
+                            r$ = Right$(text$, 1)
+                            Select Case r$
+                                Case "&", "#", "%", "!" 'long, double, integer, single
+                                    text$ = Left$(text$, Len(text$) - 1)
+                            End Select
+                    End Select
+            End Select
+            check$ = "0123456789ABCDEF"
+            If special$ = "&O" Then check$ = "01234567"
+            If special$ = "&B" Then check$ = "01"
+            temp$ = Mid$(UCase$(text$), 2)
+            For I = 1 To Len(temp$)
+                If InStr(check$, Mid$(temp$, I, 1)) = 0 Then Exit For
+            Next
+            If I <= Len(temp$) Then IsNum = -1
+        Case Else
+            If _Trim$(Str$(Val(text$))) = text$ Then IsNum = -1
+    End Select
+End Function
+
+Sub RAND_COLOR_PRINT (S$, USEUPPER As Integer)
+    Dim C As Integer
+    Dim I As Integer
+    Dim CS$
+    CS$ = S$
+    If USEUPPER Then CS$ = UCase$(S$)
+    Randomize Timer
+    For I = 1 To Len(CS$)
+        C = Int(Rnd(1) * 15) + 1
+        Color C
+        Print Mid$(CS$, I, 1);
+    Next
+End Sub
+
+
