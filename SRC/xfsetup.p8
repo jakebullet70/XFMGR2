@@ -35,6 +35,11 @@ main {
     ubyte saved_mode
     ubyte sel                                ; currently highlighted theme id (themes.FIRST..LAST)
 
+    ; every input-history category XFMGR writes as hist/<cat>.his (current + legacy move/copy,
+    ; which merged into "copymove"). "Clear history" deletes each of these from /xfmgr/hist/.
+    str[8] HIST_CATS = ["copymove", "mkdir", "rename", "tagspec", "find", "filespec", "move", "copy"]
+    ubyte[20] fnbuf                          ; "<cat>.his" scratch for the delete loop
+
     sub start() {
         saved_mode, cx16.r0L, cx16.r0H = cx16.get_screen_mode()
         cx16.set_screen_mode(SCREEN_MODE)
@@ -67,6 +72,7 @@ main {
                     themes.cfg_write(sel)
                     break
                 }
+                'h', 'H' -> ask_clear_history()      ; delete the saved input-history files
                 27 -> break                         ; ESC: cancel (no save)
                 else -> { }
             }
@@ -86,9 +92,45 @@ main {
         txt.plot(BX0 + 3, BY0 + 2)
         txt.print("Colour theme:")
         txt.plot(BX0 + 2, BY1 - 2)
-        txt.print(petscii:"\x9eUp/Dn\x05 select")
+        txt.print(petscii:"\x9eH\x05 Clear history")
         txt.plot(BX0 + 2, BY1 - 1)
-        txt.print(petscii:"\x9e←┘\x05 save  \x9eESC\x05 cancel")
+        txt.print(petscii:"\x9e←┘\x05 Save  \x9eESC\x05 Cancel")
+    }
+
+    sub ask_clear_history() {
+        ; delete every hist/<cat>.his file right away (no confirm), flash the result on the box row
+        ; above the hints for ~2s, then blank it. refresh() repaints the theme rows, not this line.
+        clear_history()
+        clear_msg_row()
+        txt.plot(BX0 + 2, BY1 - 4)
+        txt.print("History cleared")
+        sys.wait(120)                               ; ~2 seconds at 60 Hz
+        clear_msg_row()
+    }
+
+    sub clear_msg_row() {
+        ; blank the message row (BY1-4) inside the box, in the current bg colour
+        txt.color2(shared.CLR_FG, shared.CLR_BG)
+        txt.plot(BX0 + 1, BY1 - 4)
+        ubyte c
+        for c in BX0 + 1 to BX1 - 1
+            txt.spc()
+    }
+
+    sub clear_history() {
+        ; delete each hist/<cat>.his in the program's /xfmgr/hist/ folder. Save + restore the cwd
+        ; (curdir() is a transient buffer, so copy it out first); a missing hist/ just leaves cwd
+        ; put and the deletes miss harmlessly.
+        ubyte[80] savedir
+        void strings.copy(diskio.curdir(), savedir)
+        diskio.chdir("hist")
+        ubyte i
+        for i in 0 to len(HIST_CATS) - 1 {
+            void strings.copy(HIST_CATS[i], fnbuf)
+            void strings.append(fnbuf, ".his")
+            diskio.delete(fnbuf)
+        }
+        diskio.chdir(savedir)
     }
 
     sub refresh() {

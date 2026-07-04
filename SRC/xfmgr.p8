@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 125          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 138          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -487,6 +487,25 @@ main {
     sub confirm(str question, bool default_yes) -> bool {
         ; bracketed Yes/No confirmation box; default_yes picks which side ENTER selects.
         return ask_yn(question, default_yes)
+    }
+
+    sub confirm_enter(str question) -> bool {
+        ; ENTER-or-ESC confirm (no Yes/No pair): ENTER accepts, ESC cancels, other keys ignored.
+        ; Reuses the input prompt frame, so the box + "←┘ OK  ESC Cancel" hints already fit.
+        input_frame(question, false, false)
+        repeat {
+            g_key = wait_key()
+            when g_key {
+                13 -> {
+                    box_close()
+                    return true
+                }
+                27, 3 -> {
+                    box_close()
+                    return false
+                }
+            }
+        }
     }
 
     sub confirm_quit() -> bool {
@@ -1195,6 +1214,9 @@ main {
             clamp_file_cursor()
             if xfiles.ft_count == 0                 ; last file gone -> hop back to the dir pane
                 change_focus(FOCUS_TREE)
+            draw_status()                           ; repaint the panes FIRST so the file is
+            draw_tree()                             ; visibly gone before the "done" banner
+            draw_files()                            ; (the banner box only covers DIVBOT..SCR_BOT)
             banner_delete(1)                        ; result banner, like copy/move
         }
     }
@@ -1247,7 +1269,7 @@ main {
 
     sub op_mkdir() {
         ; create a new subdirectory inside the selected (tree) directory
-        if not input_line("New dir:", inputbuf, 49, "mkdir", false)
+        if not input_line("New dir:", inputbuf, 49, "mkdir", false, false)
             return
         xtree.build_path(cur_dir, pathbuf)
         diskio.chdir(pathbuf)
@@ -1271,7 +1293,7 @@ main {
             flash("can't prune the drive root")
             return
         }
-        if not input_line("PRUNE - type 'prune' to confirm:", inputbuf, 49, "", false)
+        if not input_line("PRUNE - type 'prune' to confirm:", inputbuf, 49, "", false, false)
             return
         if strings.compare(inputbuf, "prune") != 0 {
             flash("not confirmed - prune cancelled")
@@ -1355,7 +1377,7 @@ main {
             flash("can't rename the drive root")
             return
         }
-        if not input_line("Rename dir to:", inputbuf, 49, "rename", false)
+        if not input_line("Rename dir to:", inputbuf, 49, "rename", false, false)
             return
         if strings.length(inputbuf) == 0
             return
@@ -1397,7 +1419,7 @@ main {
     sub op_rename() {
         if xfiles.ft_count == 0
             return
-        if not input_line("Rename to (* ? ok):", inputbuf, 49, "rename", false)
+        if not input_line("Rename to (* ? ok):", inputbuf, 49, "rename", false, false)
             return
         ; Capture the old name AFTER input_line: namebuf is shared scratch that the file-list
         ; redraw (draw_file_row) overwrites with the LAST file's name, and input_line repaints the
@@ -1623,10 +1645,10 @@ main {
         }
 
         if is_move {
-            if not input_line("Move to dir:", inputbuf, 79, "move", true)
+            if not input_line("Move to dir:", inputbuf, 79, "copymove", true, false)   ; shared C/M history
                 return
         } else {
-            if not input_line("Copy to dir:", inputbuf, 79, "copy", true)
+            if not input_line("Copy to dir:", inputbuf, 79, "copymove", true, false)   ; shared C/M history
                 return
         }
 
@@ -1661,12 +1683,18 @@ main {
         uword skipped = 0
         cm_fail = 0
         ow_mode = 0                             ; ask on the first overwrite conflict this batch
+        uword total = 1                         ; files we'll actually touch (for "n of N")
+        if use_tags
+            total = xtree.dx_tag(cur_dir)
+        uword cur = 0
         ubyte i
         for i in 0 to xfiles.ft_count-1 {
             if use_tags and not xfiles.is_tagged(i)
                 continue
             if not use_tags and i != file_cursor
                 continue
+            cur++
+            box_progress(cur, total)
             xfiles.get_name(i, namebuf)
             when copy_one(namebuf) {
                 1 -> {
@@ -1715,11 +1743,11 @@ main {
     }
 
     sub op_filespec() {
-        ; set the file-display wildcard (e.g. *.prg). ENTER on a blank line inserts *.* (= all).
-        if not input_line(petscii:"File spec (eg *.prg, ←┘ = *.*):", inputbuf, 31, "filespec", false)
+        ; set the file-display wildcard (e.g. *.prg). ENTER on a blank line inserts * (= show all).
+        if not input_line(petscii:"File spec (eg *.prg, ←┘ = *):", inputbuf, 31, "filespec", false, true)
             return
         if strings.length(inputbuf) == 0
-            void strings.copy("*.*", inputbuf)      ; blank ENTER -> DOS-style show-all
+            void strings.copy("*", inputbuf)        ; blank ENTER -> show all
         xfiles.set_spec(inputbuf)
         void xfiles.build_index(cur_dir)
         file_top = 0
@@ -1728,7 +1756,7 @@ main {
 
     sub op_tag_by_spec() {
         ; Ctrl-S: tag every visible file in the current dir matching a wildcard
-        if not input_line("Tag matching (eg *.bak):", inputbuf, 31, "tagspec", false)
+        if not input_line("Tag matching (eg *.bak):", inputbuf, 31, "tagspec", false, false)
             return
         void strings.copy(inputbuf, cm_dst)         ; lowercase a copy for nocase match
         void strings.lower(cm_dst)
@@ -1761,10 +1789,10 @@ main {
             return
         }
         if is_move {
-            if not input_line("Move tagged to:", inputbuf, 79, "move", true)
+            if not input_line("Move tagged to:", inputbuf, 79, "copymove", true, false)   ; shared C/M history
                 return
         } else {
-            if not input_line("Copy tagged to:", inputbuf, 79, "copy", true)
+            if not input_line("Copy tagged to:", inputbuf, 79, "copymove", true, false)   ; shared C/M history
                 return
         }
         ; resolve dest dir (absolute as typed, else relative to the drive root)
@@ -1789,8 +1817,12 @@ main {
         uword skipped = 0
         cm_fail = 0
         ow_mode = 0                             ; ask on the first overwrite conflict this batch
+        uword total = xfiles.sa_count
+        uword cur = 0
         ubyte i
         for i in 0 to xfiles.sa_count-1 {
+            cur++
+            box_progress(cur, total)
             xtree.build_path(xfiles.sa_dir[i], cm_sdir)     ; this file's source dir
             if strings.compare(cm_sdir, cm_ddir) == 0 {
                 failed++                                     ; same dir: skip
@@ -1935,8 +1967,8 @@ main {
     sub op_setup() {
         ; Alt-F10: open the standalone colour-theme setup. It is a separate PRG, so launching it
         ; QUITS XFMGR - all logged folders and tags are lost. On save it relaunches XFMGR, which
-        ; re-reads and applies the chosen theme. Confirm (default No) before the destructive hop.
-        if confirm("Setup? loses logged dirs + tags", false) {
+        ; re-reads and applies the chosen theme. ENTER = go, ESC = cancel (no No option).
+        if confirm_enter("Setup? loses logged dirs + tags") {
             setup_exit = true
         }
     }
@@ -1949,7 +1981,7 @@ main {
             return
         xfiles.get_name(file_cursor, namebuf)
         box_compose_name("Run ", namebuf, "? exits XFMGR")
-        if confirm(cm_dst, true) {                  ; default Yes
+        if confirm_enter(cm_dst) {                  ; ENTER = run, ESC = cancel (no No option)
             xtree.build_path(cur_dir, pathbuf)
             run_exit = true
         }
@@ -2185,6 +2217,17 @@ main {
         cm_dst[l] = 0
     }
 
+    sub box_progress(uword cur, uword total) {
+        ; live "(n of N)" counter on CMDROW2 during a copy/move batch. cur only grows and total is
+        ; fixed, so the line only lengthens - no stale trailing digits to clear.
+        void strings.copy("(", cm_dst)
+        box_append_uw(cur)
+        void strings.append(cm_dst, " of ")
+        box_append_uw(total)
+        void strings.append(cm_dst, ")")
+        box_left(CMDROW2, cm_dst)
+    }
+
     ; ---- thin wrappers over the uiutil overlay dialogs (bank 4) ----
     ; Each opens the bottom box (frame plumbing stays here), JSRFARs into uiutil to draw +
     ; interact, then closes. box_compose_name / box_append_uw stay in main (callers build the
@@ -2320,13 +2363,13 @@ main {
         const ubyte BIW = PICK_X1 - PICK_X0 - 1         ; box interior width
         if ui_ok {
             ui_draw_box(PICK_X0, PICK_Y0, PICK_X1, PICK_Y1)
-            ui_box_header(PICK_X0, PICK_X1, PICK_Y0, " Pick a directory ")
+            ui_box_header(PICK_X0, PICK_X1, PICK_Y0, " Pick a dir ")
         }
         ; footer (42 visible chars) as ONE embedded-colour string instead of 8 colour + 8
         ; print calls. In-string PETSCII codes: \x9e = shared.CLR_ACCENT (yellow), \x05 = shared.CLR_FG
         ; (white); ←┘ is the ENTER glyph. Ends white so the list rows below inherit shared.CLR_FG.
         txt.plot(PICK_X0 + 1 + (BIW - 42) / 2, PICK_Y1)
-        txt.print(petscii:"\x9e >\x05Expand \x9e<\x05Collapse  \x9e←┘\x05Select  \x9eEsc\x05 Cancel ")
+        txt.print(petscii:"\x9e +\x05Expand \x9e-\x05Collapse  \x9e←┘\x05Select  \x9eEsc\x05 Cancel ")
         pick_draw_all(cur, top)                         ; initial full list
         repeat {
             g_key = wait_key()
@@ -2456,11 +2499,13 @@ main {
         prompt_hint(usehist, dirpick)
     }
 
-    sub input_line(str prompt, str dest, ubyte maxlen, str histname, bool dirpick) -> bool {
+    sub input_line(str prompt, str dest, ubyte maxlen, str histname, bool dirpick, bool allow_empty) -> bool {
         ; a small line editor: Left/Right move, Home jumps to start, Backspace deletes
         ; the char to the left, printable keys insert at the cursor, Up recalls history,
         ; F2 (when dirpick) picks a directory from the tree, Enter accepts, Esc cancels.
-        ; `histname` selects the history category file.
+        ; `histname` selects the history category file. `allow_empty` makes a blank ENTER accept
+        ; (return true with an empty dest) instead of behaving like Cancel - the caller then supplies
+        ; its own default (e.g. filespec's "*"). ESC always returns false.
         bool usehist = misc_ok and strings.length(histname) != 0    ; no overlay / empty histname -> no history UI
         if usehist
             hist_count = hist_load(histname, &xtree.base_path)      ; banked ring; cache the returned count
@@ -2474,14 +2519,14 @@ main {
         repeat {
             g_key = wait_key()
             when g_key {
-                13 -> {                      ; Enter -> accept (if non-empty)
+                13 -> {                      ; Enter -> accept (non-empty, or empty when allow_empty)
                     dest[n] = 0
                     if n != 0 and usehist {
                         hist_count = hist_store(dest)
                         hist_save(histname, &xtree.base_path)
                     }
                     box_close()
-                    return n != 0
+                    return n != 0 or allow_empty
                 }
                 27, 3 -> {                    ; ESC / STOP -> cancel
                     box_close()
@@ -2845,12 +2890,29 @@ main {
             flash("Find needs the misc overlay")
             return
         }
-        if not input_line("Find (eg *.prg):", inputbuf, 31, "find", false)
+        if not input_line("Find (eg *.prg):", inputbuf, 31, "find", false, false)
             return
         if inputbuf[0] == 0
             return
         void strings.copy(inputbuf, find_lc)        ; lowercase a copy for nocase matching
         void strings.lower(find_lc)
+
+        ; Remember where the user is browsing: the reset below rebuilds the tree from scratch
+        ; (invalidating every node id), so we re-anchor on this path afterwards for a clean
+        ; return on ESC / "no matches". (pathbuf and cm_ddir are free during a Find.)
+        xtree.build_path(cur_dir, pathbuf)
+        void strings.copy(xfiles.spec_lc, cm_ddir)  ; and the active FileSpec (reset() clears it)
+
+        ; Fresh slate for EACH Find - a whole-disk search that stands on its own. Without this
+        ; the match-dirs logged by a PRIOR Find linger in the tree, so dir_count is already at
+        ; the 128-dir cap and the very first hit trips "(partial - capped)" even when this run
+        ; matched only a handful of files. Clearing here also reclaims the arena the last crawl
+        ; used, so repeated Finds don't slowly exhaust it.
+        xarena.reset()
+        xfiles.reset()
+        xtree.init()                                ; root (node 0) = the drive root "/"
+        void xscan.scan_dir(0)                      ; log the drive root
+        xtree.d_flags[0] |= xtree.FL_EXPANDED
 
         box_open()                                  ; "Searching..." over the bottom rows
         box_left(CMDROW1, "Searching...")
@@ -2873,6 +2935,17 @@ main {
         xfiles.collect_matching(find_lc)
         if xfiles.sa_count >= xfiles.GLOBAL_MAX
             partial |= 4                            ; results capped at GLOBAL_MAX
+
+        ; re-anchor the dual-pane on the folder the user came from (recreated by open_path as it
+        ; descends the saved path). If it matched nothing it isn't a crawl hit, so open_path lands
+        ; on its deepest logged ancestor - still a sane spot rather than a stale/invalid node.
+        tree_top = 0
+        ubyte back = xscan.open_path(pathbuf)
+        void xscan.scan_dir(back)
+        xtree.rebuild_visible()
+        set_tree_cursor_to(back)
+        xfiles.set_spec(cm_ddir)                    ; restore the pre-Find FileSpec before reindexing
+        select_dir(back)
 
         if xfiles.sa_count == 0 {
             if partial != 0

@@ -85,7 +85,25 @@ themes {
         ; BEFORE any other diskio call.
         ubyte id = 1
         void strings.copy(diskio.curdir(), savedir)
-        diskio.chdir("xfmgr")               ; lowercase: petscii a-z -> $41-5A, the bytes the FS matches
+        diskio.chdir("/xfmgr")               ; lowercase: petscii a-z -> $41-5A, the bytes the FS matches
+        ; ===== start DEBUG: only when the cfg is MISSING - dump vars + freeze so they can be read =====
+        ; diskio.exists() opens the file with f_open - the SAME read-channel traffic the production
+        ; path avoids (it corrupts the following UI draw on an ABSENT file). We halt right after, so
+        ; the corruption never reaches the screen: this is a diagnostic to eyeball WHY the cfg isn't
+        ; found from inside /xfmgr/. If it IS found, skip the probe entirely and load as normal.
+        ; Remove this whole block (and the textio import) when done.
+        if not diskio.exists(CFG_NAME) {
+            txt.print("\ncfg_read DEBUG - cfg NOT found\ncaller cwd: ")
+            txt.print(savedir)
+            txt.print("\nhere: ")
+            txt.print(diskio.curdir())      ; should be the program's /xfmgr/ folder
+            txt.print("\nlooked for: ")
+            txt.print(CFG_NAME)
+            txt.print("\n-- halted --")
+            repeat {
+                ; STOP: freeze here so the debug lines stay on screen (reset the emulator to exit)
+            }
+        }
         ; ===== end DEBUG =====
         uword endaddr = diskio.load_raw(CFG_NAME, &cfg_line)
         if endaddr != 0 {

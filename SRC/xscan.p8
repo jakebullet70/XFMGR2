@@ -60,7 +60,45 @@ xscan {
         diskio.lf_end_list()
 
         xtree.d_flags[dir_idx] |= xtree.FL_SCANNED
+
+        ; One-level look-ahead: for each subdir we just added, peek whether IT holds a subdir and
+        ; flag it FL_HASKIDS so its "+" marker shows without the user opening it first. Each peek
+        ; opens its OWN listing, so this can only run now that the parent listing is closed (diskio
+        ; allows one listing at a time). Sets a hint flag only - the child stays UNSCANNED, so
+        ; entering it later still does a real scan.
+        ubyte ch = xtree.d_first_child[dir_idx]
+        bool peeked = ch != xtree.NONE
+        while ch != xtree.NONE {
+            if dir_has_subdir(ch)
+                xtree.d_flags[ch] |= xtree.FL_HASKIDS
+            ch = xtree.d_next_sibling[ch]
+        }
+        if peeked {
+            xtree.build_path(dir_idx, path)         ; the peeks chdir'd into children; restore the
+            diskio.chdir(path)                      ; cwd to the scanned dir (scan_dir's postcondition)
+        }
         return true
+    }
+
+    sub dir_has_subdir(ubyte dir_idx) -> bool {
+        ; true if the directory node contains at least one subdirectory. A cheap probe for
+        ; scan_dir's look-ahead: opens its own listing (the caller must have none open) and
+        ; early-exits on the first "dir" entry. Reuses `path` - the parent scan is done with it.
+        xtree.build_path(dir_idx, path)
+        diskio.chdir(path)
+        if not diskio.lf_start_list("*")
+            return false
+        bool found = false
+        while diskio.lf_next_entry() {
+            if diskio.list_filename[0] == '.'
+                continue                        ; skip . / .. / hidden
+            if diskio.list_filetype == "dir" {
+                found = true
+                break
+            }
+        }
+        diskio.lf_end_list()
+        return found
     }
 
     sub open_path(str fullpath) -> ubyte {
