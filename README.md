@@ -2,9 +2,10 @@
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
-on the right, with file **tagging**, a built-in **viewer**, and a full set of
-file operations — copy, move, rename, delete, mkdir and prune — plus editing
-via the ROM-resident X16 Edit.
+on the right, with file **tagging**, a banked **text/hex viewer**, a **BMX image
+viewer**, a whole-disk **Find**, and a full set of file operations — copy, move,
+rename, delete, mkdir and prune — plus editing via the ROM-resident X16 Edit and
+switchable **colour themes**.
 
 <img width="802" height="633" alt="image" src="https://github.com/user-attachments/assets/817859a9-4dc9-4e4c-bc4a-76ed56dec40f" />
 
@@ -20,6 +21,9 @@ via the ROM-resident X16 Edit.
 - **Cross-directory tagging** — tags persist across every logged directory. The
   **ShowAll** view (`Ctrl-G`) collects every tagged file from all logged dirs into a
   single scrollable list, and global copy/move/delete act on that whole set.
+- **Find file** (`Ctrl-F`) — a whole-disk crawler that walks the tree from the root,
+  logs only the directories that contain a match, and shows every hit in a flat modal
+  list you can jump straight into.
 - **Sorting** — cycle files by name → extension → size (`Alt-S`).
 - **File operations** — copy (`C`/`Ctrl-C`), move (`M`/`Ctrl-O`), rename with `*`/`?`
   wildcards (`R`), delete one (`D`) or all tagged (`Ctrl-X`/`Ctrl-D`). Copy/move
@@ -27,10 +31,15 @@ via the ROM-resident X16 Edit.
   tree (`F2`).
 - **Directory operations** — make a subdirectory (`K`) and **prune** (`P`), a guarded
   recursive delete of a directory and everything under it.
-- **View** (`V`) — full-screen text/hex viewer with in-file search, for files up to ~60 KB.
+- **View** (`V`) — a `.bmx` bitmap opens full-screen in the BMX **image viewer**; any
+  other file opens in the full-screen **text/hex viewer** with in-file search. If the
+  viewer overlays are missing, `V` falls back to X16 Edit.
 - **Edit** (`E`) — hands the file off to the ROM-resident **X16 Edit**, then returns.
 - **Execute-and-return** (`Alt-X`) — quit XFMGR and chain-run the selected program.
 - **File-spec filter** (`F`) — restrict the file list to a wildcard (e.g. `*.prg`).
+- **Colour themes** (`Alt-F10`) — hands off to a standalone theme picker (`XFSETUP.PRG`)
+  that remaps the palette and saves the choice to `xfmgr.cfg`; XFMGR reapplies it at
+  startup.
 - **Root-anchored startup** — the tree is anchored at the drive root; the folder you
   launched from is pre-selected. Quit returns the shell to the launch dir (`Q`) or to
   the currently selected dir (`Alt-Q`).
@@ -44,21 +53,33 @@ Requires **Java** (JRE) and the **64tass** assembler (v1.60); their paths are ba
 into `build.bat`, which drives the bundled `prog8c.jar` Prog8 compiler:
 
 ```
-build.bat xfmgr.p8        # -> xfmgr.prg   (compiles SRC\xfmgr.p8)
+build.bat xfmgr.p8        # -> xfmgr.prg + the four .ovl overlays + xfsetup.prg
 ```
+
+Building `xfmgr.p8` also compiles its companions:
+
+- **four banked overlays** — `tview.ovl` (text/hex viewer), `miscutil.ovl` (wildcard
+  rename / prune / history / copy pump / Find crawler), `uiutil.ovl` (dialogs, menu,
+  About) and `ximgview.ovl` (BMX image viewer). Each is a headerless `%output`
+  library loaded into a reserved HIRAM bank at runtime (the build renames prog8's
+  `.bin` to `.ovl`).
+- **`xfsetup.prg`** — the standalone colour-theme picker launched by `Alt-F10`.
 
 The build prints a memory-stats block (image size, BSS/slab, main-RAM high-water,
-free low RAM below `$9F00`, and the on-disk `.prg` size).
+free low RAM below `$9F00`, and the on-disk `.prg` size). Banked HIRAM is not counted —
+it holds the overlays and the dynamically-growing file arena.
 
-Run in the emulator:
+`run.bat` compiles, stages `xfmgr.prg`, all four `.ovl` overlays and `xfsetup.prg`
+into `run/xfmgr/`, copies the sample `.bmx` images into the browse root, and launches
+the emulator:
 
 ```
-x16emu.exe -fsroot run/ -ram 512 -prg xfmgr.prg -run -rtc -joy1
+run.bat                   # build + stage + launch in the emulator
 ```
 
-- `-fsroot run/` uses the clean `run/` folder as the X16 host filesystem so the
-  project-root `AUTOBOOT.X16` dev menu doesn't hijack boot; `run/` ships with a few
-  sample folders and files to browse.
+- It boots from the clean `run/` folder as the X16 host filesystem root (no
+  `AUTOBOOT.X16` there to hijack boot) via a small loader stub that `LOAD`+`RUN`s
+  `/XFMGR/XFMGR.PRG`. `run/` ships with sample folders and files to browse.
 - `-ram 512` pins the machine to 512 KB (banks 0–63) to exercise bank detection and
   the "of 63 banks" About readout.
 - `-rtc` drives the live clock; `-joy1` enables joystick input.
@@ -66,8 +87,9 @@ x16emu.exe -fsroot run/ -ram 512 -prg xfmgr.prg -run -rtc -joy1
 **Kernal R49 or newer is required.** XFMGR2 refuses to launch on older/pre-release
 ROMs because it depends on R49+ behavior — notably the X16 Edit ROM API used by the
 `E` (edit) command. It also detects the emulator at startup (`emudbg.is_emulator()`)
-to choose the delete-tagged key: **Ctrl-X** in the emulator (which swallows Ctrl-D),
-**Ctrl-D** on real hardware.
+to choose the environment-specific CTRL keys the emulator would otherwise swallow:
+**delete-tagged** is `Ctrl-X` in the emulator / `Ctrl-D` on hardware, and **Find** is
+`Ctrl-N` in the emulator / `Ctrl-F` on hardware.
 
 
 ## Keys / commands
@@ -105,7 +127,7 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 |---|---|
 | `T` | Tag current file, then advance |
 | `U` | Untag current file, then advance |
-| `V` | View file (full-screen text/hex viewer) |
+| `V` | View file — `.bmx` in the image viewer, otherwise the text/hex viewer |
 | `E` | Edit file in the ROM X16 Edit, then return |
 | `D` | Delete current file (confirm) |
 | `R` | Rename (supports `*` / `?` wildcards) |
@@ -122,6 +144,7 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `Ctrl-I` | Invert tags in this directory |
 | `Ctrl-W` | Tag files matching a wildcard |
 | `Ctrl-G` | **ShowAll** — modal list of every tagged file across all logged dirs |
+| `Ctrl-F` / `Ctrl-N` | **Find** files across the whole disk (`N` in emulator, `F` on hardware) |
 | `Ctrl-C` | Copy all tagged files (from all dirs) to one destination |
 | `Ctrl-O` | Move all tagged files (from all dirs) to one destination |
 | `Ctrl-X` / `Ctrl-D` | Delete all tagged files in this directory (`X` in emulator, `D` on hardware) |
@@ -134,6 +157,7 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `Alt-X` | Execute — quit XFMGR and chain-run the selected program |
 | `Alt-Q` | Quit, leaving the shell in the **currently selected** directory |
 | `Alt-F3` | Re-log the current context (sub-folders in the DIR pane, files in the FILE pane) |
+| `Alt-F10` | Open the colour-theme setup (quits to the standalone `XFSETUP.PRG`) |
 
 ### Global
 
@@ -141,7 +165,7 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 |-----|-----------------------------------------------------|
 | `Q` | Quit, leaving the shell in the **launch** directory |
 
-### In text prompts (Copy, Move, Rename, Mkdir, Filespec, Tag-spec)
+### In text prompts (Copy, Move, Rename, Mkdir, Filespec, Tag-spec, Find)
 
 | Key | Action |
 |---|---|
@@ -150,12 +174,13 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `←` / `→` / `Home` | Move the cursor in the field |
 | `Enter` / `Esc` | Accept (saved to history) / cancel |
 
-In the **ShowAll** and **directory-picker** modals: `↑`/`↓` move, `Enter` selects,
-`Esc`/`Q` cancels; in the picker, `→` expands (logging on demand) and `←` collapses;
-in ShowAll, `U` untags the highlighted entry in place.
+In the **ShowAll**, **Find** and **directory-picker** modals: `↑`/`↓` move, `Enter`
+selects/jumps, `Esc`/`Q` cancels; in the picker, `→` expands (logging on demand) and
+`←` collapses; in ShowAll, `U` untags the highlighted entry in place.
 
-In the **viewer** (`V`): `PgDn`/`PgUp` page, `T`/`Home` jump to top, `H` toggles
-hex/text, `F` finds a string and `N` repeats the search, `Q`/`Esc` exits.
+In the **text/hex viewer** (`V`): `PgDn`/`PgUp` page, `T`/`Home` jump to top, `H`
+toggles hex/text, `F` finds a string and `N` repeats the search, `Q`/`Esc` exits. In
+the **BMX image viewer**, any key returns to the file list.
 
 
 ## Architecture (the memory model)
@@ -163,17 +188,29 @@ hex/text, `F` finds a string and `N` repeats the search, `Q`/`Esc` exits.
 The hard constraint on the X16 is RAM: ~40 KB main, plus 8 KB-windowed banked RAM
 (banks at `$A000–$BFFF`, up to 2 MB). A 16-bit pointer can't cross the bank window,
 so the design splits data by **access pattern** — redraw-hot data stays in main RAM;
-cold, bulky data lives in banked RAM behind far pointers.
+cold, bulky data and cold *code* live in banked RAM behind far pointers / bank
+overlays.
+
+The stock machine has banks 0–63. The low banks are reserved: bank 0 is the Kernal,
+bank 1 holds the tree's cold dir-extras table, banks 2–5 hold the four code overlays,
+and the file arena grows upward from **bank 6** to the detected top bank.
 
 | Module | Lives in | Holds | Why |
 |---|---|---|---|
-| `xarena.p8` | banks 2+ | append-only bump allocator (~7.8 KB usable per bank, `$A000–$BEFF`) | files are numerous and append-only, then bulk-freed on rescan; no per-record header, no fragmentation |
-| `xtree.p8` | main RAM | directory tree — a 192-node byte-indexed pool (`NONE=255`), links/flags/depth, and a 3 KB name arena (`dname_buf`) | few dirs, redrawn on every keystroke; no bank-switch cost |
-| xtree **dir-extras** | bank 1 | per-node cold fields (file count/offset/bank, tag count) in fixed 7-byte records | never touched in the per-row redraw loop, only on scan/tag/file ops; frees ~1.3 KB of main RAM, and bank 1 is never disturbed by an arena reset |
-| `xfiles.p8` | banked arena + main RAM | length-prefixed file records in the arena; a small far-pointer display index + sort mode + file-spec in main RAM; ShowAll far-pointer arrays | large records stay in the arena; the insertion sort runs on the small index, not the records |
+| `xarena.p8` | banks 6+ | append-only bump allocator (~7.8 KB usable per bank, `$A000–$BEFF`) | files are numerous and append-only, then bulk-freed on rescan; no per-record header, no fragmentation |
+| `xtree.p8` | main RAM | directory tree — a byte-indexed node pool (`DIR_MAX = 128`, `NONE=255`), links/flags/depth, and a name arena (`dname_buf`) | few dirs, redrawn on every keystroke; no bank-switch cost |
+| xtree **dir-extras** | bank 1 | per-node cold fields (file count/offset/bank, tag count) in fixed 7-byte records | never touched in the per-row redraw loop, only on scan/tag/file ops; frees main RAM, and bank 1 is never disturbed by an arena reset |
+| `xfiles.p8` | banked arena + main RAM | length-prefixed file records in the arena; a small far-pointer display index + sort mode + file-spec in main RAM; ShowAll/Find far-pointer arrays | large records stay in the arena; the insertion sort runs on the small index, not the records |
 | `xscan.p8` | main module | on-demand logger + scratch paths | drives diskio's one-listing-at-a-time rule: subdirs → tree, files → arena |
-| `xviewer.p8` | main module (modal) | 16-bit page-offset table + shared read buffer | read-only pager for files up to ~60 KB; larger files hand off to X16 Edit |
+| `tview.ovl` | bank 2 (overlay) | 16-bit page-offset table + shared read buffer | read-only text/hex pager with in-file search; larger files hand off to X16 Edit |
+| `miscutil.ovl` | bank 3 (overlay) | wildcard-rename expander, recursive prune engine, input-history ring, file-copy byte pump, whole-disk Find crawler | self-contained cold helpers pulled out of main RAM; their path/copy buffers cost no main RAM |
+| `uiutil.ovl` | bank 4 (overlay) | bottom-banner dialogs, modal box borders, the command menu, the About screen | dialog *drawing* is cold; main keeps thin wrappers that `JSRFAR` into the overlay |
+| `ximgview.ovl` | bank 5 (overlay) | native BMX bitmap loader/displayer | image decode is bulky and rarely used; kept out of the resident image entirely |
 | `xfmgr.p8` | main module | TUI + key loop, file ops, prompts, screen helpers | dual-pane draw, tagging, all `op_*` operations |
+
+`xfsetup.p8` builds to a **separate** `XFSETUP.PRG` (a full `$0801` program, not an
+overlay) — the `Alt-F10` colour-theme picker; `themes.p8` does the palette remap and
+reads/writes `xfmgr.cfg`.
 
 Key decisions:
 
@@ -184,8 +221,9 @@ Key decisions:
 - **Index arrays, not pointer-chasing lists** — a 16-bit pointer can't span the bank
   window, so the tree uses byte indices (`NONE=255`) and files use `(bank, offset)`
   far pointers.
-- A separate banked **dir-extras** table (bank 1) keeps cold per-directory fields out
-  of the redraw-hot main-RAM node pool.
+- **Cold code in bank overlays** — rarely-hit code paths (viewer, dialogs, image
+  decode, wildcard/prune/history/Find helpers) live in HIRAM overlays reached via
+  `extsub @bank`, freeing main RAM for the redraw-hot tree, file index and key loop.
 - **Editor bank handoff** — `op_edit` finds X16 Edit in ROM, refuses if there's no
   free bank above the arena, then calls it with `firstbank = high_bank + 1` and
   `lastbank = max_bank` (the machine's real top bank, never `255`) so the editor can't
@@ -197,9 +235,9 @@ Key decisions:
 
 The tree is **anchored at the drive root** (`base_path = "/"`), so every path built
 from a tree node is absolute. At startup XFMGR captures the launch folder
-(`diskio.curdir()`) before any disk call can clobber it, then descends the tree from
-root, logging and expanding each level so the launch folder is pre-selected and
-visible in the tree.
+(`diskio.curdir()`) before any disk call can clobber it, loads the four overlays into
+their reserved banks, applies the saved colour theme, then descends the tree from root,
+logging and expanding each level so the launch folder is pre-selected and visible.
 
 Because navigation is root-relative, copy/move destinations resolve from the **drive
 root** (XTree's global-navigation model), and the two quit paths differ: plain `Q`
@@ -207,27 +245,27 @@ returns the shell to the **launch** directory, while `Alt-Q` returns it to the
 **currently selected** directory.
 
 **Input history** is per prompt-category, stored under `hist/` on the drive root
-(e.g. `hist/copy.his`, `hist/move.his`). Each ring keeps the 15 most-recent entries,
+(e.g. `hist/copy.his`, `hist/move.his`). Each ring keeps the most-recent entries,
 newest first; the folder is created on first save and missing files load silently as
-empty.
+empty. The **colour theme** is stored in `xfmgr.cfg` next to the program.
 
 ## Status & known limitations
 
-**v1.0.0 — working.** Dual-pane navigation, on-demand logging, tagging (including
-cross-directory) and ShowAll, sorting, the full file-operation set (copy / move /
-rename / delete / mkdir / prune), the text/hex viewer, edit via X16 Edit,
-execute-and-return, root-anchored startup and persistent input history are all
-implemented, with confirmation prompts on destructive actions and status banners for
-errors.
+**v1.0.125 — working.** Dual-pane navigation, on-demand logging, tagging (including
+cross-directory) and ShowAll, whole-disk Find, sorting, the full file-operation set
+(copy / move / rename / delete / mkdir / prune), the banked text/hex viewer, the BMX
+image viewer, edit via X16 Edit, execute-and-return, switchable colour themes,
+root-anchored startup and persistent input history are all implemented, with
+confirmation prompts on destructive actions and status banners for errors.
 
 Remaining limitations:
 
-- **No recursive whole-disk logging.** Directories are logged on demand; there is no
-  automatic crawl of the entire disk tree at startup.
+- **No recursive whole-disk *logging*.** Directories are logged on demand; only `Find`
+  crawls the whole disk, and it logs solely the directories that contain a match.
 - **Append-only arena.** Individual file records are never freed; dead space from
   refreshes/renames accumulates and is only reclaimed on a full reset/reload.
-- **Fixed capacity caps:** `DIR_MAX = 192` directories, 255 files per directory, 255
-  tagged files in ShowAll, filenames up to 249 chars, and 3072 bytes total of
-  directory-name storage.
+- **Fixed capacity caps:** `DIR_MAX = 128` directories, 255 files per displayed
+  directory, 255 files collected for ShowAll / Find (excess → "(partial)"), and a
+  bounded directory-name arena.
 - **Single drive.** All operations are relative to one mounted drive; there is no
   multi-volume or `.d64` image support.
