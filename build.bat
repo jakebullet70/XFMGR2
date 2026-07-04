@@ -54,6 +54,10 @@ IF /I "%SRC%"=="xfmgr.p8" (
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\ximgview_build.txt" & ECHO *** ximgview overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
     MOVE /Y "%~dp0ximgview.bin" "%~dp0ximgview.ovl" >NUL
     ECHO ximgview overlay: ximgview.ovl built ^($A000 HIRAM bank overlay^).
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\xar.p8" > "%TEMP%\xar_build.txt" 2>&1
+    IF ERRORLEVEL 1 ( TYPE "%TEMP%\xar_build.txt" & ECHO *** xar overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
+    MOVE /Y "%~dp0xar.bin" "%~dp0xar.ovl" >NUL
+    ECHO xar overlay: xar.ovl built ^($A000 HIRAM bank overlay^).
     REM companion: the standalone colour-theme setup utility (a full $0801 PRG, not an overlay).
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\xfsetup.p8" > "%TEMP%\xfsetup_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\xfsetup_build.txt" & ECHO *** xfsetup build FAILED *** & ENDLOCAL & EXIT /B 1 )

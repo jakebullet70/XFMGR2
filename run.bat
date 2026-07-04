@@ -34,6 +34,7 @@ COPY /Y "%~dp0tview.ovl" "%XFMGRDIR%\tview.ovl" >NUL
 COPY /Y "%~dp0miscutil.ovl" "%XFMGRDIR%\miscutil.ovl" >NUL
 COPY /Y "%~dp0uiutil.ovl" "%XFMGRDIR%\uiutil.ovl" >NUL
 COPY /Y "%~dp0ximgview.ovl" "%XFMGRDIR%\ximgview.ovl" >NUL
+COPY /Y "%~dp0xar.ovl" "%XFMGRDIR%\xar.ovl" >NUL
 COPY /Y "%~dp0xfsetup.prg" "%XFMGRDIR%\xfsetup.prg" >NUL
 
 REM 2c) stage the sample BMX images (tracked in samples\) into the browse root so the

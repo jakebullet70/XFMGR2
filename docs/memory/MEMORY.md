@@ -37,3 +37,5 @@
 - [CP437/ISO keyboard](x16-cp437-iso-keyboard.md) — why XFMGR stays PETSCII: ISO mode breaks the ALT/CTRL command keys
 - [Custom fonts (V2)](xfmgr-custom-fonts-v2.md) — backlog: upload a custom charset for double-line DOS boxes, staying PETSCII
 - [Vendored diskio patch](prog8-diskio-vendored-patch.md) — SRC/diskio_patched.p8 bounds the 50-byte list_filename overflow; prog8 can't shadow embedded libs by name
+- [Copy/move progress](xfmgr-copy-move-progress.md) — backlog: show 'Working... (N of N)' during multi-file copy/move
+- [.XAR archive format](xfmgr-xar-format.md) — DONE(b126): custom RLE .xar; bank-6 xar.ovl; ENTER browses, 'a' creates; UI-in-main RAM follow-up

@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 125          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 128          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -192,6 +192,21 @@ main {
     extsub @bank 5 $A003 = view_image(uword nameptr @R0)
     bool imgview_ok                         ; ximgview.ovl loaded OK -> V shows .bmx images
 
+    ; --- banked .XAR archive engine overlay (xar) ---
+    ; xar.p8 is a %output library blob loaded into reserved HIRAM bank 6. It creates, browses and
+    ; extracts custom X16-native ".xar" RLE archives (ByteRun1/PackBits). The whole browse modal
+    ; (frame + key loop + extract) is self-contained in the overlay to keep it off main RAM. $A000 =
+    ; init; $A003 = xar_browse(nameptr) -> ubyte (opens/validates, runs the modal, extracts into the
+    ; CWD; 0 = not a valid archive); $A006 = xar_create_begin(nameptr, count) -> ubyte (0=ok); $A009 =
+    ; xar_create_add(srcpath, membername) -> ubyte (0=ok, 2=src-open fail); $A00C = xar_create_end().
+    const ubyte XAR_BANK = 6
+    extsub @bank 6 $A000 = xar_init()
+    extsub @bank 6 $A003 = xar_browse(uword nameptr @R0) -> ubyte @A
+    extsub @bank 6 $A006 = xar_create_begin(uword nameptr @R0, ubyte count @R1) -> ubyte @A
+    extsub @bank 6 $A009 = xar_create_add(uword srcpath @R0, uword membername @R1) -> ubyte @A
+    extsub @bank 6 $A00C = xar_create_end() -> ubyte @A
+    bool xar_ok                             ; xar.ovl loaded OK -> archive create/browse/extract enabled
+
     ; --- banked misc-utility overlay (miscutil) ---
     ; miscutil.p8 is a second %output library blob loaded into reserved HIRAM bank 3 at
     ; startup; it holds self-contained helpers moved out of main RAM (the wildcard rename
@@ -320,6 +335,13 @@ main {
         cx16.pop_rambank()
         if imgview_ok
             ximgview_init()             ; extsub @bank 5: clears the overlay's in-bank BSS ONCE
+
+        ; load the xar archive-engine overlay into its reserved bank (XAR_BANK) the same way
+        cx16.push_rambank(XAR_BANK)
+        xar_ok = diskio.loadlib("xar.ovl", $a000) != 0
+        cx16.pop_rambank()
+        if xar_ok
+            xar_init()                  ; extsub @bank 6: clears the overlay's in-bank BSS ONCE
 
         ; apply the saved colour theme. cfg_read() is self-contained - it hops into /xfmgr/ to LOAD
         ; the cfg and restores the cwd itself - so it works regardless of where we are here.
@@ -742,8 +764,22 @@ main {
 
     sub handle_file(ubyte key) {
         when key {
-            13 -> {                     ; enter: hop back to the dir tree column
-                change_focus(FOCUS_TREE)
+            13 -> {                     ; enter: open a .xar as a pseudo-directory, else hop to the tree
+                if xar_ok and xfiles.ft_count != 0 {
+                    xfiles.get_name(file_cursor, namebuf)
+                    xtree.build_path(cur_dir, pathbuf)
+                    diskio.chdir(pathbuf)       ; so f_open(namebuf) resolves in the file's dir
+                    if file_is_xar(&namebuf) {
+                        if xar_browse(&namebuf) == 0    ; overlay owns the modal (open+list+extract)
+                            flash("not a valid .xar archive")
+                        txt.color2(shared.CLR_FG, shared.CLR_BG)   ; modal left the gray body colour; restore app theme
+                        dirty_full = true       ; the modal took the screen; repaint (blanks use the current colour)
+                    } else {
+                        change_focus(FOCUS_TREE)
+                    }
+                } else {
+                    change_focus(FOCUS_TREE)
+                }
             }
             145 -> {                    ; up
                 if file_cursor != 0 {
@@ -850,6 +886,12 @@ main {
             'f' -> {
                 op_filespec()
                 dirty_full = true               ; refresh files + the FILE: title
+            }
+            'a' -> {                            ; Archive: create a .xar from the tagged files (or the highlighted one)
+                op_archive()
+                dirty_files = true              ; the new .xar appears in the pane
+                dirty_status = true
+                dirty_cmd = true
             }
         }
     }
@@ -2608,6 +2650,88 @@ main {
         ubyte got = lsb(diskio.f_read(&magic, 3))
         diskio.f_close()
         return got >= 3 and magic[0]==$42 and magic[1]==$4d and magic[2]==$58
+    }
+
+    sub file_is_xar(uword nameptr) -> bool {
+        ; True if the file starts with the ".xar" magic "XAR1" ($58,$41,$52,$31), sniffed from
+        ; the raw content (name-encoding independent). The caller must have chdir'd into the
+        ; file's directory. Mirrors file_is_bmx.
+        ubyte[4] magic
+        magic[0] = 0
+        if not diskio.f_open(nameptr)
+            return false
+        ubyte got = lsb(diskio.f_read(&magic, 4))
+        diskio.f_close()
+        return got >= 4 and magic[0]==$58 and magic[1]==$41 and magic[2]==$52 and magic[3]==$31
+    }
+
+    sub op_archive() {
+        ; create a .xar from the tagged files in the current dir (or the highlighted file if none
+        ; are tagged). The archive is written into the current directory.
+        if not xar_ok {
+            flash("archive engine not loaded")
+            return
+        }
+        if xfiles.ft_count == 0 {
+            flash("no files to archive")
+            return
+        }
+        uword tc = xtree.dx_tag(cur_dir)
+        bool usetags = tc != 0
+        if usetags and tc > 64 {                ; the xar overlay holds at most MEMBER_MAX(64) members
+            flash("too many tagged (max 64)")
+            return
+        }
+        ubyte count = 1
+        if usetags
+            count = lsb(tc)
+
+        if not input_line("Archive name:", inputbuf, 60, "archive", false)
+            return                          ; cancelled
+
+        ; ensure a ".xar" extension (append if the typed name lacks one). Letters are PETSCII:
+        ; unshifted a-z = $41-5A (== prog8 lowercase literals), shifted = $C1-DA -> fold with -$80.
+        ubyte ln = lsb(strings.length(inputbuf))
+        bool has_ext = false
+        if ln >= 4 {
+            uword p = &inputbuf + ln - 4
+            ubyte c1 = @(p+1)
+            ubyte c2 = @(p+2)
+            ubyte c3 = @(p+3)
+            if c1 >= 'A' and c1 <= 'Z'  c1 -= 128
+            if c2 >= 'A' and c2 <= 'Z'  c2 -= 128
+            if c3 >= 'A' and c3 <= 'Z'  c3 -= 128
+            has_ext = @(p) == '.' and c1 == 'x' and c2 == 'a' and c3 == 'r'
+        }
+        if not has_ext
+            void strings.append(inputbuf, ".xar")
+
+        ; write into the current dir: chdir there, and build absolute source paths from pathbuf
+        xtree.build_path(cur_dir, pathbuf)
+        diskio.chdir(pathbuf)
+        if xar_create_begin(inputbuf, count) != 0 {
+            flash("could not create archive")
+            return
+        }
+
+        ubyte i
+        for i in 0 to xfiles.ft_count-1 {
+            if usetags and not xfiles.is_tagged(i)
+                continue
+            if not usetags and i != file_cursor
+                continue
+            xfiles.get_name(i, namebuf)             ; member/base name
+            void strings.copy(pathbuf, sa_line)     ; absolute source path = <dir>/<name>
+            void strings.append(sa_line, namebuf)
+            void xar_create_add(sa_line, namebuf)
+        }
+        void xar_create_end()
+
+        ; relog the dir so the new .xar shows (this also clears the tag marks, as expected)
+        void xscan.refresh_files(cur_dir)
+        void xfiles.build_index(cur_dir)
+        clamp_file_cursor()
+        flash("archive created")
     }
 
     sub wait_key() -> ubyte {

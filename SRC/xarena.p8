@@ -17,10 +17,10 @@
 xarena {
     %option ignore_unused
 
-    const ubyte FIRST_BANK = 6          ; bank 0 = Kernal; bank 1 = xtree dir-extras;
+    const ubyte FIRST_BANK = 7          ; bank 0 = Kernal; bank 1 = xtree dir-extras;
                                         ; bank 2 = tview; bank 3 = miscutil; bank 4 = uiutil;
-                                        ; bank 5 = ximgview (VIEW/MISC/UI/IMG_BANK in xfmgr);
-                                        ; arena = 6..max_bank
+                                        ; bank 5 = ximgview; bank 6 = xar archive engine
+                                        ; (VIEW/MISC/UI/IMG/XAR_BANK in xfmgr); arena = 7..max_bank
     const uword WIN_START  = $a000
     const uword WIN_END    = $bf00      ; reserve $bf00-$bfff as scratch / guard
 

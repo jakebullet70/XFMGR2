@@ -7,6 +7,10 @@ metadata:
   originSessionId: b8fa7cc6-ce21-49c0-9d7e-f50a35429b63
 ---
 
+**UPDATE (b126):** the *custom* archive path was taken instead — see [[xfmgr-xar-format]]
+(X16-native RLE `.XAR`, create/browse/extract). Real ZIP/ARC interop (DEFLATE/ARC decode)
+remains the open item below.
+
 **Feature note (ZIP / ARC support — V2).** The user wants archive support added in
 XFMGR2 **V2**: handle ZIP / ARC files as first-class citizens. Captured 2026-07-01.
 
