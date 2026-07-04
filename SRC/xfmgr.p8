@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 154          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 155          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -2954,6 +2954,13 @@ main {
         while crawl_next_hit(&cm_dst) != 0 {        ; cm_dst (132 B) fits a full crawl path
             ubyte node = xscan.open_path(cm_dst)    ; log + expand ancestors, return deepest node
             void xscan.scan_dir(node)               ; log THIS dir's files (open_path only did ancestors)
+            ; live "(Dir: N)" counter on row 2 of the box - dir_count only grows, so no stale digits.
+            ; (cm_dst holds the crawl path open_path still needs, so print straight, don't compose it)
+            txt.plot(BANNER_LEFT, CMDROW2)
+            txt.print("(Dir: ")
+            txt.print_uw(xtree.dir_count)
+            txt.chrout(')')
+            hilite_row(0, 79, CMDROW2, shared.CLR_BOTTOM_PROMPT_BG)   ; keep the row black-on-white
             if xtree.dir_count >= xtree.DIR_MAX {
                 partial |= 2                        ; 128-dir cap: stop logging further hits
                 break
