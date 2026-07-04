@@ -24,8 +24,8 @@ shared {
     const ubyte CLR_BOX    = $be        ; frame / box borders: light blue on dark gray
     const ubyte HILITE     = $e1        ; focused selection bar: light-blue bg, white text
     const ubyte CLR_TAGROW = $e1        ; tagged file row: blue bg, white text
-    const ubyte OW_BLACK   = $10        ; overwrite box: black text on white bg
-    const ubyte OW_KEY     = $1e        ; overwrite box: light-blue key on white bg
+    const ubyte CLR_BOTTOM_PROMPT_BG  = $10   ; bottom prompt/dialog box: black text on white bg
+    const ubyte CLR_BOTTOM_PROMPT_KEY = $1e   ; bottom prompt/dialog box: light-blue hotkey on white bg
 
     ; --- viewer (tview) status-bar theme: reuses the palette above ---
     const ubyte BAR_BG     = CLR_TITLE  ; status bar background: light blue

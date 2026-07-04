@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 146          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 152          ; shown top-right; bump by 1 every build. Keep the About
                                          ; "Version 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -1220,7 +1220,7 @@ main {
                 change_focus(FOCUS_TREE)
             draw_status()                           ; repaint the panes FIRST so the file is
             draw_tree()                             ; visibly gone before the "done" banner
-            draw_files()                            ; (the banner box only covers DIVBOT..SCR_BOT)
+            draw_files()                            ; (the banner box only covers CMDROW1..CMDROW2)
             banner_delete(1)                        ; result banner, like copy/move
         }
     }
@@ -1238,6 +1238,8 @@ main {
         diskio.chdir(pathbuf)
         bool allrem = mode == 0                     ; "No" at the top prompt -> delete all, no asking
         uword ndel = 0
+        uword total = ntag                          ; tagged count, for the "(n of N)" progress
+        uword cur = 0                               ; tagged files processed so far
         ; Walk DOWNWARD: deleting a file + reindexing only shifts indices ABOVE it, which we've
         ; already visited, so lower indices stay valid. Local `fi` (not g_ndx): the per-file
         ; prompt and the live repaint both clobber the shared g_ndx counter.
@@ -1245,6 +1247,7 @@ main {
         while fi != 0 {
             fi--
             if xfiles.is_tagged(fi) {
+                cur++
                 xfiles.get_name(fi, namebuf)
                 ubyte act = 1                       ; default action: delete
                 if not allrem {
@@ -1262,6 +1265,9 @@ main {
                     void xfiles.build_index(cur_dir)    ; recompact the cached view...
                     clamp_file_cursor()
                     draw_files()                        ; ...and repaint so the file leaves the screen live
+                    box_open()                          ; live "Deleting... (n of N)" progress, like copy/move
+                    box_left(CMDROW1, "Deleting...")
+                    box_progress(cur, total)            ; "(n of N)" on CMDROW2
                 }
             }
         }
@@ -1325,7 +1331,7 @@ main {
             if tree_cursor < tree_top                   ; keep the cursor on-screen
                 tree_top = tree_cursor
             select_dir(xtree.vis_idx[uprow])
-            box_open()                                      ; 4-row white box, like relog/copy
+            box_open()                                      ; 2-row white box, like relog/copy
             box_left(CMDROW1, "Prune OK")
             sys.wait(90)                                     ; show ~1.5s, then auto-dismiss (no keypress)
             box_close()
@@ -2172,30 +2178,36 @@ main {
         box_close()
     }
 
-    ; ---- unified bottom dialog box (rows DIVBOT..SCR_BOT): white bg, black text, hotkeys
-    ;      in light blue (same look as ask_overwrite). box_open blanks the four rows,
-    ;      erasing the frame chars underneath; box_close restores them with draw_frame.
+    ; ---- unified bottom dialog box: white bg, black text, hotkeys in light blue (same look as
+    ;      ask_overwrite). Every prompt/banner writes ONLY to the two command rows (CMDROW1/2),
+    ;      so box_open whitens just those - and only the INTERIOR (cols 1..78), leaving the side
+    ;      borders (cols 0/79) and the divider/bottom-border rows (DIVBOT/SCR_BOT) in place so the
+    ;      box sits framed on all four sides. Nothing box-related touches those frame cells, so
+    ;      box_close has no snap-back to fix.
     sub box_open() {
         ubyte r
-        for r in DIVBOT to SCR_BOT {         ; outer stays local; inner leaf loop uses g_ndx
-            for g_ndx in 0 to 79 {
+        for r in CMDROW1 to CMDROW2 {        ; outer stays local; inner leaf loop uses g_ndx
+            for g_ndx in 1 to 78 {           ; interior only - never the col-0/79 side borders
                 txt.setchr(g_ndx, r, sc:' ')
-                txt.setclr(g_ndx, r, shared.OW_BLACK)
+                txt.setclr(g_ndx, r, shared.CLR_BOTTOM_PROMPT_BG)
             }
         }
         txt.color(shared.CLR_FG)
     }
 
     sub box_close() {
-        draw_frame()                        ; restore the borders the box erased
+        ; box_open left every frame cell intact (interior-only whiten), but callers repaint the
+        ; command menu over CMDROW1/2 via dirty_cmd; draw_frame keeps the borders authoritative.
+        draw_frame()
     }
 
     sub box_left(ubyte row, str s) {
         ; print s left-aligned at BANNER_LEFT on row, then force that row black-on-white.
-        ; the house style for every bottom-banner line (see BANNER_LEFT).
+        ; the house style for every bottom-banner line (see BANNER_LEFT). Interior only (1..78)
+        ; so the col-0/79 side borders stay put.
         txt.plot(BANNER_LEFT, row)
         txt.print(s)
-        hilite_row(0, 79, row, shared.OW_BLACK)
+        hilite_row(1, 78, row, shared.CLR_BOTTOM_PROMPT_BG)
     }
 
     sub box_compose_name(str prefix, str name, str suffix) {
@@ -2272,13 +2284,15 @@ main {
     }
 
     sub ask_delete_this(str name) -> ubyte {
-        ; 1 = delete this, 0 = skip, 2 = delete this + all remaining, 255 = cancel rest
+        ; 1 = delete this, 0 = skip, 2 = delete this + all remaining, 255 = cancel rest.
+        ; NO box_close - like ask_overwrite, the delete-tagged loop keeps the box open across
+        ; files (draw_files repaints only the pane, rows 4..25); the final banner_delete restores
+        ; the frame. Closing per file redrew the frame on rows 26/29 while 27/28 kept the reverse
+        ; prompt, so those two border rows flickered back to box chars between prompts.
         box_open()
-        ubyte r = 255
         if ui_ok
-            r = ui_ask_delete_this(name)
-        box_close()
-        return r
+            return ui_ask_delete_this(name)
+        return 255
     }
 
     sub banner_copymove(bool is_move, uword done, uword failed, uword skipped) {
@@ -2309,7 +2323,7 @@ main {
         ; deletes never leave stale characters behind.
         for g_ndx in fieldcol to 78 {
             txt.setchr(g_ndx, MSGROW, sc:' ')
-            txt.setclr(g_ndx, MSGROW, shared.OW_BLACK)
+            txt.setclr(g_ndx, MSGROW, shared.CLR_BOTTOM_PROMPT_BG)
         }
         txt.plot(fieldcol, MSGROW)
         ubyte width = 79 - fieldcol           ; cells available fieldcol..78
@@ -2319,7 +2333,7 @@ main {
         if shown != 0
             for g_ndx in 0 to shown-1
                 txt.chrout(@(destptr + g_ndx))
-        hilite_row(fieldcol, 78, MSGROW, shared.OW_BLACK)   ; force the field black-on-white
+        hilite_row(fieldcol, 78, MSGROW, shared.CLR_BOTTOM_PROMPT_BG)   ; force the field black-on-white
         ubyte cc = fieldcol + curpos
         if cc > 78
             cc = 78
@@ -2482,10 +2496,10 @@ main {
         ubyte ll = lsb(strings.length(label))
         if kl != 0
             for g_ndx in col to col + kl - 1
-                txt.setclr(g_ndx, CMDROW2, shared.OW_KEY)
+                txt.setclr(g_ndx, CMDROW2, shared.CLR_BOTTOM_PROMPT_KEY)
         if ll != 0
             for g_ndx in col + kl to col + kl + ll - 1
-                txt.setclr(g_ndx, CMDROW2, shared.OW_BLACK)
+                txt.setclr(g_ndx, CMDROW2, shared.CLR_BOTTOM_PROMPT_BG)
         return col + kl + ll
     }
 
@@ -2509,11 +2523,11 @@ main {
     }
 
     sub input_frame(str prompt, bool usehist, bool dirpick) {
-        ; white 4-row box with the prompt label (black) on row 1 and the key hints on row 2
+        ; white 2-row box (CMDROW1/2) with the prompt label (black) on row 1 and key hints on row 2
         box_open()
         txt.plot(BANNER_LEFT, MSGROW)
         txt.print(prompt)
-        hilite_row(0, 79, MSGROW, shared.OW_BLACK)
+        hilite_row(1, 78, MSGROW, shared.CLR_BOTTOM_PROMPT_BG)     ; interior only - keep the col-0/79 borders
         prompt_hint(usehist, dirpick)
     }
 
