@@ -16,7 +16,8 @@ xtree {
     %option ignore_unused
 
     const ubyte NONE     = 255
-    const ubyte DIR_MAX  = 128          ; max directories logged (< NONE); capped to save ~512 B main RAM
+    const ubyte DIR_MAX  = 254          ; max directories logged; the ceiling - node ids are a ubyte
+                                        ; and NONE=255 terminates links, so 254 is the hard max
     const uword DNAME_SZ = 3072         ; bytes of directory-name storage
     const ubyte MAXDEPTH = 16           ; deepest path we build
 
@@ -45,7 +46,7 @@ xtree {
     ;   +0 file_count (uword)  +2 file_off (uword)  +4 file_bank (ubyte)  +5 tagged (uword)
     ; DX_BANK is the LOWEST arena bank (always present, even on a 512 KB machine); the
     ; file arena starts one bank higher (xarena.FIRST_BANK = DX_BANK + 1), so the bump
-    ; allocator and its reset() never disturb this table. 192 nodes * 7 = 1344 B, well
+    ; allocator and its reset() never disturb this table. 254 nodes * 7 = 1778 B, well
     ; inside one 8 KB bank.
     const ubyte DX_BANK = 1
     const uword DX_BASE = $a000
