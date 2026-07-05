@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 165          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 166          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -121,7 +121,7 @@ main {
     bool setup_exit                         ; Alt-F10 set: quit XFMGR and run the theme setup PRG
     ; directory the host shell is left in on a normal quit: the startup dir for the
     ; main-menu Quit, or the currently selected dir for the ALT-menu Quit.
-    str exit_dir = "?" * 80
+    ; (uword alias into cm_src storage - declared in the modal-buffer overlay below)
 
     ; "delete tagged" CTRL key. The emulator swallows Ctrl-D ($04) before it reaches
     ; us, so under the emulator we bind delete to Ctrl-X; on real hardware Ctrl-D is
@@ -147,20 +147,34 @@ main {
     str pathbuf = "?" * 80
     str inputbuf = "?" * 84             ; holds typed text or a picked directory path
     str treeline = "?" * 48             ; composed tree row (connectors + name)
-    str sa_line  = "?" * 100            ; composed ShowAll row (path + name)
     ubyte[20] levlast                   ; per-depth: is the ancestor a last child?
+    ; sa_line moved into the modal-buffer overlay below (shares cm_src storage)
 
     ; shared "press any key" footer text (Prog8 has no const str; this str is never
     ; written). Reused by the About box and the 2-line completion banners.
     str MSG_PRESS_ANY_KEY = " Press any key "
     str MSG_ERR_COMMA     = "Can't rename: comma in name"   ; shared by both rename paths (file + dir)
 
-    ; copy/move scratch: source & dest directory paths, and full file paths
-    str cm_sdir = "?" * 80
-    str cm_ddir = "?" * 80
-    str cm_src  = "?" * 132
-    str cm_dst  = "?" * 132
-    str find_lc = "?" * 32                  ; Ctrl-F: lowercased filespec for the whole-disk crawl
+    ; copy/move scratch: source & dest directory paths, and full file paths. These str buffers
+    ; double as the shared home for the cold modal buffers overlaid just below.
+    str cm_sdir = "?" * 80                  ; Slot B (81 B)
+    str cm_ddir = "?" * 80                  ; Slot C (own; also holds the saved FileSpec during Find)
+    str cm_src  = "?" * 132                 ; Slot A (133 B)
+    str cm_dst  = "?" * 132                 ; hot header/banner compose - NOT shared
+
+    ; --- cold modal-buffer overlay (saves ~215 B main RAM) --------------------------------------
+    ; Each guest is a uword pointer ALIASING a copy/move scratch buffer's storage - it owns no bytes
+    ; of its own. Safe because each guest is only ever live inside one modal op that never overlaps
+    ; its host's use (or a same-slot sibling's); coexistence verified in the RAM-cleanup plan.
+    ; Only LIGHTLY-accessed guests are overlaid: pointer indirection adds code, so heavily-used
+    ; buffers (inputbuf, hist_line) are left as their own storage - they'd cost more code than saved.
+    ; INVARIANT: do NOT add a use of a guest that can be live at the same time as its host or a
+    ; sibling on the same slot - they share physical bytes and would silently corrupt each other.
+    ; Slot A (cm_src, 133 B): sa_line, exit_dir
+    uword sa_line  = &cm_src                ; composed ShowAll/Find results row (path + name)
+    uword exit_dir = &cm_src                ; dir the host shell is left in on quit
+    ; Slot B (cm_sdir, 81 B): find_lc
+    uword find_lc  = &cm_sdir               ; Ctrl-F lowercased filespec (whole-disk crawl)
     ubyte cm_fail                           ; copy_one failure point: 0 ok/none, 1 src-open, 2 dst-open, 3 write
     ubyte cm_wstat                          ; DOS status code captured when a write fails (diagnostic)
     ubyte ow_mode                           ; overwrite policy for the current copy/move batch:
@@ -3102,7 +3116,7 @@ main {
 
         ubyte partial = 0                           ; bit0=too deep  bit1=dir cap  bit2=result cap
         uword nvisited = 0                          ; every directory the crawler walks (live counter)
-        crawl_begin(&find_lc)
+        crawl_begin(find_lc)
         repeat {
             ubyte cr = crawl_next_hit(&cm_dst)      ; cm_dst (132 B) fits a full crawl path
             if cr == 0
@@ -3181,7 +3195,7 @@ main {
             xfiles.sa_name(i, namebuf)
             ubyte sl = lsb(strings.length(sa_line))     ; append the filename with a cap so
             if sl < 99                                  ; path+name can't overflow the 100-byte
-                str_copy_cap(namebuf, &sa_line + sl, 99 - sl)  ; sa_line buffer
+                str_copy_cap(namebuf, sa_line + sl, 99 - sl)  ; sa_line buffer
             print_trunc(sa_line, 70)
             txt.plot(73, srow)
             txt.print_uw(xfiles.sa_blocks(i))
