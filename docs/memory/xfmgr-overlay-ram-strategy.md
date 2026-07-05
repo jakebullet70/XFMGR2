@@ -14,8 +14,9 @@ overlays (%output library blobs, org $A000, loaded via diskio.loadlib, called vi
 + xfiles sa index ($b000), 2=tview (viewer), 3=miscutil (wildcard/prune/history + stream_copy
 byte-pump + whole-disk Find crawler), 4=uiutil (bottom dialogs + About/modal-box drawing),
 5=ximgview (BMX image viewer, see [[xfmgr-bmx-image-viewer]]), 6=zsmkit v2 engine blob (ZSM
-playback, see [[xfmgr-music-player]]), 7=xmusic (WAV/PCM streamer). Arena = banks 8..max_bank
-(FIRST_BANK bumped 6->8 when music was added). Each overlay keeps a fixed `%jmptable` at $A003+
+playback, see [[xfmgr-music-player]]), 7=xmusic (WAV/PCM streamer), **8=xtree dir-NAME slab**
+(NAME_BANK, a DATA bank not an overlay - see below). Arena = banks **9**..max_bank (FIRST_BANK is
+now 9). Each overlay keeps a fixed `%jmptable` at $A003+
 (KEEP module vars UNINITIALIZED or they shove the table — see [[prog8-jmptable-init-vars-gotcha]]).
 
 **As of 2026-07-03: 6.5 KB free to $9F00** (was ~2.2 KB before this push). Won by: copy byte-pump
@@ -37,6 +38,17 @@ do; textio is cheap after dead-code elimination). Rules learned:
 - Guard every extsub call with the overlay's ok-flag (ui_ok/misc_ok) so a missing .bin degrades
   to a safe default instead of JSRFAR-ing into an unloaded bank.
 - Filename/dir literals passed to diskio must be lowercase ([[prog8-filename-literals-lowercase]]).
+
+**BIG WIN DONE (2026-07-05): dir-name slab -> bank 8.** `xtree.dname_buf` was a 3072-byte MAIN-RAM
+`memory()` slab; it now lives in NAME_BANK (bank 8) at NAME_BASE=$a000 + `d_name_off[idx]` (names <=
+~3072 B fit one 8 KB window, no roll). Freed ~2.9 KB main RAM (668 B -> 3539 B). Mechanism: added
+`xarena.far_write_str` (inverse of read_str); `dname_store`/`rename_node` far-WRITE; **`name_ptr(idx)`
+far-READS the name into a shared `name_stage` (str "?"*63) and returns THAT**, so every reader keeps
+its plain `str` API unchanged (draw_tree/build_path/compares). INVARIANT: never hold a name_ptr result
+across another name_ptr call - one staging buffer, each caller consumes it immediately (verified). This
+was the "Tier B" name-slab move from [[xfmgr-architecture]]; hot draw_tree tolerates the per-row
+far-read fine. The d_* node pool stays in main RAM (still movable, higher effort). See also
+[[xfmgr-ram-savings-menu]].
 
 **Backlog / still movable:** the easy wins are done (copy, dialogs, About, command menu).
 input_line/hist_popup (~2 KB) are BLOCKED - input_line calls pick_dir (deep xtree), which the

@@ -17,11 +17,12 @@
 xarena {
     %option ignore_unused
 
-    const ubyte FIRST_BANK = 8          ; bank 0 = Kernal; bank 1 = xtree dir-extras;
+    const ubyte FIRST_BANK = 9          ; bank 0 = Kernal; bank 1 = xtree dir-extras;
                                         ; bank 2 = tview; bank 3 = miscutil; bank 4 = uiutil;
                                         ; bank 5 = ximgview; bank 6 = zsmkit engine;
                                         ; bank 7 = xmusic wav player (ZSM/MUS_BANK in xfmgr);
-                                        ; arena = 8..max_bank
+                                        ; bank 8 = xtree dir-NAME slab (NAME_BANK in xtree);
+                                        ; arena = 9..max_bank
     const uword WIN_START  = $a000
     const uword WIN_END    = $bf00      ; reserve $bf00-$bfff as scratch / guard
 
@@ -124,6 +125,25 @@ xarena {
             ix++
         }
         dest[ix] = 0
+        cx16.pop_rambank()
+    }
+
+    sub far_write_str(ubyte bank, uword off, str s) {
+        ; Copy a NUL-terminated main-RAM string INTO the bank at (bank, off), NUL included.
+        ; The inverse of read_str; used to park variable-length strings (e.g. dir names) in a
+        ; reserved data bank. Caller guarantees the string + NUL fits the bank window.
+        cx16.push_rambank(bank)
+        uword dst = off
+        ubyte ix = 0
+        ubyte c
+        repeat {
+            c = s[ix]
+            @(dst) = c
+            if c == 0
+                break
+            dst++
+            ix++
+        }
         cx16.pop_rambank()
     }
 }

@@ -60,7 +60,8 @@
    Ctrl-F      Find files across the whole disk
                (Ctrl-N in the emulator, Ctrl-F on hardware)
    Ctrl-C      Copy all tagged files (from all dirs) to one destination
-   Ctrl-O      Move all tagged files (from all dirs) to one destination
+   Ctrl-M      Move all tagged files (from all dirs) to one destination
+               (Ctrl-O in the emulator, Ctrl-M on hardware)
    Ctrl-X      Delete all tagged files in this directory
                (Ctrl-X in the emulator, Ctrl-D on hardware)
 
@@ -135,6 +136,7 @@
      Command          Emulator     Real hardware
      Delete tagged    Ctrl-X       Ctrl-D
      Find files       Ctrl-N       Ctrl-F
+     Move tagged      Ctrl-O       Ctrl-M
 
    Ctrl-S is also swallowed by the emulator, so Tag-by-wildcard is Ctrl-W in
    both environments. ALT is the Commodore (C=) key on a real X16; in the

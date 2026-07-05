@@ -1,5 +1,7 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
+*(build:173)*
+
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
 on the right, with file **tagging**, a banked **text/hex viewer**, a **BMX image
@@ -26,7 +28,7 @@ switchable **colour themes**.
   logs only the directories that contain a match, and shows every hit in a flat modal
   list you can jump straight into.
 - **Sorting** — cycle files by name → extension → size (`Alt-S`).
-- **File operations** — copy (`C`/`Ctrl-C`), move (`M`/`Ctrl-O`), rename with `*`/`?`
+- **File operations** — copy (`C`/`Ctrl-C`), move (`M`/`Ctrl-O`/`Ctrl-M`), rename with `*`/`?`
   wildcards (`R`), delete one (`D`) or all tagged (`Ctrl-X`/`Ctrl-D`). Copy/move
   destinations resolve from the drive root and can be picked interactively from the
   tree (`F2`).
@@ -101,7 +103,7 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `Ctrl-G` | **ShowAll** — modal list of every tagged file across all logged dirs |
 | `Ctrl-F` / `Ctrl-N` | **Find** files across the whole disk (`N` in emulator, `F` on hardware) |
 | `Ctrl-C` | Copy all tagged files (from all dirs) to one destination |
-| `Ctrl-O` | Move all tagged files (from all dirs) to one destination |
+| `Ctrl-O` / `Ctrl-M` | Move all tagged files (from all dirs) to one destination (`O` in emulator, `M` on hardware) |
 | `Ctrl-X` / `Ctrl-D` | Delete all tagged files in this directory (`X` in emulator, `D` on hardware) |
 
 ### ALT menu
@@ -249,8 +251,9 @@ run.bat                   # build + stage + launch in the emulator
 ROMs because it depends on R49+ behavior — notably the X16 Edit ROM API used by the
 `E` (edit) command. It also detects the emulator at startup (`emudbg.is_emulator()`)
 to choose the environment-specific CTRL keys the emulator would otherwise swallow:
-**delete-tagged** is `Ctrl-X` in the emulator / `Ctrl-D` on hardware, and **Find** is
-`Ctrl-N` in the emulator / `Ctrl-F` on hardware.
+**delete-tagged** is `Ctrl-X` in the emulator / `Ctrl-D` on hardware, **Find** is
+`Ctrl-N` in the emulator / `Ctrl-F` on hardware, and **move-tagged** is `Ctrl-O` in the
+emulator / `Ctrl-M` on hardware.
 
 
 

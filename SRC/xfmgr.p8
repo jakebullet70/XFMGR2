@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 166          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 174          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -133,6 +133,11 @@ main {
     ; so under the emulator we bind Find to Ctrl-N (fiNd); on real hardware Ctrl-F is free.
     ubyte find_key                          ; lowercase dispatch key: 'n' (emu) or 'f' (hw)
     ubyte find_char                         ; uppercase display char: 'N' or 'F'
+
+    ; "move tagged" CTRL key. Same story: the emulator grabs Ctrl-M, so under the emulator we bind
+    ; Move to Ctrl-O (mOve); on real hardware Ctrl-M reaches us ($0D, folded to 'M' by wait_command).
+    ubyte move_key                          ; lowercase dispatch key: 'o' (emu) or 'm' (hw)
+    ubyte move_char                         ; uppercase display char: 'O' or 'M'
 
     ; The X16 maps ALT to the Commodore (graphics) key, so ALT+letter returns a
     ; PETSCII graphics code in $A1..$BF (161..191) instead of the letter. This table
@@ -238,7 +243,7 @@ main {
     ; startup; it holds self-contained helpers moved out of main RAM (the wildcard rename
     ; expander, the recursive directory-prune engine, and the input-history ring). $A000 = init;
     ; $A003 = wildcard_expand(orig @R0, pat @R1, out @R2);
-    ; $A006 = prune_dir(parent @R0, name @R1) -> ubyte (1=ok, 0=fail);
+    ; $A006 = prune_dir(parent @R0, name @R1) -> ubyte, ONE dir/call (0=done, 1=more, 255=err);
     ; $A009 = hist_load(cat @R0, base @R1) -> count; $A00C = hist_store(str @R0) -> count;
     ; $A00F = hist_save(cat @R0, base @R1); $A012 = hist_get(slot @R0, out @R1);
     ; $A015 = stream_copy(src @R0, dst @R1) -> uword (lsb=fail 0/1/2/3, msb=DOS code).
@@ -289,7 +294,7 @@ main {
     extsub @bank 4 $A024 = ui_show_about(ubyte high_bank @R0, ubyte max_bank @R1)
     ; the bottom command menu (all its label strings) draws here too; main passes the state it
     ; depends on (menu_mode / focus / del_char / sort_mode) since the overlay can't see globals.
-    extsub @bank 4 $A027 = ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4)
+    extsub @bank 4 $A027 = ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4, ubyte move_char @R5)
     bool ui_ok                              ; uiutil.ovl loaded OK -> dialogs use the overlay
 
     sub start() {
@@ -309,17 +314,21 @@ main {
         snapshot_machine_state()                 ; capture charset + text colour before we change anything
         cx16.set_screen_mode(SCREEN_MODE)        ; 80x30
 
-        ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D and Ctrl-F)
+        ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D/Ctrl-F/Ctrl-M)
         if emudbg.is_emulator() {
             del_key  = 'x'
             del_char = 'X'
             find_key  = 'n'
             find_char = 'N'
+            move_key  = 'o'
+            move_char = 'O'
         } else {
             del_key  = 'd'
             del_char = 'D'
             find_key  = 'f'
             find_char = 'F'
+            move_key  = 'm'
+            move_char = 'M'
         }
         txt.lowercase()
         txt.color2(shared.CLR_FG, shared.CLR_BG)               ; white text on a blue field
@@ -551,16 +560,24 @@ main {
 
     sub confirm_enter(str question) -> bool {
         ; ENTER-or-ESC confirm (no Yes/No pair): ENTER accepts, ESC cancels, other keys ignored.
-        ; Reuses the input prompt frame, so the box + "←┘ OK  ESC Cancel" hints already fit.
-        input_frame(question, false, false)
+        ; Draws the input box + question, then its OWN row-2 hint "[Yes]   Esc Cancel" (distinct
+        ; from the text-input prompts' "←┘ OK  ESC Cancel" that prompt_hint draws).
+        box_open()
+        txt.plot(BANNER_LEFT, MSGROW)
+        txt.print(question)
+        hilite_row(0, 79, MSGROW, shared.CLR_BOTTOM_PROMPT_BG)
+        ; "[Yes]   Esc Cancel", right-justified so " Cancel" ends at col 78 (matches prompt_hint)
+        ubyte hcol = 79 - (5 + 3 + 3 + 7)               ; "[Yes]"(5)+"   "(3)  "Esc"(3)+" Cancel"(7)
+        hcol = hint_key(hcol, "", "[")                  ; bracket in normal text colour
+        hcol = hint_key(hcol, "Y", "es]   ")            ; only the Y is the hotkey colour
+        hcol = hint_key(hcol, "Esc", " Cancel")
         repeat {
-            g_key = wait_key()
-            when g_key {
-                13 -> {
+            when cmd_key() {                    ; case-folded, so Y works shifted or not
+                13, 'y' -> {                    ; ENTER or Y = accept
                     box_close()
                     return true
                 }
-                27, 3 -> {
+                27, 3 -> {                      ; ESC / STOP = cancel
                     box_close()
                     return false
                 }
@@ -590,6 +607,11 @@ main {
             dirty_full = true
             return
         }
+        if letter == move_key {             ; Ctrl-O (emu) / Ctrl-M (hw): move all tagged files
+            op_copymove(true, true)         ; (runtime key, so it can't be a constant when-case)
+            dirty_full = true
+            return
+        }
         when letter {
             't' -> {                        ; Ctrl-T: tag ALL files
                 xfiles.tag_all(cur_dir)
@@ -612,11 +634,6 @@ main {
             }
             'c' -> {                        ; Ctrl-C: copy this dir's tagged files
                 op_copymove(false, true)
-                dirty_full = true
-            }
-            'o' -> {                        ; Ctrl-O: move this dir's tagged files
-                                            ; (Ctrl-M is Enter/$0D, eaten by the kernal)
-                op_copymove(true, true)
                 dirty_full = true
             }
             'w' -> {                        ; Ctrl-W: tag files by wildcard
@@ -1261,7 +1278,7 @@ main {
         ; the bottom command menu (rows CMDROW1/CMDROW2) is drawn by the uiutil overlay - all its
         ; label strings live there now. Pass the state it varies on (the overlay can't see globals).
         if ui_ok
-            ui_draw_commands(menu_mode, focus, del_char, xfiles.sort_mode, find_char)
+            ui_draw_commands(menu_mode, focus, del_char, xfiles.sort_mode, find_char, move_char)
     }
 
     ; ---------- file operations ----------
@@ -1390,8 +1407,26 @@ main {
         box_open()
         box_left(CMDROW1, cm_dst)
         bool ok = false
-        if misc_ok
-            ok = prune_dir(&pathbuf, &namebuf) != 0     ; banked engine (miscutil overlay, bank 3)
+        if misc_ok {
+            ; the engine removes ONE directory per call (deepest leaf first); loop until the target
+            ; itself goes (0) or it errors (255), showing a live "(Dir: N)" counter like Find does.
+            uword nremoved = 0
+            repeat {
+                ubyte pr = prune_dir(&pathbuf, &namebuf)    ; banked engine (miscutil overlay, bank 3)
+                if pr == 255
+                    break                                   ; error -> ok stays false (partial delete)
+                nremoved++
+                txt.plot(BANNER_LEFT, CMDROW2)              ; live counter on row 2 of the status box
+                txt.print("(Dir: ")
+                txt.print_uw(nremoved)
+                txt.chrout(')')
+                hilite_row(0, 79, CMDROW2, shared.CLR_BOTTOM_PROMPT_BG)
+                if pr == 0 {
+                    ok = true                               ; target removed -> whole subtree gone
+                    break
+                }
+            }
+        }
         diskio.chdir(pathbuf)                           ; restore cwd to the parent
         if ok {
             xtree.unlink(idx)
@@ -1705,7 +1740,7 @@ main {
         ; is exactly what copy_one needs - it writes each file by bare name into the CWD.
         if dir_exists(path)
             return true
-        if not confirm_enter("Dest dir missing. Create it?")     ; ENTER = create, ESC = cancel
+        if not confirm_enter("Destination dir missing. Create?")     ; ENTER = create, ESC = cancel
             return false
         make_dirs(path)                         ; create the whole chain, not just the leaf
         if dir_exists(path)                     ; confirm it really got created (and enter it)

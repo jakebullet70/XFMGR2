@@ -50,14 +50,15 @@ main {
     }
 
     sub prune_dir(uword parptr @R0, uword nameptr @R1) -> ubyte {
-        ; real entry ($A006). Recursively delete <parent>/<name>/ and everything under it, using
-        ; diskio only. Returns 1 on success, 0 on failure (a partial delete is possible - the
-        ; caller should rescan). parent must be absolute and end with '/'. As with
-        ; wildcard_expand, the two pointers are copied into prune's params before its body runs,
-        ; so the diskio/strings clobber of cx16.r0-r3 inside is harmless.
-        if prune(parptr, nameptr)
-            return 1
-        return 0
+        ; real entry ($A006). Remove ONE directory of the <parent>/<name>/ subtree per call (the
+        ; deepest current leaf), so the caller can loop and show a live "(Dir: N)" counter. Call
+        ; repeatedly with the SAME parent+name until it returns 0 (done) or 255 (error):
+        ;   0   = the target itself was just removed -> whole subtree gone (stop),
+        ;   1   = removed an intermediate subdir     -> call again,
+        ;   255 = too deep / rmdir failed            -> abort (partial delete possible; rescan).
+        ; parent must be absolute and end with '/'. As with wildcard_expand, the pointers are copied
+        ; into prune_step's params before its body runs, so the diskio/strings r0-r3 clobber is safe.
+        return prune_step(parptr, nameptr)
     }
 
     sub stream_copy(uword srcptr @R0, uword dstptr @R1) -> uword {
@@ -180,42 +181,42 @@ main {
     ubyte[81]  pr_path                      ; filename scratch for delete_all_files
     ubyte[255] cpbuf                        ; in-bank stream-copy chunk buffer (was viewbuf in main RAM)
 
-    sub prune(str parent_path, str name) -> bool {
-        ; Recursively delete <parent_path><name>/ and EVERYTHING under it, then the directory
-        ; itself. parent_path is absolute and ends with '/'.
+    sub prune_step(str parent_path, str name) -> ubyte {
+        ; Remove ONE directory of the <parent_path><name>/ subtree per call: descend from the
+        ; target to its deepest leaf (a dir with no subdirectories), scratch all that leaf's files,
+        ; and rmdir it. parent_path is absolute and ends with '/'. Returns:
+        ;   0   = the leaf WAS the target -> the whole subtree is now gone (caller stops),
+        ;   1   = removed an intermediate subdir -> caller should call again,
+        ;   255 = too deep / rmdir failed -> abort (a partial delete is possible; caller rescans).
         ;
-        ; Prog8 locals are statically allocated (no safe recursion), and diskio allows only one
-        ; listing at a time, so we do this iteratively: repeatedly descend from the target to a
-        ; directory that has no subdirectories (a leaf), scratch all its files, rmdir it, and
-        ; start over. Each pass removes exactly one directory, so it terminates; any rmdir
-        ; failure aborts with false rather than looping forever. On false the on-disk tree may
-        ; be partly deleted - the caller should rescan.
+        ; Prog8 locals are statically allocated (no safe recursion) and diskio allows only one
+        ; listing at a time, so the caller drives this one directory at a time (which also lets it
+        ; show a live counter). Each call removes exactly one dir, so the caller's loop terminates.
+        ; start at the target, descend to a leaf, tracking parent + leaf name
+        void strings.copy(parent_path, pr_par)
+        void strings.copy(name, pr_leaf)
+        join_path(pr_par, pr_leaf, pr_cur)              ; pr_cur = target dir path
+        bool descended = false
+        ubyte guard = 0
         repeat {
-            ; start each pass at the target, descend to a leaf, tracking parent + leaf name
-            void strings.copy(parent_path, pr_par)
-            void strings.copy(name, pr_leaf)
-            join_path(pr_par, pr_leaf, pr_cur)          ; pr_cur = target dir path
-            bool descended = false
-            ubyte guard = 0
-            repeat {
-                if not first_subdir(pr_cur, pr_leaf)    ; subdir name goes straight into pr_leaf
-                    break                               ; (untouched if none) pr_cur is a leaf dir
-                void strings.copy(pr_cur, pr_par)       ; its parent is the current dir
-                join_path(pr_par, pr_leaf, pr_cur)      ; descend into the subdirectory
-                descended = true
-                guard++
-                if guard >= PRUNE_MAXDEPTH or strings.length(pr_cur) >= 95
-                    return false                        ; too deep / path too long
-            }
-            ; leaf = pr_cur, its parent = pr_par, its name = pr_leaf
-            delete_all_files(pr_cur)                    ; scratch every file in the leaf (by name)
-            diskio.chdir(pr_par)
-            diskio.rmdir(pr_leaf)
-            if diskio.status_code() != 0
-                return false                            ; rmdir failed -> stop (don't spin)
-            if not descended
-                return true                             ; the leaf WAS the target: done
+            if not first_subdir(pr_cur, pr_leaf)        ; subdir name goes straight into pr_leaf
+                break                                   ; (untouched if none) pr_cur is a leaf dir
+            void strings.copy(pr_cur, pr_par)           ; its parent is the current dir
+            join_path(pr_par, pr_leaf, pr_cur)          ; descend into the subdirectory
+            descended = true
+            guard++
+            if guard >= PRUNE_MAXDEPTH or strings.length(pr_cur) >= 95
+                return 255                              ; too deep / path too long
         }
+        ; leaf = pr_cur, its parent = pr_par, its name = pr_leaf
+        delete_all_files(pr_cur)                        ; scratch every file in the leaf (by name)
+        diskio.chdir(pr_par)
+        diskio.rmdir(pr_leaf)
+        if diskio.status_code() != 0
+            return 255                                  ; rmdir failed -> stop (don't spin)
+        if not descended
+            return 0                                    ; the leaf WAS the target: subtree gone
+        return 1                                        ; removed a subdir: more passes to go
     }
 
     sub join_path(str base, str seg, str out) {

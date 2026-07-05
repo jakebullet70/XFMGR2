@@ -17,8 +17,10 @@ is built and verified on the emulator. Modules (project root .p8 files):
   is reserved for the xtree dir-extras table (see below); the allocator never touches it.
 - `xtree.p8` — directory tree, byte-indexed parallel-array node pool (NONE=255, root=index 0).
   Holds DIRECTORIES ONLY. SPLIT by access pattern: redraw-hot fields
-  (`d_parent/d_first_child/d_next_sibling/d_name_off/d_flags/d_depth`) + name slab stay in
-  MAIN RAM; the COLD per-dir fields (file_count, file_off, file_bank, tagged_count) live in
+  (`d_parent/d_first_child/d_next_sibling/d_name_off/d_flags/d_depth`) stay in MAIN RAM. The
+  name slab was ALSO main RAM but moved to bank 8 on 2026-07-05 (`name_ptr` far-reads via a
+  staging buffer; freed ~2.9 KB - the Tier B move, see [[xfmgr-overlay-ram-strategy]]).
+  The COLD per-dir fields (file_count, file_off, file_bank, tagged_count) live in
   a 7-byte-per-node "dir-extras" record in BANKED RAM bank 1 ($A000+id*7), reached via
   `dx_*` accessor subs (`dx_fcount/dx_set_foff/dx_inc_tag/dx_dec_tag`…). This reclaimed
   ~974 B net main RAM (Tier A). `rebuild_visible()` flattens expanded nodes iteratively.

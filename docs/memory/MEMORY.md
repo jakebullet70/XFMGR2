@@ -14,20 +14,20 @@
 - [X16 banked RAM min config](x16-banked-ram-min-config.md) — stock = banks 0-63; reserve the LOWEST bank
 - [X16 Edit bank handoff](xfmgr-editor-bank-handoff.md) — op_edit lastbank must be xarena.max_bank, never 255
 - [Run own utils and return](xfmgr-run-utils-and-return.md) — banked overlay vs swap-and-relaunch patterns
-- [Prune command](xfmgr-prune-command.md) — DIR-col P recursively deletes a dir subtree (iterative, typed confirm)
+- [Prune command](xfmgr-prune-command.md) — DIR-col P deletes a subtree; miscutil per-dir iterator + live (Dir: N) counter
 - [Always report mem stats](always-report-mem-stats.md) — include build memory-stats block in replies
 - [Revisit ShowAll](xfmgr-showall-revisit.md) — backlog: ShowAll is tagged-only across logged dirs; consider a whole-disk flat browser
 - [ZIP/ARC support (V2)](xfmgr-zip-arc-v2.md) — backlog: browse/extract archives in V2; DEFLATE/ARC decompress is the hard part
 - [Embedded PETSCII color codes](x16-embedded-petscii-color-codes.md) — inline \x9e/\x05/\x9a in one txt.print string saves bytes vs txt.color() calls
 - [User tests in emulator themselves](user-tests-in-emulator-themselves.md) — build & launch, then report; don't drive the GUI to verify
-- [RAM savings menu](xfmgr-ram-savings-menu.md) — verified ~2.9 KB of held main-RAM savings + the 3 overflow bugs already fixed
+- [RAM savings menu](xfmgr-ram-savings-menu.md) — DONE 2026-07-05: cold-buffer + name-slab reclaim spent; free RAM ~3.25 KB
 - [Memory is git-tracked](memory-is-git-tracked.md) — this memory folder is a junction into the repo (docs/memory)
 - [Drop viewer for RAM](xfmgr-drop-viewer-ram.md) — DONE: pulled xviewer (+3.1 KB free); code preserved as standalone SRC/tview.p8, V→X16 Edit
 - [%jmptable init-vars gotcha](prog8-jmptable-init-vars-gotcha.md) — initialized vars shove the jump table off its fixed offset; use uninit BSS arrays
 - [Prog8 long type limits](prog8-long-type-limits.md) — long[] caps at 64 elems; array index must be a byte; narrowing needs `as`
 - [docs/ reference tree](xfmgr-docs-reference-tree.md) — repo vendors prog8 stdlib, X16 manuals, examples, agent skills; ProgB docs too
 - [Filename literals must be lowercase](prog8-filename-literals-lowercase.md) — uppercase source A-Z encodes to $C1-DA and the FS won't match; use lowercase
-- [Overlay RAM strategy](xfmgr-overlay-ram-strategy.md) — bank map (2=tview 3=miscutil 4=uiutil), UI-in-overlay pattern, 5.9 KB free, backlog
+- [Overlay RAM strategy](xfmgr-overlay-ram-strategy.md) — bank map (…7=xmusic, 8=dir-name slab, arena 9+), UI-in-overlay, name_ptr staging
 - [BMX image viewer](xfmgr-bmx-image-viewer.md) — V on *.bmx -> bank-5 ximgview overlay; png2bmx converter in tools/ (Python off-PATH)
 - [Colour theme setup](xfmgr-color-theme-setup.md) — Alt-F10 -> standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
 - [Cfg read via loadlib](xfmgr-cfg-read-exists-guard.md) — cfg_read LOADs xfmgr.cfg like an overlay; never f_open (absent file corrupts menu draw)
@@ -35,6 +35,7 @@
 - [Theme contrast rules](xfmgr-theme-contrast-rules.md) — keys(7) must pop off text(1); idx14 is both border-fg and selbar-bg
 - [Find file (Ctrl-F)](xfmgr-find-file.md) — whole-disk crawler overlay yields match-dirs; log-on-match; flat modal + jump-to-file
 - [CP437/ISO keyboard](x16-cp437-iso-keyboard.md) — why XFMGR stays PETSCII: ISO mode breaks the ALT/CTRL command keys
+- [Adaptive CTRL keys (emu vs hw)](x16-adaptive-ctrl-keys.md) — Delete/Find/Move rebind around emulator-swallowed Ctrl combos
 - [Custom fonts (V2)](xfmgr-custom-fonts-v2.md) — backlog: upload a custom charset for double-line DOS boxes, staying PETSCII
 - [Vendored diskio patch](prog8-diskio-vendored-patch.md) — SRC/diskio_patched.p8 bounds the 50-byte list_filename overflow; prog8 can't shadow embedded libs by name
 - [Music player (P key)](xfmgr-music-player.md) — .zsm via zsmkit bank 6 (main-driven), .wav via xmusic overlay bank 7 (poll-AFLOW); magic-byte sniff

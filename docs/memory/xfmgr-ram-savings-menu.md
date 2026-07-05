@@ -7,6 +7,17 @@ metadata:
   originSessionId: ecce6089-1862-45c8-b4ec-b0098baae389
 ---
 
+**UPDATE 2026-07-05 - this backlog is now SPENT; free RAM ~3.25 KB.** Two passes:
+(1) **cold-buffer overlay (~161 B):** the remaining cold modal string buffers can't use Prog8 `alias`
+(alias is illegal at MODULE scope) and strings can't be memory-mapped, so guests are `uword` pointers
+into the copy/move scratch (`sa_line`/`exit_dir`/`find_lc` = `&cm_src`/`&cm_sdir`; access via
+`@(ptr)`). LESSON: pointer indirection adds CODE, so heavily-accessed buffers (inputbuf, hist_line)
+cost more image than they save in BSS - left as their own storage. Net only ~161 B (507->668 B).
+(2) **dir-name slab -> bank 8 (~2.9 KB):** the real win - see [[xfmgr-overlay-ram-strategy]]
+(668->3539 B). The cold-bank move below is moot now: `sa_*`/`pr_*`/`hist_buf`/viewer were already
+banked in prior sessions, and the leftover cold buffers went the overlay route above. DIR_MAX is back
+to 254 (the 128 cap was reverted). The historical menu below is kept for reference.
+
 **Verified RAM-savings review (2026-07-01).** Free main RAM was ~2.2 KB. A workflow
 found + adversarially verified these savings; the user chose to **fix the overflow
 bugs first and HOLD the RAM changes**. Byte figures are the corrected (post-verify)

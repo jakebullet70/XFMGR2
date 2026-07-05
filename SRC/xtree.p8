@@ -124,11 +124,17 @@ xtree {
             dx_set_tag(idx, t - 1)
     }
 
-    ; --- directory-name bump arena (main RAM) ---
-    ; backed by a reserved memory slab (arrays are capped at 256 elements, so we
-    ; address this by pointer arithmetic instead).
-    uword dname_buf = memory("dnames", DNAME_SZ, 0)
+    ; --- directory-name bump arena (BANKED: reserved bank 8, NAME_BANK) ---
+    ; Names live in NAME_BANK at NAME_BASE+offset, NOT main RAM - this reclaimed the 3072-byte
+    ; main-RAM slab. d_name_off[idx] is still a byte offset into the arena; the name's far address
+    ; is NAME_BASE + d_name_off[idx]. name_ptr() far-reads the requested name into name_stage (main
+    ; RAM) and returns that pointer, so every reader keeps its plain str API unchanged. ONE staging
+    ; buffer is safe: no code holds a name_ptr result across another name_ptr call (draw_tree /
+    ; build_path / the name compares all consume it immediately, one node at a time).
+    const ubyte NAME_BANK = 8
+    const uword NAME_BASE = $a000
     uword dname_next
+    str name_stage = "?" * 63           ; name_ptr's far-read landing buffer (dir names are <= ~49)
 
     ; --- flattened "visible" list, rebuilt when expand state changes ---
     ubyte[DIR_MAX] vis_idx              ; node ids in display order
@@ -152,25 +158,28 @@ xtree {
     }
 
     sub dname_store(str s) -> uword {
-        ; returns byte offset into dname_buf, or $ffff if the arena is full
+        ; returns byte offset into the name bank, or $ffff if the arena is full
         uword off = dname_next
         uword n = strings.length(s) + 1
         if off + n > DNAME_SZ
             return $ffff
-        void strings.copy(s, dname_buf + off)
+        xarena.far_write_str(NAME_BANK, NAME_BASE + off, s)
         dname_next += n
         return off
     }
 
     sub name_ptr(ubyte idx) -> str {
-        return dname_buf + d_name_off[idx]
+        ; far-read the banked name into the shared staging buffer; valid until the NEXT call
+        xarena.read_str(NAME_BANK, NAME_BASE + d_name_off[idx], name_stage, 63)
+        return name_stage
     }
 
     sub rename_node(ubyte idx, str newname) {
         ; change a directory node's stored name. Fits the old slot -> overwrite in place;
         ; longer -> append a fresh copy to the name arena (the old bytes leak, like unlink()).
         if strings.length(newname) <= strings.length(name_ptr(idx)) {
-            void strings.copy(newname, name_ptr(idx))       ; fits: overwrite in place
+            ; fits the old slot: overwrite in place (far-write into the name bank)
+            xarena.far_write_str(NAME_BANK, NAME_BASE + d_name_off[idx], newname)
         } else {
             uword noff = dname_store(newname)               ; longer: append (old bytes leak)
             if noff != $ffff

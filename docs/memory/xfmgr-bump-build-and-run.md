@@ -9,8 +9,9 @@ metadata:
 
 After making ANY code change to XFMGR, before handing back: bump `BUILD_NUM` in `SRC/xfmgr.p8`
 (the `const ubyte BUILD_NUM` near the top, ~line 42) by 1 **AND** update the matching About-screen
-string `aboutln(7, "Version 1.0.N")` in `SRC/uiutil.p8` (~line 327) to the same N — they must stay
-in sync (shown top-right as "build N" and on the About modal as "Version 1.0.N"). Then run `run.bat`
+string `aboutln(7, "Version 1.0.N")` in `SRC/uiutil.p8` (~line 327) to the same N **AND** the
+`*(build:N)*` line near the top of `README.md` (added 2026-07-05, user request) — all THREE must stay
+in sync (shown top-right as "build N", on the About modal as "Version 1.0.N", and in the readme). Then run `run.bat`
 (compiles via build.bat, stages into run\xfmgr\, and launches the emulator). Do NOT stop at building.
 
 The build number is hardcoded in BOTH places (not threaded through the uiutil overlay's extsub
