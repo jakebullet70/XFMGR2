@@ -13,7 +13,7 @@ SETLOCAL
 SET SRC=%1
 IF "%SRC%"=="" SET SRC=xfmgr.p8
 
-REM 1) compile (build.bat writes xfmgr.prg to the project root)
+REM 1) compile (build.bat writes xfmgr.prg + overlays into build\)
 CALL "%~dp0build.bat" %SRC%
 IF ERRORLEVEL 1 GOTO :EOF
 
@@ -29,14 +29,14 @@ rem 'COPY /Y "%~dp0miscutil.ovl" "%RUNDIR%\miscutil.ovl" >NUL
 REM 2b) also copy all built files into run\xfmgr
 SET XFMGRDIR=%RUNDIR%\xfmgr
 IF NOT EXIST "%XFMGRDIR%" MKDIR "%XFMGRDIR%"
-COPY /Y "%~dp0xfmgr.prg" "%XFMGRDIR%\xfmgr.prg" >NUL
-COPY /Y "%~dp0tview.ovl" "%XFMGRDIR%\tview.ovl" >NUL
-COPY /Y "%~dp0miscutil.ovl" "%XFMGRDIR%\miscutil.ovl" >NUL
-COPY /Y "%~dp0uiutil.ovl" "%XFMGRDIR%\uiutil.ovl" >NUL
-COPY /Y "%~dp0ximgview.ovl" "%XFMGRDIR%\ximgview.ovl" >NUL
-COPY /Y "%~dp0xmusic.ovl" "%XFMGRDIR%\xmusic.ovl" >NUL
-COPY /Y "%~dp0xfsetup.prg" "%XFMGRDIR%\xfsetup.prg" >NUL
-REM the zsmkit music-engine blob (bank 6) - a library asset, loaded like the overlays
+COPY /Y "%~dp0build\xfmgr.prg" "%XFMGRDIR%\xfmgr.prg" >NUL
+COPY /Y "%~dp0build\tview.ovl" "%XFMGRDIR%\tview.ovl" >NUL
+COPY /Y "%~dp0build\miscutil.ovl" "%XFMGRDIR%\miscutil.ovl" >NUL
+COPY /Y "%~dp0build\uiutil.ovl" "%XFMGRDIR%\uiutil.ovl" >NUL
+COPY /Y "%~dp0build\ximgview.ovl" "%XFMGRDIR%\ximgview.ovl" >NUL
+COPY /Y "%~dp0build\xmusic.ovl" "%XFMGRDIR%\xmusic.ovl" >NUL
+COPY /Y "%~dp0build\xfsetup.prg" "%XFMGRDIR%\xfsetup.prg" >NUL
+REM the zsmkit music-engine blob (bank 6) - a static library asset (not built), kept at root
 COPY /Y "%~dp0zsmkit.bin" "%XFMGRDIR%\zsmkit.bin" >NUL
 REM stage the F1 help text (a static asset, not built) alongside the .prg
 COPY /Y "%~dp0xfmgr.hlp" "%XFMGRDIR%\xfmgr.hlp" >NUL

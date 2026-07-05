@@ -20,15 +20,18 @@ REM "'Fastboot++\' is not recognized" error. Quoting makes '&' literal.
 SET "PATH=%JAVABIN%;%TASSBIN%;%PATH%"
 
 SET SRCDIR=%~dp0SRC
+SET BUILDDIR=%~dp0build
 SET SRC=%1
 IF "%SRC%"=="" SET SRC=xfmgr.p8
-REM the .prg is named after the source (xfmgr.p8 -> xfmgr.prg), written to the root
-FOR %%F IN ("%SRC%") DO SET PRGFILE=%~dp0%%~nF.prg
+REM the .prg is named after the source (xfmgr.p8 -> xfmgr.prg), written to build\
+FOR %%F IN ("%SRC%") DO SET PRGFILE=%BUILDDIR%\%%~nF.prg
 
 SET BUILDLOG=%TEMP%\xfmgr_build.txt
+REM all compiler output (.prg/.bin/.asm/.vice-mon-list) is directed into build\ (gitignored)
+IF NOT EXIST "%BUILDDIR%" MKDIR "%BUILDDIR%"
 REM prog8c.jar (root) is the active compiler; prior versions are archived in old-compilers\
 REM (swap the name here to roll back to one of those).
-java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\%SRC%" > "%BUILDLOG%" 2>&1
+java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\%SRC%" > "%BUILDLOG%" 2>&1
 SET ERR=%ERRORLEVEL%
 TYPE "%BUILDLOG%"
 IF NOT "%ERR%"=="0" ( ENDLOCAL & EXIT /B %ERR% )
@@ -41,28 +44,28 @@ REM     this script renames to tview.ovl) at $A000, loaded into HIRAM bank 2 at 
 REM     via extsub @bank. Only when building the app itself. %memtop $C000 in tview.p8 fails the
 REM     build if it outgrows the bank. (All four overlays are renamed .bin -> .ovl below.)
 IF /I "%SRC%"=="xfmgr.p8" (
-    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\tview.p8" > "%TEMP%\tview_build.txt" 2>&1
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\tview.p8" > "%TEMP%\tview_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\tview_build.txt" & ECHO *** tview overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    MOVE /Y "%~dp0tview.bin" "%~dp0tview.ovl" >NUL
+    MOVE /Y "%BUILDDIR%\tview.bin" "%BUILDDIR%\tview.ovl" >NUL
     ECHO tview overlay: tview.ovl built ^($A000 HIRAM bank overlay^).
-    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\miscutil.p8" > "%TEMP%\miscutil_build.txt" 2>&1
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\miscutil.p8" > "%TEMP%\miscutil_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\miscutil_build.txt" & ECHO *** miscutil overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    MOVE /Y "%~dp0miscutil.bin" "%~dp0miscutil.ovl" >NUL
+    MOVE /Y "%BUILDDIR%\miscutil.bin" "%BUILDDIR%\miscutil.ovl" >NUL
     ECHO miscutil overlay: miscutil.ovl built ^($A000 HIRAM bank overlay^).
-    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\uiutil.p8" > "%TEMP%\uiutil_build.txt" 2>&1
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\uiutil.p8" > "%TEMP%\uiutil_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\uiutil_build.txt" & ECHO *** uiutil overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    MOVE /Y "%~dp0uiutil.bin" "%~dp0uiutil.ovl" >NUL
+    MOVE /Y "%BUILDDIR%\uiutil.bin" "%BUILDDIR%\uiutil.ovl" >NUL
     ECHO uiutil overlay: uiutil.ovl built ^($A000 HIRAM bank overlay^).
-    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\ximgview.p8" > "%TEMP%\ximgview_build.txt" 2>&1
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\ximgview.p8" > "%TEMP%\ximgview_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\ximgview_build.txt" & ECHO *** ximgview overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    MOVE /Y "%~dp0ximgview.bin" "%~dp0ximgview.ovl" >NUL
+    MOVE /Y "%BUILDDIR%\ximgview.bin" "%BUILDDIR%\ximgview.ovl" >NUL
     ECHO ximgview overlay: ximgview.ovl built ^($A000 HIRAM bank overlay^).
-    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\xmusic.p8" > "%TEMP%\xmusic_build.txt" 2>&1
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\xmusic.p8" > "%TEMP%\xmusic_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\xmusic_build.txt" & ECHO *** xmusic overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    MOVE /Y "%~dp0xmusic.bin" "%~dp0xmusic.ovl" >NUL
+    MOVE /Y "%BUILDDIR%\xmusic.bin" "%BUILDDIR%\xmusic.ovl" >NUL
     ECHO xmusic overlay: xmusic.ovl built ^($A000 HIRAM bank overlay^).
     REM companion: the standalone colour-theme setup utility (a full $0801 PRG, not an overlay).
-    java -jar "%~dp0prog8c.jar" -target cx16 -out "%~dp0." "%SRCDIR%\xfsetup.p8" > "%TEMP%\xfsetup_build.txt" 2>&1
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\xfsetup.p8" > "%TEMP%\xfsetup_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\xfsetup_build.txt" & ECHO *** xfsetup build FAILED *** & ENDLOCAL & EXIT /B 1 )
     ECHO xfsetup utility: xfsetup.prg built ^(standalone theme picker^).
 )

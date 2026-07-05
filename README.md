@@ -210,7 +210,7 @@ Requires **Java** (JRE) and the **64tass** assembler (v1.60); their paths are ba
 into `build.bat`, which drives the bundled `prog8c.jar` Prog8 compiler:
 
 ```
-build.bat xfmgr.p8        # -> xfmgr.prg + the four .ovl overlays + xfsetup.prg
+build.bat xfmgr.p8        # -> build\xfmgr.prg + the .ovl overlays + xfsetup.prg
 ```
 
 Building `xfmgr.p8` also compiles its companions:
@@ -222,13 +222,17 @@ Building `xfmgr.p8` also compiles its companions:
   `.bin` to `.ovl`).
 - **`xfsetup.prg`** — the standalone colour-theme picker launched by `Alt-F10`.
 
+All compiler output (`.prg`, `.ovl`, and the intermediate `.asm`/`.vice-mon-list`) is
+written into a gitignored `build\` folder, so the project root stays clean. Static
+assets that are *not* built — `xfmgr.hlp` and `zsmkit.bin` — stay at the root.
+
 The build prints a memory-stats block (image size, BSS/slab, main-RAM high-water,
 free low RAM below `$9F00`, and the on-disk `.prg` size). Banked HIRAM is not counted —
 it holds the overlays and the dynamically-growing file arena.
 
-`run.bat` compiles, stages `xfmgr.prg`, all four `.ovl` overlays and `xfsetup.prg`
-into `run/xfmgr/`, copies the sample `.bmx` images into the browse root, and launches
-the emulator:
+`run.bat` compiles, stages the built `xfmgr.prg`, the `.ovl` overlays and `xfsetup.prg`
+(from `build\`) into `run/xfmgr/`, copies the sample `.bmx` images into the browse root,
+and launches the emulator:
 
 ```
 run.bat                   # build + stage + launch in the emulator

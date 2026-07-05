@@ -12,9 +12,11 @@ from .bin on 2026-07-03, build 110, at the user's request). Any older memory tha
 etc. is stale — the extension is now **.ovl**.
 
 The build chain (prog8 has no output-extension option, so a rename step does it):
-- `build.bat`: each `%output library` overlay compiles to `<name>.bin` in the repo root, then a
-  `MOVE /Y <name>.bin <name>.ovl` renames it. (xfmgr.prg and xfsetup.prg stay .prg.)
-- `run.bat`: stages `<name>.ovl` into `run\xfmgr\`.
+- `build.bat`: all compiler output goes to a gitignored `build\` folder (`-out "%BUILDDIR%"`,
+  BUILDDIR=`%~dp0build`). Each `%output library` overlay compiles to `build\<name>.bin`, then a
+  `MOVE /Y build\<name>.bin build\<name>.ovl` renames it. (xfmgr.prg and xfsetup.prg stay .prg,
+  also in `build\`.) The repo root stays clean; static assets xfmgr.hlp + zsmkit.bin remain at root.
+- `run.bat`: stages `build\<name>.ovl` into `run\xfmgr\`.
 - `xfmgr.p8`: loads them with `diskio.loadlib("<name>.ovl", $a000)` (lowercase literal so the
   host-fs matches — see [[prog8-filename-literals-lowercase]]).
 

@@ -5,6 +5,7 @@
 *.vice-mon-list
 *.asm
 .vscode/settings.json
+build/
 run/*
 __pycache__/
 *.pyc

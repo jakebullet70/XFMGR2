@@ -14,8 +14,11 @@ Compiling/running X16 Prog8 here required tools NOT on PATH — found by searchi
 - **Compiler**: `prog8c.jar` in the project root (Prog8 v12.1.1)
 - **Emulator**: `C:\8bitProgramming\x16emu\x16emu.exe` (path also in LOCAL.BAT)
 
-Build: `build.bat <src.p8>` (created in project root) sets PATH for both, then
-`java -jar prog8c.jar -target cx16 <src.p8>` → produces `<src>.prg`.
+Build: `build.bat <src.p8>` (in project root) sets PATH for both, then
+`java -jar prog8c.jar -target cx16 -out build <src.p8>` → produces `build\<src>.prg`.
+All compiler output (`.prg`/`.ovl`/`.asm`/`.vice-mon-list`) lands in the gitignored
+`build\` folder so the repo root stays clean; `prog8c.jar` and the static assets
+`xfmgr.hlp`/`zsmkit.bin` remain at root.
 
 Automated run + output capture (since the emulator is a GUI):
 `x16emu -prg X.prg -run -echo -warp` with `-RedirectStandardOutput` to a file —
