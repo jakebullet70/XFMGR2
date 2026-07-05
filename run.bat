@@ -40,6 +40,23 @@ REM the zsmkit music-engine blob (bank 6) - a static library asset (not built), 
 COPY /Y "%~dp0zsmkit.bin" "%XFMGRDIR%\zsmkit.bin" >NUL
 REM stage the F1 help text (a static asset, not built) alongside the .prg
 COPY /Y "%~dp0xfmgr.hlp" "%XFMGRDIR%\xfmgr.hlp" >NUL
+REM seed a default theme cfg ONLY if none exists yet, so a theme set via xfsetup in the emulator
+REM survives a rebuild (mirrors the installer's preserve-existing-cfg behaviour).
+IF NOT EXIST "%XFMGRDIR%\xfmgr.cfg" COPY /Y "%~dp0xfmgr.cfg" "%XFMGRDIR%\xfmgr.cfg" >NUL
+
+REM 2b') stage a RELEASE test folder (NOT /xfmgr) holding every release file plus the
+REM      installer, so install.prg can be exercised the way an end user would:
+REM      boot, CD:RELEASE, then run it - it creates /xfmgr and /xt from there.
+SET RELDIR=%RUNDIR%\RELEASE
+IF NOT EXIST "%RELDIR%" MKDIR "%RELDIR%"
+COPY /Y "%XFMGRDIR%\*.prg" "%RELDIR%\" >NUL
+COPY /Y "%XFMGRDIR%\*.ovl" "%RELDIR%\" >NUL
+COPY /Y "%XFMGRDIR%\*.bin" "%RELDIR%\" >NUL
+COPY /Y "%XFMGRDIR%\*.hlp" "%RELDIR%\" >NUL
+REM the default theme cfg is a release file too (installer ships + preserves it) - stage it from the
+REM root so install.prg finds it here; without this a fresh install reports "xfmgr.cfg not found".
+COPY /Y "%~dp0xfmgr.cfg" "%RELDIR%\" >NUL
+COPY /Y "%~dp0build\install.prg" "%RELDIR%\install.prg" >NUL
 
 REM 2c) stage the sample media (tracked in samples\ / vendored) into the browse root so the
 REM     V/P players have something to open. run\ is gitignored; samples\ is the source of truth.

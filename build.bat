@@ -39,6 +39,11 @@ IF NOT "%ERR%"=="0" ( ENDLOCAL & EXIT /B %ERR% )
 REM --- memory-stats block parsed from the segment map ---
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0memstats.ps1" -Log "%BUILDLOG%" -Prg "%PRGFILE%"
 
+REM --- sync the F1 readme (xfmgr.hlp) "(Build N)" line with BUILD_NUM / the About box, and warn if
+REM     the About string (uiutil.p8) or README.md build marker have drifted. Full builds only; runs
+REM     before xfmgr.hlp is copied into the release / run folders below.
+IF /I "%SRC%"=="xfmgr.p8" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0syncbuild.ps1" -Src "%SRCDIR%\xfmgr.p8" -Ui "%SRCDIR%\uiutil.p8" -Readme "%~dp0README.md" -Hlp "%~dp0xfmgr.hlp"
+
 REM --- companion build: the tview viewer overlay (%output library -> headerless tview.bin, which
 REM     this script renames to tview.ovl) at $A000, loaded into HIRAM bank 2 at runtime and called
 REM     via extsub @bank. Only when building the app itself. %memtop $C000 in tview.p8 fails the
@@ -68,6 +73,35 @@ IF /I "%SRC%"=="xfmgr.p8" (
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\xfsetup.p8" > "%TEMP%\xfsetup_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\xfsetup_build.txt" & ECHO *** xfsetup build FAILED *** & ENDLOCAL & EXIT /B 1 )
     ECHO xfsetup utility: xfsetup.prg built ^(standalone theme picker^).
+    REM companion: the standalone self-installer (a full $0801 PRG) - run once from the release folder.
+    java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\install.p8" > "%TEMP%\install_build.txt" 2>&1
+    IF ERRORLEVEL 1 ( TYPE "%TEMP%\install_build.txt" & ECHO *** install build FAILED *** & ENDLOCAL & EXIT /B 1 )
+    ECHO installer: install.prg built ^(creates /xfmgr + /xt on the SD card^).
 )
+
+REM --- assemble the end-user RELEASE folder: exactly the files install.prg ships (the 9 it copies)
+REM     plus install.prg itself, dropped into release\xfmgr-install so the folder can be zipped and
+REM     handed off as-is. Full builds only. App, overlays and utilities come from build\; zsmkit.bin
+REM     and xfmgr.hlp are static assets kept at the root. (This runs OUTSIDE the paren block above:
+REM     a var SET inside a (...) block is expanded at parse time, before the SET runs, so RELOUT
+REM     would be empty there - keep it here, one command per line, where expansion is normal.)
+IF /I NOT "%SRC%"=="xfmgr.p8" GOTO :done
+SET RELOUT=%~dp0release\xfmgr-install
+IF NOT EXIST "%RELOUT%" MKDIR "%RELOUT%"
+COPY /Y "%BUILDDIR%\xfmgr.prg"    "%RELOUT%" >NUL
+COPY /Y "%BUILDDIR%\tview.ovl"    "%RELOUT%" >NUL
+COPY /Y "%BUILDDIR%\miscutil.ovl" "%RELOUT%" >NUL
+COPY /Y "%BUILDDIR%\uiutil.ovl"   "%RELOUT%" >NUL
+COPY /Y "%BUILDDIR%\ximgview.ovl" "%RELOUT%" >NUL
+COPY /Y "%BUILDDIR%\xmusic.ovl"   "%RELOUT%" >NUL
+COPY /Y "%BUILDDIR%\xfsetup.prg"  "%RELOUT%" >NUL
+COPY /Y "%BUILDDIR%\install.prg"  "%RELOUT%" >NUL
+COPY /Y "%~dp0zsmkit.bin"         "%RELOUT%" >NUL
+COPY /Y "%~dp0xfmgr.hlp"          "%RELOUT%" >NUL
+COPY /Y "%~dp0xfmgr.cfg"          "%RELOUT%" >NUL
+ECHO release folder: release\xfmgr-install assembled ^(app + overlays + utilities + installer + default cfg^).
+REM (run\RELEASE - staged by run.bat - already serves as the emulator install-test folder, so we no
+REM  longer mirror the release set into run\xfmgr-install; that only cluttered the fsroot.)
+:done
 
 ENDLOCAL & EXIT /B 0

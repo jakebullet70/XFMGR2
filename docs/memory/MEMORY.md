@@ -40,3 +40,4 @@
 - [Vendored diskio patch](prog8-diskio-vendored-patch.md) — SRC/diskio_patched.p8 bounds the 50-byte list_filename overflow; prog8 can't shadow embedded libs by name
 - [Music player (P key)](xfmgr-music-player.md) — .zsm via zsmkit bank 6 (main-driven), .wav via xmusic overlay bank 7 (poll-AFLOW); magic-byte sniff
 - [Music player polish (V2)](xfmgr-music-v2.md) — backlog: ADPCM wav, README, elapsed time, real-SD buffer, volume/seek
+- [ASCII file byte-match](prog8-ascii-file-byte-match.md) — parsing an ASCII disk file needs raw ASCII codes; prog8 char literals are PETSCII and silently never match letters

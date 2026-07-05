@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 174          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 184          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -2332,7 +2332,7 @@ main {
         }
     }
 
-    ; per-prompt history persistence (hist/<category>.his under the drive root) now lives in the
+    ; per-prompt history persistence (/xfmgr/hist/<category>.his in the install folder) now lives in the
     ; miscutil overlay (hist_load / hist_save extsubs); str_copy_cap stays here (still used by the
     ; F2 dir-pick and ShowAll).
     sub str_copy_cap(uword src, uword dst, ubyte cap) {

@@ -284,7 +284,9 @@ main {
     ; picker (hist_popup) stays in main and reads entries via the hist_get entry. hist_count is
     ; authoritative here; hist_load/hist_store return it so main can cache it (for the picker + the
     ; "any history?" check). diskio is shared with prune (already imported); `base` is the drive
-    ; root path, passed in (the overlay can't see xtree.base_path). Register args are captured into
+    ; root path, passed in (the overlay can't see xtree.base_path). The .his files live in the
+    ; install folder /xfmgr/hist (base -> "xfmgr" -> "hist"), alongside the .prg + cfg; `base` is
+    ; also the cwd restored afterward. Register args are captured into
     ; locals before the first strings/diskio call (which clobbers cx16.r0-r3) - same discipline as
     ; wildcard_expand / prune_dir.
     const ubyte HIST_N = 10                  ; ring depth (keep the most-recent HIST_N entries)
@@ -325,13 +327,14 @@ main {
     }
 
     sub hist_load(uword cat @R0, uword base @R1) -> ubyte {
-        ; entry ($A009): load hist/<cat>.his into the ring; returns the entry count.
+        ; entry ($A009): load /xfmgr/hist/<cat>.his into the ring; returns the entry count.
         uword lcat  = cat
         uword lbase = base
         his_set_fname(lcat)
         hist_count = 0
         diskio.chdir(lbase)
-        diskio.chdir("hist")                 ; if missing, cwd just stays at root
+        diskio.chdir("xfmgr")                ; into the install folder (dev layout: no-op -> falls back to base)
+        diskio.chdir("hist")                 ; if missing, cwd just stays in /xfmgr
         if diskio.f_open(his_fname) {
             repeat {
                 ubyte ln
@@ -383,12 +386,13 @@ main {
     }
 
     sub hist_save(uword cat @R0, uword base @R1) {
-        ; entry ($A00F): write the ring (newest first, one entry per line) to hist/<cat>.his,
+        ; entry ($A00F): write the ring (newest first, one entry per line) to /xfmgr/hist/<cat>.his,
         ; creating the hist/ dir on first use.
         uword lcat  = cat
         uword lbase = base
         his_set_fname(lcat)
         diskio.chdir(lbase)
+        diskio.chdir("xfmgr")                ; into the install folder (dev layout: no-op -> falls back to base)
         diskio.mkdir("hist")                 ; harmless if it already exists
         diskio.chdir("hist")
         diskio.delete(his_fname)             ; replace any previous file cleanly
