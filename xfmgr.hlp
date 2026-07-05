@@ -111,6 +111,18 @@
    N / Space    Repeat the search (find next)
    Q / Esc     Exit back to the file list
 
+------------------------------------------------------------------------------
+ LIMITS
+------------------------------------------------------------------------------
+   Directories Up to 254 directories are logged per session (the tree caps
+               there). Find scans the WHOLE disk no matter how many folders it
+               holds, but only logs the folders that CONTAIN a match. If one
+               search's matches are spread across more than 254 folders,
+               logging stops there and the results are marked "(partial)".
+   Find/ShowAll At most 255 matching files are collected; beyond that the list
+               is marked "(partial)". Very deep folder paths may be skipped
+               (also shown as "(partial)").
+
 ==============================================================================
  (c) 2025-26 sadLogic  -  written in Prog8
 ==============================================================================
