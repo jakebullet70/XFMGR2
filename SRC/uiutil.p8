@@ -327,7 +327,7 @@ main {
         aboutln(2,  "X F M G R")
         aboutln(4,  "An XTree-style file manager")
         aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Beta Version 1.0.163")     ; bump the last number with BUILD_NUM in xfmgr.p8
+        aboutln(7,  "Beta Version 1.0.165")     ; bump the last number with BUILD_NUM in xfmgr.p8
         ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
         txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
         txt.print("Banked RAM: ")
@@ -428,8 +428,19 @@ main {
         txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eI\x05nvert \x9eG\x05lobal ")
         find_label(find_char)
         txt.print(petscii:" \x9eC\x05opy m\x9eO\x05ve \x9eW\x05ildcard ")
-        draw_hkey(del_char)
-        txt.print(" Del")                   ; Ctrl-X (emu) / Ctrl-D (hw)
+        del_label(del_char)
+    }
+
+    sub del_label(ubyte del_char) {
+        ; the delete-tagged hotkey varies by environment (Ctrl-D on hw, Ctrl-X under the emulator,
+        ; which swallows Ctrl-D). Show the active key inside the word: "Delete" with D picked out on
+        ; hw, "X Del" on emu (Delete doesn't start with X). Mirrors find_label.
+        if del_char == 'D' {
+            txt.print(petscii:"\x9eD\x05elete")
+        } else {
+            draw_hkey(del_char)
+            txt.print("-Del")
+        }
     }
 
     sub find_label(ubyte find_char) {
@@ -439,7 +450,7 @@ main {
             txt.print(petscii:"\x9eF\x05ind")
         } else {
             draw_hkey(find_char)
-            txt.print(" Find")
+            txt.print("-Find")
         }
     }
 
