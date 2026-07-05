@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 158          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 163          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -192,6 +192,33 @@ main {
     extsub @bank 5 $A003 = view_image(uword nameptr @R0)
     bool imgview_ok                         ; ximgview.ovl loaded OK -> V shows .bmx images
 
+    ; --- banked ZSM music engine (zsmkit v2, release 2.8) ---
+    ; zsmkit.bin is a pre-built library blob (mooinglemur/zsmkit) loaded at $A000 into reserved
+    ; HIRAM bank 6; its jump table is fixed at $A000, $A003, ... Only main (always mapped below
+    ; $9F00) may call it - a banked overlay cannot @bank-call a different bank. P dispatches here
+    ; for a .zsm. The engine needs a ~255-byte low-RAM scratch: we hand it golden RAM $0400, but
+    ; X16 Edit also uses $0400-$07FF, so we re-init at the top of EVERY play_zsm (not once).
+    const ubyte ZSM_BANK   = 6
+    const uword ZSM_LOWRAM = $0400
+    extsub @bank 6 $A000 = zsm_init_engine(uword lowram @XY) clobbers(A,X,Y)
+    extsub @bank 6 $A003 = zsm_tick(ubyte type @A) clobbers(A,X,Y)
+    extsub @bank 6 $A006 = zsm_play(ubyte prio @X) clobbers(A,X,Y)
+    extsub @bank 6 $A009 = zsm_stop(ubyte prio @X) clobbers(A,X,Y)
+    extsub @bank 6 $A00F = zsm_close(ubyte prio @X) clobbers(A,X,Y)
+    extsub @bank 6 $A01B = zsm_setbank(ubyte prio @X, ubyte bank @A)
+    extsub @bank 6 $A01E = zsm_setmem(ubyte prio @X, uword data_ptr @AY) clobbers(A,X,Y)
+    extsub @bank 6 $A02A = zsm_getstate(ubyte prio @X) clobbers(X) -> bool @Pc, bool @Pz, uword @AY
+    bool zsm_ok                             ; zsmkit.bin loaded OK -> P plays .zsm
+
+    ; --- banked WAV player overlay (xmusic) ---
+    ; xmusic.p8 is a %output library blob loaded into reserved HIRAM bank 7. It streams an
+    ; uncompressed PCM .wav straight to VERA's audio FIFO (poll-AFLOW) and returns when the file
+    ; ends or the user quits. $A000 = init; $A003 = play_wav (0=ok/stopped 1=open-err 2=unsupported).
+    const ubyte MUS_BANK = 7
+    extsub @bank 7 $A000 = xmusic_init()
+    extsub @bank 7 $A003 = play_wav(uword nameptr @R0) -> ubyte @A
+    bool music_ok                           ; xmusic.ovl loaded OK -> P plays .wav
+
     ; --- banked misc-utility overlay (miscutil) ---
     ; miscutil.p8 is a second %output library blob loaded into reserved HIRAM bank 3 at
     ; startup; it holds self-contained helpers moved out of main RAM (the wildcard rename
@@ -217,9 +244,10 @@ main {
     extsub @bank 3 $A015 = stream_copy(uword srcptr @R0, uword dstptr @R1) -> uword @AY
     ; whole-disk "Find file" crawler (also overlay-resident: its path buffers cost no main RAM).
     ; crawl_begin(specptr) starts a fresh crawl for the lowercased filespec; crawl_next_hit(outptr)
-    ; writes the next matching-dir path to outptr and returns 1 (0 = disk exhausted); crawl_trunc()
-    ; is 1 if any subtree was skipped for being too deep. Only one listing is ever open at a time,
-    ; so main's own diskio (open_path/scan_dir) is free to run between hits.
+    ; visits ONE directory per call, writing its path to outptr and returning 2 = has a match,
+    ; 1 = visited/no match, 0 = disk exhausted (so the caller can show live per-dir progress);
+    ; crawl_trunc() is 1 if any subtree was skipped for being too deep. Only one listing is ever
+    ; open at a time, so main's own diskio (open_path/scan_dir) is free to run between visits.
     extsub @bank 3 $A018 = crawl_begin(uword specptr @R0)
     extsub @bank 3 $A01B = crawl_next_hit(uword outptr @R0) -> ubyte @A
     extsub @bank 3 $A01E = crawl_trunc() -> ubyte @A
@@ -320,6 +348,20 @@ main {
         cx16.pop_rambank()
         if imgview_ok
             ximgview_init()             ; extsub @bank 5: clears the overlay's in-bank BSS ONCE
+
+        ; load the zsmkit v2 music engine blob into its reserved bank (ZSM_BANK), same headerless
+        ; loadlib pattern - the blob's fixed jump table sits at $A000. NOT init'd here: golden RAM
+        ; is volatile (X16 Edit uses it), so zsm_init_engine(ZSM_LOWRAM) runs per play_zsm.
+        cx16.push_rambank(ZSM_BANK)
+        zsm_ok = diskio.loadlib("zsmkit.bin", $a000) != 0
+        cx16.pop_rambank()
+
+        ; load the xmusic WAV player overlay into its reserved bank (MUS_BANK), same as the others
+        cx16.push_rambank(MUS_BANK)
+        music_ok = diskio.loadlib("xmusic.ovl", $a000) != 0
+        cx16.pop_rambank()
+        if music_ok
+            xmusic_init()               ; extsub @bank 7: clears the overlay's in-bank BSS ONCE
 
         ; apply the saved colour theme. cfg_read() is self-contained - it hops into /xfmgr/ to LOAD
         ; the cfg and restores the cwd itself - so it works regardless of where we are here.
@@ -825,7 +867,7 @@ main {
                     xfiles.get_name(file_cursor, namebuf)
                     xtree.build_path(cur_dir, pathbuf)
                     diskio.chdir(pathbuf)       ; so bmx.open/f_open(namebuf) resolve in the file's dir
-                    if imgview_ok and file_is_bmx(&namebuf) {
+                    if imgview_ok and sniff_kind(&namebuf) == 1 {   ; 1 = BMX image
                         view_image(&namebuf)            ; bank-5 overlay: shows the BMX, returns on any key
                         cx16.set_screen_mode(SCREEN_MODE)  ; image viewer left VERA in bitmap mode -> back to 80x30
                         txt.lowercase()                 ; CINT/set_screen_mode reset the charset to uppercase
@@ -838,6 +880,21 @@ main {
                         op_edit()               ; overlays missing -> fall back to X16 Edit
                     }
                     dirty_full = true           ; viewer/editor took the screen; repaint
+                }
+            }
+            'p' -> {                            ; Play: .zsm -> zsmkit engine, .wav -> PCM streamer
+                if xfiles.ft_count != 0 {
+                    xfiles.get_name(file_cursor, namebuf)
+                    xtree.build_path(cur_dir, pathbuf)
+                    diskio.chdir(pathbuf)       ; so the player's f_open(namebuf) resolves in the dir
+                    ubyte fk = sniff_kind(&namebuf)
+                    if fk == 2
+                        play_zsm()
+                    else if fk == 3
+                        op_play_wav()
+                    else
+                        flash("not a music file (zsm/wav)")
+                    dirty_full = true           ; player took the bottom rows / status; repaint
                 }
             }
             'e' -> {
@@ -1974,6 +2031,91 @@ main {
         diskio.chdir(pathbuf)                   ; X16Edit can change dir; restore ours
     }
 
+    sub play_zsm() {
+        ; P on a .zsm: play it through the zsmkit engine (bank 6). Modal - ticks once per frame
+        ; until the song ends (non-looping) or the user quits. The whole song must be RESIDENT, so
+        ; we BORROW banks above the arena (exactly as op_edit lends banks to X16 Edit); the modal
+        ; loop means the arena can't grow meanwhile, and the borrowed banks are simply abandoned
+        ; after. The caller (the P handler) has already loaded namebuf and chdir'd into the file's dir.
+        if not zsm_ok {
+            flash("zsm engine not loaded (zsmkit.bin)")
+            return
+        }
+        if xarena.high_bank >= xarena.max_bank {        ; also stops high_bank+1 wrapping to 0
+            flash("no free RAM banks for song")
+            return
+        }
+        ubyte song_bank = xarena.high_bank + 1
+        ; blocks are 254 bytes; a bank holds 8192 -> /32 (+1) is a safe overestimate of banks used.
+        ; MANDATORY: KERNAL LOAD wraps banks blindly and bank 64 aliases bank 0 on a 512 KB machine,
+        ; so refuse a song that would run past the top usable bank.
+        uword banks_needed = xfiles.get_blocks(file_cursor) / 32 + 1
+        uword free_banks   = xarena.max_bank - song_bank + 1
+        if banks_needed > free_banks {
+            flash("song too big for free RAM banks")
+            return
+        }
+        cx16.push_rambank(song_bank)
+        bool loaded = diskio.load_raw(namebuf, $a000) != 0      ; whole file; KERNAL wraps banks up
+        cx16.pop_rambank()
+        if not loaded {
+            flash("song load failed")
+            return
+        }
+        zsm_init_engine(ZSM_LOWRAM)             ; EVERY play - X16 Edit clobbers golden RAM $0400
+        zsm_setbank(0, song_bank)
+        zsm_setmem(0, $a000)
+        box_open()
+        box_compose_name("Playing ", namebuf, " - SPACE pause  Q stop")
+        box_left(CMDROW1, cm_dst)
+        zsm_play(0)
+        bool playing = true
+        repeat {
+            sys.waitvsync()
+            zsm_tick(0)                         ; 60 Hz; zsmkit rescales non-60 Hz songs itself
+            ubyte k = cbm.GETIN2()
+            if k >= $c1 and k <= $da
+                k -= $80                        ; fold shifted letters, like cmd_key()
+            if k == 'q' or k == 27 or k == 3
+                break                           ; Q / ESC / STOP
+            if k == ' ' {
+                if playing
+                    zsm_stop(0)
+                else
+                    zsm_play(0)
+                playing = not playing
+            }
+            if playing {
+                bool st
+                st, void, void = zsm_getstate(0)
+                if not st
+                    break                       ; non-looping song reached its end
+            }
+        }
+        zsm_stop(0)
+        zsm_close(0)                            ; silence YM/PSG/PCM; borrowed song banks abandoned
+        box_close()
+    }
+
+    sub op_play_wav() {
+        ; P on a .wav: stream it via the xmusic overlay (bank 7). The overlay does all the work in
+        ; its own bank; main just frames a status line and shows any error. The caller (P handler)
+        ; has loaded namebuf and chdir'd into the file's dir, so play_wav's f_open resolves there.
+        if not music_ok {
+            flash("wav player not loaded (xmusic.ovl)")
+            return
+        }
+        box_open()
+        box_compose_name("Playing ", namebuf, " - SPACE pause  Q stop")
+        box_left(CMDROW1, cm_dst)
+        ubyte rc = play_wav(&namebuf)
+        box_close()
+        if rc == 2
+            flash("unsupported wav (need PCM 8/16-bit)")
+        else if rc == 1
+            flash("can't open file")
+    }
+
     sub op_setup() {
         ; Alt-F10: open the standalone colour-theme setup. It is a separate PRG, so launching it
         ; QUITS XFMGR - all logged folders and tags are lost. On save it relaunches XFMGR, which
@@ -2671,20 +2813,29 @@ main {
         }
     }
 
-    sub file_is_bmx(uword nameptr) -> bool {
-        ; True if the file's first 3 bytes are the BMX magic (raw content, so no filename-encoding
-        ; ambiguity - the host-fs may return names as lowercase ASCII). On-disk magic is $42,$4D,$58
-        ; (= petscii "bmx" = ascii "BMX"), matching bmx.p8's FILEID. Mirrors tview's zsm_detect.
-        ; The caller must have chdir'd into the file's directory first.
-        ubyte[3] magic
-        magic[0] = 0
-        magic[1] = 0
-        magic[2] = 0
+    sub sniff_kind(uword nameptr) -> ubyte {
+        ; Classify a file by its MAGIC BYTES (raw content, so no filename-encoding ambiguity - the
+        ; host-fs may return names as lowercase ASCII, which broke extension matching). One
+        ; open/read(12)/close covers all four. The caller must have chdir'd into the file's dir.
+        ;   0 = other   1 = BMX image   2 = ZSM music   3 = WAV audio
+        ubyte[12] magic
+        for g_ndx in 0 to 11
+            magic[g_ndx] = 0
         if not diskio.f_open(nameptr)
-            return false
-        ubyte got = lsb(diskio.f_read(&magic, 3))
+            return 0
+        ubyte got = lsb(diskio.f_read(&magic, 12))
         diskio.f_close()
-        return got >= 3 and magic[0]==$42 and magic[1]==$4d and magic[2]==$58
+        ; BMX: $42,$4D,$58 (= ascii "BMX", matching bmx.p8's FILEID)
+        if got >= 3 and magic[0]==$42 and magic[1]==$4d and magic[2]==$58
+            return 1
+        ; ZSM: "zm" = $7a,$6d at offset 0 (matches tview's zsm_detect + Appendix G)
+        if got >= 2 and magic[0]==$7a and magic[1]==$6d
+            return 2
+        ; WAV: "RIFF" at 0 + "WAVE" at 8
+        if got >= 12 and magic[0]==$52 and magic[1]==$49 and magic[2]==$46 and magic[3]==$46
+                     and magic[8]==$57 and magic[9]==$41 and magic[10]==$56 and magic[11]==$45
+            return 3
+        return 0
     }
 
     sub wait_key() -> ubyte {
@@ -2950,20 +3101,28 @@ main {
         box_left(CMDROW1, "Searching...")
 
         ubyte partial = 0                           ; bit0=too deep  bit1=dir cap  bit2=result cap
+        uword nvisited = 0                          ; every directory the crawler walks (live counter)
         crawl_begin(&find_lc)
-        while crawl_next_hit(&cm_dst) != 0 {        ; cm_dst (132 B) fits a full crawl path
-            ubyte node = xscan.open_path(cm_dst)    ; log + expand ancestors, return deepest node
-            void xscan.scan_dir(node)               ; log THIS dir's files (open_path only did ancestors)
-            ; live "(Dir: N)" counter on row 2 of the box - dir_count only grows, so no stale digits.
-            ; (cm_dst holds the crawl path open_path still needs, so print straight, don't compose it)
+        repeat {
+            ubyte cr = crawl_next_hit(&cm_dst)      ; cm_dst (132 B) fits a full crawl path
+            if cr == 0
+                break                               ; disk exhausted
+            nvisited++
+            ; live "(Dir: N)" counter on row 2 of the box - counts EVERY dir scanned, so it keeps
+            ; ticking through long match-less stretches (not just on hits). nvisited only grows, so
+            ; no stale digits. (cm_dst holds the crawl path open_path needs, so print it straight.)
             txt.plot(BANNER_LEFT, CMDROW2)
             txt.print("(Dir: ")
-            txt.print_uw(xtree.dir_count)
+            txt.print_uw(nvisited)
             txt.chrout(')')
             hilite_row(0, 79, CMDROW2, shared.CLR_BOTTOM_PROMPT_BG)   ; keep the row black-on-white
-            if xtree.dir_count >= xtree.DIR_MAX {
-                partial |= 2                        ; 128-dir cap: stop logging further hits
-                break
+            if cr == 2 {                            ; this dir contains a match -> log it into the tree
+                ubyte node = xscan.open_path(cm_dst)    ; log + expand ancestors, return deepest node
+                void xscan.scan_dir(node)               ; log THIS dir's files (open_path only did ancestors)
+                if xtree.dir_count >= xtree.DIR_MAX {
+                    partial |= 2                        ; 254-dir cap: stop logging further hits
+                    break
+                }
             }
         }
         if crawl_trunc() != 0

@@ -41,6 +41,7 @@
    T           Tag current file, then advance
    U           Untag current file, then advance
    V           View - .bmx in the image viewer, else the text/hex viewer
+   P           Play music - .zsm (ZSound) or .wav (PCM) audio
    E           Edit file in the ROM X16 Edit, then return
    C           Copy selected (or all tagged) file(s) to a directory
    M           Move selected (or all tagged) file(s) to a directory
@@ -103,6 +104,19 @@
    Big files that are too large for the pager fall back to the ROM X16 Edit.
 
 ------------------------------------------------------------------------------
+ Music playback (P)
+------------------------------------------------------------------------------
+   ZSM         .zsm songs play through the zsmkit engine (FM + PSG + PCM).
+               The whole song is loaded into free RAM banks, so a very large
+               song may report "no free RAM banks" - close/relog to free some.
+               (V on a .zsm still shows the header breakout; P plays it.)
+   WAV         .wav plays uncompressed PCM: 8- or 16-bit, mono or stereo, up
+               to ~48 kHz. Compressed (ADPCM) wavs are not supported yet.
+   Controls    SPACE pauses / resumes; Q, ESC or STOP stops and returns.
+   Needs       zsmkit.bin (ZSM) and xmusic.ovl (WAV) beside the program; if
+               either is missing, P reports it and does nothing.
+
+------------------------------------------------------------------------------
  In the text / hex viewer (V, and this help)
 ------------------------------------------------------------------------------
    PgDn/PgUp   Page          T  Top        B  Bottom
@@ -110,6 +124,22 @@
    F           Find a string
    N / Space    Repeat the search (find next)
    Q / Esc     Exit back to the file list
+
+------------------------------------------------------------------------------
+ EMULATOR vs REAL HARDWARE  (key differences)
+------------------------------------------------------------------------------
+   XFMGR detects whether it is running under the x16emu emulator and rebinds
+   the CTRL commands the emulator window grabs before they reach the app. The
+   bottom CTRL menu always shows the binding that is ACTIVE right now.
+
+     Command          Emulator     Real hardware
+     Delete tagged    Ctrl-X       Ctrl-D
+     Find files       Ctrl-N       Ctrl-F
+
+   Ctrl-S is also swallowed by the emulator, so Tag-by-wildcard is Ctrl-W in
+   both environments. ALT is the Commodore (C=) key on a real X16; in the
+   emulator it is the left Alt key. Everything else - plain keys, function
+   keys, arrows - behaves identically in both.
 
 ------------------------------------------------------------------------------
  LIMITS

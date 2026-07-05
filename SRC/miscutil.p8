@@ -454,35 +454,36 @@ main {
     }
 
     sub crawl_next_hit(uword outptr @R0) -> ubyte {
-        ; entry ($A01B): resume the crawl and return the next directory that CONTAINS a matching
-        ; file, as an absolute path (trailing '/') written to outptr. Returns 1 on a hit, 0 when
-        ; the disk is exhausted. Capture outptr before any diskio/strings call (clobbers r0-r3).
+        ; entry ($A01B): visit exactly ONE directory per call, so the caller can show live
+        ; per-directory progress. Writes the visited dir's absolute path (trailing '/') to outptr.
+        ; Returns:  2 = visited + CONTAINS a match   1 = visited, no match   0 = disk exhausted.
+        ; Capture outptr before any diskio/strings call (clobbers r0-r3).
         uword lout = outptr
-        while cr_done == 0 {
-            ; --- visit cr_cur: one listing pass yields both has_match and the first subdir ---
-            bool has_match = false
-            cr_sub[0] = 0
-            diskio.chdir(cr_cur)
-            if diskio.lf_start_list("*") {
-                while diskio.lf_next_entry() {
-                    if diskio.list_filename[0] == '.'
-                        continue                    ; skip . / .. / hidden
-                    if diskio.list_filetype == "dir" {
-                        if cr_sub[0] == 0
-                            void strings.copy(diskio.list_filename, cr_sub)   ; remember first subdir
-                    } else if not has_match {
-                        if strings.pattern_match_nocase(diskio.list_filename, cr_spec, false)
-                            has_match = true
-                    }
+        if cr_done != 0
+            return 0
+        ; --- visit cr_cur: one listing pass yields both has_match and the first subdir ---
+        bool has_match = false
+        cr_sub[0] = 0
+        diskio.chdir(cr_cur)
+        if diskio.lf_start_list("*") {
+            while diskio.lf_next_entry() {
+                if diskio.list_filename[0] == '.'
+                    continue                    ; skip . / .. / hidden
+                if diskio.list_filetype == "dir" {
+                    if cr_sub[0] == 0
+                        void strings.copy(diskio.list_filename, cr_sub)   ; remember first subdir
+                } else if not has_match {
+                    if strings.pattern_match_nocase(diskio.list_filename, cr_spec, false)
+                        has_match = true
                 }
-                diskio.lf_end_list()
             }
-            void strings.copy(cr_cur, lout)         ; tentative result (overwritten if no match)
-            cr_advance()                            ; move cr_cur to the next DFS node
-            if has_match
-                return 1
+            diskio.lf_end_list()
         }
-        return 0
+        void strings.copy(cr_cur, lout)         ; the dir we just visited
+        cr_advance()                            ; move cr_cur to the next DFS node
+        if has_match
+            return 2
+        return 1
     }
 
     sub crawl_trunc() -> ubyte {

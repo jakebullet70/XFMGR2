@@ -34,13 +34,19 @@ COPY /Y "%~dp0tview.ovl" "%XFMGRDIR%\tview.ovl" >NUL
 COPY /Y "%~dp0miscutil.ovl" "%XFMGRDIR%\miscutil.ovl" >NUL
 COPY /Y "%~dp0uiutil.ovl" "%XFMGRDIR%\uiutil.ovl" >NUL
 COPY /Y "%~dp0ximgview.ovl" "%XFMGRDIR%\ximgview.ovl" >NUL
+COPY /Y "%~dp0xmusic.ovl" "%XFMGRDIR%\xmusic.ovl" >NUL
 COPY /Y "%~dp0xfsetup.prg" "%XFMGRDIR%\xfsetup.prg" >NUL
+REM the zsmkit music-engine blob (bank 6) - a library asset, loaded like the overlays
+COPY /Y "%~dp0zsmkit.bin" "%XFMGRDIR%\zsmkit.bin" >NUL
 REM stage the F1 help text (a static asset, not built) alongside the .prg
 COPY /Y "%~dp0xfmgr.hlp" "%XFMGRDIR%\xfmgr.hlp" >NUL
 
-REM 2c) stage the sample BMX images (tracked in samples\) into the browse root so the
-REM     V image viewer has something to open. run\ is gitignored; samples\ is the source of truth.
+REM 2c) stage the sample media (tracked in samples\ / vendored) into the browse root so the
+REM     V/P players have something to open. run\ is gitignored; samples\ is the source of truth.
 COPY /Y "%~dp0samples\*.bmx" "%RUNDIR%\" >NUL
+COPY /Y "%~dp0samples\*.wav" "%RUNDIR%\" >NUL
+COPY /Y "%~dp0docs\prog8\examples\zsmkit_v2\SONG1.ZSM" "%RUNDIR%\SONG1.ZSM" >NUL
+COPY /Y "%~dp0docs\prog8\examples\zsmkit_v2\SONG2.ZSM" "%RUNDIR%\SONG2.ZSM" >NUL
 
 REM 3) launch from the run\ root as the host filesystem root (no AUTOBOOT.X16 there),
 REM    running the XT loader stub - it LOADs+RUNs /XFMGR/XFMGR.PRG from the subfolder.

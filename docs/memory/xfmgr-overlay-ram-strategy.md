@@ -10,12 +10,13 @@ metadata:
 XFMGR is main-RAM constrained; the lever for headroom is moving cold code into HIRAM bank
 overlays (%output library blobs, org $A000, loaded via diskio.loadlib, called via `extsub @bank`).
 
-**Bank map** (see [[x16-banked-ram-min-config]], xarena.FIRST_BANK): 0=Kernal, 1=xtree dir-extras,
-2=tview (viewer), 3=miscutil (wildcard/prune/history + stream_copy byte-pump), 4=uiutil (bottom
-dialogs + About/modal-box drawing), 5=ximgview (BMX image viewer, see [[xfmgr-bmx-image-viewer]]).
-Arena = banks 6..max_bank (FIRST_BANK bumped 5->6 when ximgview was added). Each overlay keeps a
-fixed `%jmptable` at $A003+ (KEEP module vars UNINITIALIZED or they shove the table — see
-[[prog8-jmptable-init-vars-gotcha]]).
+**Bank map** (see [[x16-banked-ram-min-config]], xarena.FIRST_BANK): 0=Kernal, 1=xtree dir-extras
++ xfiles sa index ($b000), 2=tview (viewer), 3=miscutil (wildcard/prune/history + stream_copy
+byte-pump + whole-disk Find crawler), 4=uiutil (bottom dialogs + About/modal-box drawing),
+5=ximgview (BMX image viewer, see [[xfmgr-bmx-image-viewer]]), 6=zsmkit v2 engine blob (ZSM
+playback, see [[xfmgr-music-player]]), 7=xmusic (WAV/PCM streamer). Arena = banks 8..max_bank
+(FIRST_BANK bumped 6->8 when music was added). Each overlay keeps a fixed `%jmptable` at $A003+
+(KEEP module vars UNINITIALIZED or they shove the table — see [[prog8-jmptable-init-vars-gotcha]]).
 
 **As of 2026-07-03: 6.5 KB free to $9F00** (was ~2.2 KB before this push). Won by: copy byte-pump
 -> miscutil.stream_copy (+deleted viewbuf), and the confirm/banner/prompt + About + command-menu
