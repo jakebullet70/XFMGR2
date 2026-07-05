@@ -79,29 +79,9 @@ IF /I "%SRC%"=="xfmgr.p8" (
     ECHO installer: install.prg built ^(creates /xfmgr + /xt on the SD card^).
 )
 
-REM --- assemble the end-user RELEASE folder: exactly the files install.prg ships (the 9 it copies)
-REM     plus install.prg itself, dropped into release\xfmgr-install so the folder can be zipped and
-REM     handed off as-is. Full builds only. App, overlays and utilities come from build\; zsmkit.bin
-REM     and xfmgr.hlp are static assets kept at the root. (This runs OUTSIDE the paren block above:
-REM     a var SET inside a (...) block is expanded at parse time, before the SET runs, so RELOUT
-REM     would be empty there - keep it here, one command per line, where expansion is normal.)
-IF /I NOT "%SRC%"=="xfmgr.p8" GOTO :done
-SET RELOUT=%~dp0release\xfmgr-install
-IF NOT EXIST "%RELOUT%" MKDIR "%RELOUT%"
-COPY /Y "%BUILDDIR%\xfmgr.prg"    "%RELOUT%" >NUL
-COPY /Y "%BUILDDIR%\tview.ovl"    "%RELOUT%" >NUL
-COPY /Y "%BUILDDIR%\miscutil.ovl" "%RELOUT%" >NUL
-COPY /Y "%BUILDDIR%\uiutil.ovl"   "%RELOUT%" >NUL
-COPY /Y "%BUILDDIR%\ximgview.ovl" "%RELOUT%" >NUL
-COPY /Y "%BUILDDIR%\xmusic.ovl"   "%RELOUT%" >NUL
-COPY /Y "%BUILDDIR%\xfsetup.prg"  "%RELOUT%" >NUL
-COPY /Y "%BUILDDIR%\install.prg"  "%RELOUT%" >NUL
-COPY /Y "%~dp0zsmkit.bin"         "%RELOUT%" >NUL
-COPY /Y "%~dp0xfmgr.hlp"          "%RELOUT%" >NUL
-COPY /Y "%~dp0xfmgr.cfg"          "%RELOUT%" >NUL
-ECHO release folder: release\xfmgr-install assembled ^(app + overlays + utilities + installer + default cfg^).
-REM (run\RELEASE - staged by run.bat - already serves as the emulator install-test folder, so we no
-REM  longer mirror the release set into run\xfmgr-install; that only cluttered the fsroot.)
+REM We no longer assemble a release\xfmgr-install deliverable here. The ONLY place the release
+REM fileset is written is run\RELEASE, staged by run.bat (from build\ + the root xfmgr.cfg) as the
+REM emulator install-test folder. To cut a shippable release, copy build\ + the root assets by hand.
 :done
 
 ENDLOCAL & EXIT /B 0
