@@ -223,7 +223,7 @@ XFMGR2 ships as a folder of files plus a self-installer, `install.prg`. Unpack t
 release folder onto your SD card, then on the X16:
 
 1. `CD` into the unpacked folder (the one holding `install.prg` and the app files).
-2. Run it: `install*` (or `^install*`).
+2. Run it: `/install*` (or `^install*`).
 3. It creates `/xfmgr` on the drive root, stream-copies the program files into it, and
    writes a tiny `/xt` BASIC launcher at the root.
 
