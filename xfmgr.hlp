@@ -1,5 +1,5 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 184)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 185)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
@@ -155,6 +155,32 @@
                is marked "(partial)". Very deep folder paths may be skipped
                (also shown as "(partial)").
 
+------------------------------------------------------------------------------
+ HOW IT IS INSTALLED  (folder layout)
+------------------------------------------------------------------------------
+   The installer keeps the whole app in ONE folder and drops a tiny launcher
+   in the drive root, so you can start it from anywhere:
+
+     /                     drive root
+     +-- XT                one-line BASIC launcher  (LOAD "/XFMGR/XFMGR.PRG")
+     +-- XFMGR/            everything else lives here
+          +-- XFMGR.PRG        the main program
+          +-- *.OVL            banked overlays (viewer, image, music, ui, misc)
+          +-- XFSETUP.PRG      the colour-theme setup (Alt-F10)
+          +-- ZSMKIT.BIN       the ZSM music engine
+          +-- XFMGR.HLP        this help file
+          +-- XFMGR.CFG        your saved theme (kept across updates)
+
+   To install: Copy the unpacked release files plus INSTALL.PRG into one
+   folder, boot the X16, CD into that folder and run INSTALL. It creates
+   /XFMGR, copies the app files into it, and writes the root /XT launcher.
+   (The install folder can be removed after the install is complete)
+
+   To launch from *any* directory afterwards:   ^/xt
+   (XFMGR itself always presents the tree rooted at "/", so you can roam the
+   whole drive no matter where you started it.)
+
 ==============================================================================
- (c) 2025-26 sadLogic  -  written in Prog8
+ (c) 2025-26 sadLogic, JakeInErope  -  written in Prog8 with help from AI
+ (Thanks to the many Discord members keeping this cool retro computer alive!)
 ==============================================================================

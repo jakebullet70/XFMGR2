@@ -5,7 +5,7 @@
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
 on the right, with file **tagging**, a banked **text/hex viewer**, a **BMX image
-viewer**, a whole-disk **Find**, and a full set of file operations — copy, move,
+viewer**, **music playback** (`.zsm`/`.wav`), a whole-disk **Find**, and a full set of file operations — copy, move,
 rename, delete, mkdir and prune — plus editing via the ROM-resident X16 Edit and
 switchable **colour themes**.
 
@@ -32,11 +32,15 @@ switchable **colour themes**.
   wildcards (`R`), delete one (`D`) or all tagged (`Ctrl-X`/`Ctrl-D`). Copy/move
   destinations resolve from the drive root and can be picked interactively from the
   tree (`F2`).
-- **Directory operations** — make a subdirectory (`K`) and **prune** (`P`), a guarded
-  recursive delete of a directory and everything under it.
+- **Directory operations** — make a subdirectory (`M`), rename (`R`) or delete (`D`) a
+  folder, and **prune** (`P`), a guarded recursive delete of a directory and everything
+  under it.
 - **View** (`V`) — a `.bmx` bitmap opens full-screen in the BMX **image viewer**; any
   other file opens in the full-screen **text/hex viewer** with in-file search. If the
   viewer overlays are missing, `V` falls back to X16 Edit.
+- **Play music** (`P`) — `.zsm` chiptunes play through the **zsmkit** engine (FM + PSG +
+  PCM); `.wav` plays uncompressed PCM (8/16-bit, mono/stereo, up to ~48 kHz). `Space`
+  pauses/resumes, `Q`/`Esc` stops. Needs `zsmkit.bin` and `xmusic.ovl` beside the program.
 - **Edit** (`E`) — hands the file off to the ROM-resident **X16 Edit**, then returns.
 - **Execute-and-return** (`Alt-X`) — quit XFMGR and chain-run the selected program.
 - **File-spec filter** (`F`) — restrict the file list to a wildcard (e.g. `*.prg`).
@@ -73,9 +77,11 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | Key | Action |
 |---|---|
 | `Enter` | Log the directory if new; otherwise expand / collapse it |
-| `K` | Make a new subdirectory in the selected folder |
+| `M` | Make a new subdirectory in the selected folder |
+| `R` | Rename the selected directory |
+| `D` | Delete the selected folder (empty folders only) |
 | `P` | **Prune** — recursively delete the folder and all its contents (type `prune` to confirm) |
-| `F3` | Re-log sub-folders (`+N new` banner) |
+| `F3` | Re-log sub-folders (picks up folders made since logging) |
 | `A` | About box (version, banked-RAM usage, credits) |
 
 ### FILE pane (plain keys)
@@ -85,6 +91,7 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `T` | Tag current file, then advance |
 | `U` | Untag current file, then advance |
 | `V` | View file — `.bmx` in the image viewer, otherwise the text/hex viewer |
+| `P` | Play music — `.zsm` (ZSound) or `.wav` (PCM) audio |
 | `E` | Edit file in the ROM X16 Edit, then return |
 | `D` | Delete current file (confirm) |
 | `R` | Rename (supports `*` / `?` wildcards) |
@@ -137,7 +144,8 @@ selects/jumps, `Esc`/`Q` cancels; in the picker, `→` expands (logging on deman
 
 In the **text/hex viewer** (`V`): `PgDn`/`PgUp` page, `T`/`Home` jump to top, `H`
 toggles hex/text, `F` finds a string and `N` repeats the search, `Q`/`Esc` exits. In
-the **BMX image viewer**, any key returns to the file list.
+the **BMX image viewer**, any key returns to the file list. During **music playback**
+(`P`), `Space` pauses/resumes and `Q`/`Esc` stops.
 
 
 ## Architecture (the memory model)
@@ -149,13 +157,15 @@ cold, bulky data and cold *code* live in banked RAM behind far pointers / bank
 overlays.
 
 The stock machine has banks 0–63. The low banks are reserved: bank 0 is the Kernal,
-bank 1 holds the tree's cold dir-extras table, banks 2–5 hold the four code overlays,
-and the file arena grows upward from **bank 6** to the detected top bank.
+bank 1 holds the tree's cold dir-extras table (and the ShowAll/Find far-pointer arrays),
+banks 2–5 hold four code overlays, bank 6 the **zsmkit** music engine, bank 7 the
+**xmusic** overlay, and bank 8 the directory-name slab; the file arena grows upward from
+**bank 9** to the detected top bank.
 
 | Module | Lives in | Holds | Why |
 |---|---|---|---|
 | `xarena.p8` | banks 6+ | append-only bump allocator (~7.8 KB usable per bank, `$A000–$BEFF`) | files are numerous and append-only, then bulk-freed on rescan; no per-record header, no fragmentation |
-| `xtree.p8` | main RAM | directory tree — a byte-indexed node pool (`DIR_MAX = 128`, `NONE=255`), links/flags/depth, and a name arena (`dname_buf`) | few dirs, redrawn on every keystroke; no bank-switch cost |
+| `xtree.p8` | main RAM (names in bank 8) | directory tree — a byte-indexed node pool (`DIR_MAX = 254`, `NONE=255`), links/flags/depth; the directory-name slab lives in bank 8 behind a far pointer | few dirs, redrawn on every keystroke; the hot node pool stays in main RAM while the cold name bytes are banked |
 | xtree **dir-extras** | bank 1 | per-node cold fields (file count/offset/bank, tag count) in fixed 7-byte records | never touched in the per-row redraw loop, only on scan/tag/file ops; frees main RAM, and bank 1 is never disturbed by an arena reset |
 | `xfiles.p8` | banked arena + main RAM | length-prefixed file records in the arena; a small far-pointer display index + sort mode + file-spec in main RAM; ShowAll/Find far-pointer arrays | large records stay in the arena; the insertion sort runs on the small index, not the records |
 | `xscan.p8` | main module | on-demand logger + scratch paths | drives diskio's one-listing-at-a-time rule: subdirs → tree, files → arena |
@@ -163,6 +173,7 @@ and the file arena grows upward from **bank 6** to the detected top bank.
 | `miscutil.ovl` | bank 3 (overlay) | wildcard-rename expander, recursive prune engine, input-history ring, file-copy byte pump, whole-disk Find crawler | self-contained cold helpers pulled out of main RAM; their path/copy buffers cost no main RAM |
 | `uiutil.ovl` | bank 4 (overlay) | bottom-banner dialogs, modal box borders, the command menu, the About screen | dialog *drawing* is cold; main keeps thin wrappers that `JSRFAR` into the overlay |
 | `ximgview.ovl` | bank 5 (overlay) | native BMX bitmap loader/displayer | image decode is bulky and rarely used; kept out of the resident image entirely |
+| `xmusic.ovl` | bank 7 (overlay) | `.wav` PCM streaming player (AFLOW-driven) | audio streaming is cold and self-contained; the `.zsm` path drives the `zsmkit.bin` engine in bank 6 |
 | `xfmgr.p8` | main module | TUI + key loop, file ops, prompts, screen helpers | dual-pane draw, tagging, all `op_*` operations |
 
 `xfsetup.p8` builds to a **separate** `XFSETUP.PRG` (a full `$0801` program, not an
@@ -192,7 +203,7 @@ Key decisions:
 
 The tree is **anchored at the drive root** (`base_path = "/"`), so every path built
 from a tree node is absolute. At startup XFMGR captures the launch folder
-(`diskio.curdir()`) before any disk call can clobber it, loads the four overlays into
+(`diskio.curdir()`) before any disk call can clobber it, loads the five overlays into
 their reserved banks, applies the saved colour theme, then descends the tree from root,
 logging and expanding each level so the launch folder is pre-selected and visible.
 
@@ -206,6 +217,29 @@ returns the shell to the **launch** directory, while `Alt-Q` returns it to the
 newest first; the folder is created on first save and missing files load silently as
 empty. The **colour theme** is stored in `xfmgr.cfg` next to the program.
 
+## Installing
+
+XFMGR2 ships as a folder of files plus a self-installer, `install.prg`. Unpack the
+release folder onto your SD card, then on the X16:
+
+1. `CD` into the unpacked folder (the one holding `install.prg` and the app files).
+2. Run it: `install` (or `^install`).
+3. It creates `/xfmgr` on the drive root, stream-copies the program files into it, and
+   writes a tiny `/xt` BASIC launcher at the root.
+
+Then launch XFMGR from anywhere with the caret-run command:
+
+```
+^/xt
+```
+
+The installer ships a default `xfmgr.cfg` (Classic theme) so a fresh install boots with a
+theme; on a re-install it **preserves** an existing `xfmgr.cfg`, so a theme you set via
+`Alt-F10` survives updates. It reports the release build number and, when `/xfmgr` already
+exists, compares it against the installed build (older / newer / same). Press `T` at the
+prompt for a dry run that does everything except copy the files. Run it from a folder that
+is already `/xfmgr` and it skips the copy, only (re)writing the `/xt` launcher.
+
 ## Build & run
 
 Requires **Java** (JRE) and the **64tass** assembler (v1.60); their paths are baked
@@ -217,16 +251,18 @@ build.bat xfmgr.p8        # -> build\xfmgr.prg + the .ovl overlays + xfsetup.prg
 
 Building `xfmgr.p8` also compiles its companions:
 
-- **four banked overlays** — `tview.ovl` (text/hex viewer), `miscutil.ovl` (wildcard
+- **five banked overlays** — `tview.ovl` (text/hex viewer), `miscutil.ovl` (wildcard
   rename / prune / history / copy pump / Find crawler), `uiutil.ovl` (dialogs, menu,
-  About) and `ximgview.ovl` (BMX image viewer). Each is a headerless `%output`
-  library loaded into a reserved HIRAM bank at runtime (the build renames prog8's
-  `.bin` to `.ovl`).
+  About), `ximgview.ovl` (BMX image viewer) and `xmusic.ovl` (`.wav` PCM player). Each
+  is a headerless `%output` library loaded into a reserved HIRAM bank at runtime (the
+  build renames prog8's `.bin` to `.ovl`).
 - **`xfsetup.prg`** — the standalone colour-theme picker launched by `Alt-F10`.
+- **`install.prg`** — the standalone self-installer (see [Installing](#installing)).
 
 All compiler output (`.prg`, `.ovl`, and the intermediate `.asm`/`.vice-mon-list`) is
 written into a gitignored `build\` folder, so the project root stays clean. Static
-assets that are *not* built — `xfmgr.hlp` and `zsmkit.bin` — stay at the root.
+assets that are *not* built — `xfmgr.hlp`, `zsmkit.bin` and the default `xfmgr.cfg` —
+stay at the root.
 
 The build prints a memory-stats block (image size, BSS/slab, main-RAM high-water,
 free low RAM below `$9F00`, and the on-disk `.prg` size). Banked HIRAM is not counted —
@@ -259,12 +295,13 @@ emulator / `Ctrl-M` on hardware.
 
 ## Status & known limitations
 
-**v1.0.125 — working.** Dual-pane navigation, on-demand logging, tagging (including
+**v1.0.184 — working.** Dual-pane navigation, on-demand logging, tagging (including
 cross-directory) and ShowAll, whole-disk Find, sorting, the full file-operation set
 (copy / move / rename / delete / mkdir / prune), the banked text/hex viewer, the BMX
-image viewer, edit via X16 Edit, execute-and-return, switchable colour themes,
-root-anchored startup and persistent input history are all implemented, with
-confirmation prompts on destructive actions and status banners for errors.
+image viewer, `.zsm`/`.wav` music playback, edit via X16 Edit, execute-and-return,
+switchable colour themes, root-anchored startup and persistent input history are all
+implemented, with confirmation prompts on destructive actions and status banners for
+errors.
 
 Remaining limitations:
 
@@ -272,8 +309,8 @@ Remaining limitations:
   crawls the whole disk, and it logs solely the directories that contain a match.
 - **Append-only arena.** Individual file records are never freed; dead space from
   refreshes/renames accumulates and is only reclaimed on a full reset/reload.
-- **Fixed capacity caps:** `DIR_MAX = 128` directories, 255 files per displayed
+- **Fixed capacity caps:** `DIR_MAX = 254` directories, 255 files per displayed
   directory, 255 files collected for ShowAll / Find (excess → "(partial)"), and a
-  bounded directory-name arena.
+  bounded directory-name slab.
 - **Single drive.** All operations are relative to one mounted drive; there is no
   multi-volume or `.d64` image support.
