@@ -1,32 +1,40 @@
 ---
 name: xfmgr-bump-build-and-run
-description: "Standing workflow — after any code change, bump BUILD_NUM then build+run so the user can test"
+description: "Standing workflow — bump the build number in ONE place; build.bat auto-levels all four locations to the max, then run+test"
 metadata: 
   node_type: memory
   type: feedback
   originSessionId: 56145960-9e23-49e7-aaf2-33a3aa6dab39
 ---
 
-After making ANY code change to XFMGR, before handing back: bump `BUILD_NUM` in `SRC/xfmgr.p8`
-(the `const ubyte BUILD_NUM` near the top, ~line 42) by 1 **AND** update the matching About-screen
-string `aboutln(7, "Version 1.0.N")` in `SRC/uiutil.p8` (~line 327) to the same N **AND** the
-`*(build:N)*` line near the top of `README.md` (added 2026-07-05, user request) — all THREE must stay
-in sync (shown top-right as "build N", on the About modal as "Version 1.0.N", and in the readme). Then run `run.bat`
-(compiles via build.bat, stages into run\xfmgr\, and launches the emulator). Do NOT stop at building.
+After making ANY code change to XFMGR, before handing back: **bump the build number by 1** — the
+simplest is `const ubyte BUILD_NUM` in `SRC/xfmgr.p8` (~line 42) — then run `run.bat`. Do NOT stop at
+building; the user tests in the emulator themselves ([[user-tests-in-emulator-themselves]]).
 
-The build number is hardcoded in BOTH places (not threaded through the uiutil overlay's extsub
-boundary) — the user explicitly rejected passing it as a param (2026-07-03); just edit both strings
-each build.
+**You no longer hand-edit the number in every file.** `build.bat` calls `syncbuild.ps1` (repo root)
+BEFORE the compile, on full builds only (`SRC==xfmgr.p8`). It reads the build number from all FOUR
+places, takes the **largest**, and levels the others UP to it (byte-preserving Latin-1 rewrite, so
+PETSCII bytes in the `.p8` sources and UTF-8 in the README survive — only the ASCII digits change):
 
-**Why:** BUILD_NUM shows top-right on the XFMGR frame; bumping it lets the user confirm at a glance
-that the emulator is running the FRESH binary and not a stale one. The user asked for this
-explicitly (2026-07-03) and wants to test in the emulator themselves.
+| File | Field | Shown as |
+|---|---|---|
+| `SRC/xfmgr.p8` | `BUILD_NUM = N` | "build N" top-right on the frame |
+| `SRC/uiutil.p8` | `aboutln(7,"…Version 1.0.N")` (~line 330) | About modal |
+| `README.md` | `*(build:N)*` near the top | GitHub readme |
+| `xfmgr.hlp` | `(Build N)` on line 2 | F1 help header |
 
-**How to apply:** Edit BUILD_NUM (+1), then `& ".\run.bat" xfmgr.p8` from the repo root. run.bat is
-non-blocking (START launches the GUI) — report the new build number and what to check, don't drive
-the GUI. (Historical: a `'Fastboot++\' is not recognized` line used to print at the top of
-build/run output - caused by an '&' in a system PATH entry ("ADB & Fastboot++") breaking build.bat's
-`SET PATH=%PATH%`; fixed in build 146 by quoting the assignment `SET "PATH=..."`.) Include the build
-memory-stats block in the reply
-([[always-report-mem-stats]]). Related: [[prog8-build-toolchain]],
-[[user-tests-in-emulator-themselves]].
+So bump **any one** of them and the next build propagates it to the rest. Running before the compile
+means THIS build's binary already shows the synced number (don't move the call back after the java
+compile — that reintroduces a one-build lag on the frame/About). The number is still hardcoded per
+file (not threaded through the uiutil overlay's extsub boundary — the user rejected a param on
+2026-07-03); `syncbuild.ps1` is what keeps them in step.
+
+**Why:** the build number top-right lets the user confirm at a glance the emulator is running the
+FRESH binary, not a stale one (asked for explicitly 2026-07-03). "Largest wins" means a bump in any
+file can't be silently lost to a lower value elsewhere.
+
+**How to apply:** edit BUILD_NUM (+1), then `& ".\run.bat" xfmgr.p8` from the repo root. run.bat is
+non-blocking (START launches the GUI) — report the new build number + what to check, don't drive the
+GUI. Include the memory-stats block ([[always-report-mem-stats]]). syncbuild.ps1 / build.bat / run.bat
+are part of the (currently uncommitted) installer WIP as of 2026-07-06. Related:
+[[prog8-build-toolchain]], [[xfmgr-architecture]].

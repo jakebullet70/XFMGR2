@@ -29,6 +29,11 @@ FOR %%F IN ("%SRC%") DO SET PRGFILE=%BUILDDIR%\%%~nF.prg
 SET BUILDLOG=%TEMP%\xfmgr_build.txt
 REM all compiler output (.prg/.bin/.asm/.vice-mon-list) is directed into build\ (gitignored)
 IF NOT EXIST "%BUILDDIR%" MKDIR "%BUILDDIR%"
+REM --- sync the build number across xfmgr.p8 / uiutil.p8 / README.md / xfmgr.hlp, leveling every one
+REM     UP to the largest value found. Runs BEFORE the compile so this build's binary shows the result.
+REM     Bump the number in ANY one of those files and the next build propagates it. Full builds only.
+IF /I "%SRC%"=="xfmgr.p8" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0syncbuild.ps1" -Src "%SRCDIR%\xfmgr.p8" -Ui "%SRCDIR%\uiutil.p8" -Readme "%~dp0README.md" -Hlp "%~dp0xfmgr.hlp"
+
 REM prog8c.jar (root) is the active compiler; prior versions are archived in old-compilers\
 REM (swap the name here to roll back to one of those).
 java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\%SRC%" > "%BUILDLOG%" 2>&1
@@ -38,11 +43,6 @@ IF NOT "%ERR%"=="0" ( ENDLOCAL & EXIT /B %ERR% )
 
 REM --- memory-stats block parsed from the segment map ---
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0memstats.ps1" -Log "%BUILDLOG%" -Prg "%PRGFILE%"
-
-REM --- sync the F1 readme (xfmgr.hlp) "(Build N)" line with BUILD_NUM / the About box, and warn if
-REM     the About string (uiutil.p8) or README.md build marker have drifted. Full builds only; runs
-REM     before xfmgr.hlp is copied into the release / run folders below.
-IF /I "%SRC%"=="xfmgr.p8" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0syncbuild.ps1" -Src "%SRCDIR%\xfmgr.p8" -Ui "%SRCDIR%\uiutil.p8" -Readme "%~dp0README.md" -Hlp "%~dp0xfmgr.hlp"
 
 REM --- companion build: the tview viewer overlay (%output library -> headerless tview.bin, which
 REM     this script renames to tview.ovl) at $A000, loaded into HIRAM bank 2 at runtime and called

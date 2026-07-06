@@ -1,44 +1,69 @@
-# Sync the F1 readme (xfmgr.hlp) "(Build N)" line with BUILD_NUM - the number shown on the XFMGR
-# About box - and verify the About string (uiutil.p8) and the README.md build marker agree with it.
-# Called by build.bat on a full build, BEFORE xfmgr.hlp is copied into the release / run folders.
-#   -Src     SRC\xfmgr.p8   source of truth:  const ubyte BUILD_NUM = N
-#   -Ui      SRC\uiutil.p8  About box string: "Version 1.0.N"   (verify only - warns on drift)
-#   -Readme  README.md      marker:           (build:N)         (verify only - warns on drift)
-#   -Hlp     xfmgr.hlp      F1 readme:        "(Build N)"       (STAMPED to match BUILD_NUM)
+# Sync the XFMGR build number across every place it appears, always leveling UP to the LARGEST value
+# found. Bump the number in ANY one file and the next build propagates it to the rest - no manual
+# multi-file edits, no drift. build.bat calls this BEFORE the compile, so THIS build's binary shows
+# the resulting number.
+#
+#   -Src     SRC\xfmgr.p8   const ubyte BUILD_NUM = N     (compiled -> the "build N" on the frame)
+#   -Ui      SRC\uiutil.p8  About box "Version 1.0.N"      (compiled into uiutil.ovl)
+#   -Readme  README.md      "(build:N)" marker
+#   -Hlp     xfmgr.hlp      F1 readme "(Build N)"
+#
+# Each file keeps its own wording; only the numeric field is rewritten. Edits are byte-preserving
+# (Latin-1 is a 1:1 byte<->char map) so the PETSCII string bytes in the .p8 sources and the UTF-8 in
+# README.md survive untouched - only the ASCII digits change.
+
 param([string]$Src, [string]$Ui, [string]$Readme, [string]$Hlp)
 
-# --- source of truth: BUILD_NUM in xfmgr.p8 ---
-if (-not (Test-Path $Src)) {
-    Write-Host '  build-sync: xfmgr.p8 not found - skipped.' -ForegroundColor Yellow; return
-}
-if ((Get-Content $Src -Raw) -notmatch 'BUILD_NUM\s*=\s*(\d+)') {
-    Write-Host '  build-sync: BUILD_NUM not found in xfmgr.p8 - skipped.' -ForegroundColor Yellow; return
-}
-$build = [int]$matches[1]
+$enc  = [System.Text.Encoding]::GetEncoding('iso-8859-1')
+$opts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 
-# --- verify the About box (uiutil.p8) and README marker; warn (do not fail) on any mismatch ---
-if ((Test-Path $Ui) -and ((Get-Content $Ui -Raw) -match 'Version\s+1\.0\.(\d+)') -and ([int]$matches[1] -ne $build)) {
-    Write-Host ("  build-sync: WARNING - About box (uiutil.p8) is 1.0.{0}, BUILD_NUM is {1}. Fix uiutil.p8." -f $matches[1], $build) -ForegroundColor Red
-}
-if ($Readme -and (Test-Path $Readme) -and ((Get-Content $Readme -Raw) -match 'build:\s*(\d+)') -and ([int]$matches[1] -ne $build)) {
-    Write-Host ("  build-sync: WARNING - README.md marker is build:{0}, BUILD_NUM is {1}. Fix README.md." -f $matches[1], $build) -ForegroundColor Red
+# each target: a display name, its path, and the regex whose group 1 is the text BEFORE the number
+# (we match up to but NOT including any trailing char, so e.g. the ")" in "(Build N)" is left in place)
+$targets = @(
+    @{ name = 'xfmgr.p8';  path = $Src;    pat = '(BUILD_NUM\s*=\s*)(\d+)' }
+    @{ name = 'uiutil.p8'; path = $Ui;     pat = '(Version\s+1\.0\.)(\d+)' }
+    @{ name = 'README.md'; path = $Readme; pat = '(build:\s*)(\d+)'        }
+    @{ name = 'xfmgr.hlp'; path = $Hlp;    pat = '(\(Build\s+)(\d+)'       }
+)
+
+# --- pass 1: read the build number out of every file, find the largest ---
+$max = -1
+foreach ($t in $targets) {
+    $t.text = $null
+    $t.num  = $null
+    if ($t.path -and (Test-Path $t.path)) {
+        $t.text = $enc.GetString([System.IO.File]::ReadAllBytes($t.path))
+        $m = [regex]::Match($t.text, $t.pat, $opts)
+        if ($m.Success) {
+            $t.num = [int]$m.Groups[2].Value
+            if ($t.num -gt $max) { $max = $t.num }
+        }
+    }
 }
 
-# --- stamp the F1 readme (xfmgr.hlp) "(Build N)" to match BUILD_NUM ---
-# Byte-preserving edit: read/write as Latin-1 (a 1:1 byte<->char map) so any high-bit bytes elsewhere
-# in the help text survive untouched - only the ASCII "(Build N)" token is rewritten.
-if (-not (Test-Path $Hlp)) {
-    Write-Host '  build-sync: xfmgr.hlp not found - hlp not stamped.' -ForegroundColor Yellow; return
+if ($max -lt 0) {
+    Write-Host '  build-sync: no build number found in any file - skipped.' -ForegroundColor Yellow
+    return
 }
-$enc = [System.Text.Encoding]::GetEncoding('iso-8859-1')
-$old = $enc.GetString([System.IO.File]::ReadAllBytes($Hlp))
-if ($old -notmatch '\(Build\s+\d+\)') {
-    Write-Host '  build-sync: no "(Build N)" marker in xfmgr.hlp - hlp not stamped.' -ForegroundColor Yellow; return
+
+# --- pass 2: level every file UP to the max (rewriting only the ones that are behind) ---
+$changed = 0
+foreach ($t in $targets) {
+    if ($null -eq $t.num) {
+        Write-Host ("  build-sync: {0,-11} no marker - left as-is" -f $t.name) -ForegroundColor Yellow
+    }
+    elseif ($t.num -eq $max) {
+        Write-Host ("  build-sync: {0,-11} build {1}" -f $t.name, $t.num) -ForegroundColor DarkGray
+    }
+    else {
+        $new = [regex]::Replace($t.text, $t.pat, ('${1}' + $max), $opts)   # ${1} = the prefix, then the max
+        [System.IO.File]::WriteAllBytes($t.path, $enc.GetBytes($new))
+        Write-Host ("  build-sync: {0,-11} build {1} -> {2}" -f $t.name, $t.num, $max) -ForegroundColor Green
+        $changed++
+    }
 }
-$new = $old -replace '\(Build\s+\d+\)', "(Build $build)"
-if ($new -ne $old) {
-    [System.IO.File]::WriteAllBytes($Hlp, $enc.GetBytes($new))
-    Write-Host ("  build-sync: xfmgr.hlp F1 readme stamped to Build {0} (matches About box)." -f $build) -ForegroundColor Green
+if ($changed -gt 0) {
+    Write-Host ("  build-sync: leveled {0} file(s) up to build {1}." -f $changed, $max) -ForegroundColor Cyan
 } else {
-    Write-Host ("  build-sync: xfmgr.hlp F1 readme already at Build {0}." -f $build) -ForegroundColor Cyan
+    Write-Host ("  build-sync: all in sync at build {0}." -f $max) -ForegroundColor Cyan
 }
