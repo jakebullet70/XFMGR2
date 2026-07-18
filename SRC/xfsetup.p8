@@ -45,9 +45,10 @@ main {
         cx16.set_screen_mode(SCREEN_MODE)
         txt.lowercase()
 
-        ; the config lives in the program's own /xfmgr/ folder (alongside the .prg + overlays).
-        ; chdir is a harmless no-op if we were launched directly from that folder.
-        diskio.chdir("/xfmgr")
+        ; The config lives in the program's own folder, alongside the .prg + overlays. No chdir:
+        ; themes.cfg_read/cfg_write build an ABSOLUTE path from the install folder parsed out of
+        ; the root XT launcher (themes.find_progdir), so they find it wherever XFMGR was installed
+        ; and whatever directory we happen to be launched in.
         sel = themes.cfg_read()
 
         draw_static()
@@ -118,12 +119,16 @@ main {
     }
 
     sub clear_history() {
-        ; delete each hist/<cat>.his in the program's /xfmgr/hist/ folder. Save + restore the cwd
-        ; (curdir() is a transient buffer, so copy it out first); a missing hist/ just leaves cwd
-        ; put and the deletes miss harmlessly.
+        ; Delete each <progdir>hist/<cat>.his. Save + restore the cwd (curdir() is a transient
+        ; buffer, so copy it out first); a missing hist/ just leaves cwd put and the deletes miss
+        ; harmlessly.
+        ; The chdir target MUST be absolute (themes.path_to): this used to be a bare chdir("hist"),
+        ; which only worked because start() had already chdir'd into /xfmgr. That hop is gone now
+        ; that the cfg is reached by absolute path, so a relative "hist" would resolve against
+        ; whatever directory we were launched in and silently delete nothing.
         ubyte[80] savedir
         void strings.copy(diskio.curdir(), savedir)
-        diskio.chdir("hist")
+        diskio.chdir(themes.path_to("hist"))
         ubyte i
         for i in 0 to len(HIST_CATS) - 1 {
             void strings.copy(HIST_CATS[i], fnbuf)

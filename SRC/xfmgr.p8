@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 189          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 190          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -289,19 +289,21 @@ main {
     ; expander, the recursive directory-prune engine, and the input-history ring). $A000 = init;
     ; $A003 = wildcard_expand(orig @R0, pat @R1, out @R2);
     ; $A006 = prune_dir(parent @R0, name @R1) -> ubyte, ONE dir/call (0=done, 1=more, 255=err);
-    ; $A009 = hist_load(cat @R0, base @R1) -> count; $A00C = hist_store(str @R0) -> count;
-    ; $A00F = hist_save(cat @R0, base @R1); $A012 = hist_get(slot @R0, out @R1);
+    ; $A009 = hist_load(cat @R0, histdir @R1) -> count; $A00C = hist_store(str @R0) -> count;
+    ; $A00F = hist_save(cat @R0, histdir @R1); $A012 = hist_get(slot @R0, out @R1);
     ; $A015 = stream_copy(src @R0, dst @R1) -> uword (lsb=fail 0/1/2/3, msb=DOS code).
     const ubyte MISC_BANK = 3
     extsub @bank 3 $A000 = miscutil_init()
     extsub @bank 3 $A003 = wildcard_expand(uword origptr @R0, uword patptr @R1, uword outptr @R2)
     extsub @bank 3 $A006 = prune_dir(uword parptr @R0, uword nameptr @R1) -> ubyte @A
-    ; history ring lives in the overlay; main caches the count returned by load/store. cat/base
-    ; are string pointers (the category name and xtree.base_path); the picker reads slots via
+    ; history ring lives in the overlay; main caches the count returned by load/store. cat is the
+    ; category name; histdir is the ABSOLUTE hist folder, which main resolves with
+    ; themes.path_to("hist") - the overlay can't reach themes, and it must NOT assume /xfmgr (it
+    ; used to chdir base + "xfmgr" + "hist", which broke anywhere else). The picker reads slots via
     ; hist_get into hist_line. If misc_ok is false, input_line skips history entirely.
-    extsub @bank 3 $A009 = hist_load(uword cat @R0, uword base @R1) -> ubyte @A
+    extsub @bank 3 $A009 = hist_load(uword cat @R0, uword histdir @R1) -> ubyte @A
     extsub @bank 3 $A00C = hist_store(uword sptr @R0) -> ubyte @A
-    extsub @bank 3 $A00F = hist_save(uword cat @R0, uword base @R1)
+    extsub @bank 3 $A00F = hist_save(uword cat @R0, uword histdir @R1)
     extsub @bank 3 $A012 = hist_get(ubyte slot @R0, uword outptr @R1)
     ; the file-copy byte pump lives in the overlay too (its 255-byte buffer no longer costs main
     ; RAM). src is an absolute path, dst a bare name in the CWD the caller chdir'd into.
@@ -384,15 +386,17 @@ main {
         ; shared buffer curdir() points into
         void strings.copy(diskio.curdir(), pathbuf)
 
-        ; the .ovl overlays are staged in the program's own /XFMGR/ folder (run.bat), which is
-        ; NOT the boot cwd when launched via the root XT loader. Hop into it to load them; if
-        ; there's no XFMGR subdir (dev/direct-run layout) chdir is a no-op and they load from cwd.
-        diskio.chdir("/xfmgr")           ; lowercase: prog8 petscii maps a-z -> $41-5A, the bytes the FS matches
+        ; The .ovl overlays live in the program's own folder, which is NOT the boot cwd when we are
+        ; launched via the root XT loader. Every load below goes through themes.path_to(), which
+        ; prefixes the install folder parsed out of the XT launcher itself (see themes.find_progdir)
+        ; - so the install location is the installer's business and nothing here is hard-coded. The
+        ; paths are absolute, so no chdir hop (and no restore) is needed: cwd stays where we were
+        ; launched, which is exactly where the tree wants to anchor.
 
         ; load the tview viewer overlay into its reserved bank (VIEW_BANK) at $A000, then run
         ; its one-time library init.
         cx16.push_rambank(VIEW_BANK)
-        viewer_ok = diskio.loadlib("tview.ovl", $a000) != 0
+        viewer_ok = diskio.loadlib(themes.path_to("tview.ovl"), $a000) != 0
         cx16.pop_rambank()
         if viewer_ok
             tview_init()                ; extsub @bank 2: clears the overlay's in-bank BSS ONCE
@@ -402,7 +406,7 @@ main {
         ; bank independently (its probe entry) before it ever colors anything, so a half-loaded
         ; or mis-linked overlay degrades to plain text rather than JSRFARing into garbage.
         cx16.push_rambank(SYN_BANK)
-        syn_ok = diskio.loadlib("xsyntax.ovl", $a000) != 0
+        syn_ok = diskio.loadlib(themes.path_to("xsyntax.ovl"), $a000) != 0
         cx16.pop_rambank()
         if syn_ok
             xsyntax_init()              ; extsub @bank 9: clears the overlay's in-bank BSS ONCE
@@ -415,21 +419,21 @@ main {
 
         ; load the miscutil overlay into its reserved bank (MISC_BANK) the same way
         cx16.push_rambank(MISC_BANK)
-        misc_ok = diskio.loadlib("miscutil.ovl", $a000) != 0
+        misc_ok = diskio.loadlib(themes.path_to("miscutil.ovl"), $a000) != 0
         cx16.pop_rambank()
         if misc_ok
             miscutil_init()             ; extsub @bank 3: clears the overlay's in-bank BSS ONCE
 
         ; load the uiutil dialog overlay into its reserved bank (UI_BANK) the same way
         cx16.push_rambank(UI_BANK)
-        ui_ok = diskio.loadlib("uiutil.ovl", $a000) != 0
+        ui_ok = diskio.loadlib(themes.path_to("uiutil.ovl"), $a000) != 0
         cx16.pop_rambank()
         if ui_ok
             uiutil_init()               ; extsub @bank 4: clears the overlay's in-bank BSS ONCE
 
         ; load the ximgview BMX image viewer overlay into its reserved bank (IMG_BANK) the same way
         cx16.push_rambank(IMG_BANK)
-        imgview_ok = diskio.loadlib("ximgview.ovl", $a000) != 0
+        imgview_ok = diskio.loadlib(themes.path_to("ximgview.ovl"), $a000) != 0
         cx16.pop_rambank()
         if imgview_ok
             ximgview_init()             ; extsub @bank 5: clears the overlay's in-bank BSS ONCE
@@ -438,12 +442,12 @@ main {
         ; loadlib pattern - the blob's fixed jump table sits at $A000. NOT init'd here: golden RAM
         ; is volatile (X16 Edit uses it), so zsm_init_engine(ZSM_LOWRAM) runs per play_zsm.
         cx16.push_rambank(ZSM_BANK)
-        zsm_ok = diskio.loadlib("zsmkit.bin", $a000) != 0
+        zsm_ok = diskio.loadlib(themes.path_to("zsmkit.bin"), $a000) != 0
         cx16.pop_rambank()
 
         ; load the xmusic WAV player overlay into its reserved bank (MUS_BANK), same as the others
         cx16.push_rambank(MUS_BANK)
-        music_ok = diskio.loadlib("xmusic.ovl", $a000) != 0
+        music_ok = diskio.loadlib(themes.path_to("xmusic.ovl"), $a000) != 0
         cx16.pop_rambank()
         if music_ok
             xmusic_init()               ; extsub @bank 7: clears the overlay's in-bank BSS ONCE
@@ -2275,14 +2279,16 @@ main {
 
     sub op_help() {
         ; F1: show the help text (xfmgr.hlp, shipped alongside the .prg) in the text viewer.
-        ; Mirrors the V text path: chdir to /xfmgr, view by bare name, restore the theme color
-        ; the viewer left blue. Caller sets dirty_full - the viewer took the whole screen.
+        ; Mirrors the V text path, but by ABSOLUTE path: the help file lives with the .prg and
+        ; overlays, wherever those were installed (themes.path_to). The old version chdir'd to a
+        ; hard-coded /xfmgr and never changed back, leaving the cwd somewhere the caller didn't
+        ; expect. Restores the theme color the viewer left blue; caller sets dirty_full - the
+        ; viewer took the whole screen.
         if not viewer_ok {
             flash("viewer overlay missing")
             return
         }
-        diskio.chdir("/xfmgr")                      ; the help file lives with the .prg + overlays
-        void strings.copy("xfmgr.hlp", namebuf)
+        void strings.copy(themes.path_to("xfmgr.hlp"), namebuf)
         view_file(&namebuf)                         ; returns on Q/ESC
         txt.color2(shared.CLR_FG, shared.CLR_BG)    ; viewer left the color blue; restore app theme
     }
@@ -2828,7 +2834,7 @@ main {
         ; its own default (e.g. filespec's "*"). ESC always returns false.
         bool usehist = misc_ok and strings.length(histname) != 0    ; no overlay / empty histname -> no history UI
         if usehist
-            hist_count = hist_load(histname, &xtree.base_path)      ; banked ring; cache the returned count
+            hist_count = hist_load(histname, themes.path_to("hist"))      ; banked ring; cache the returned count
         input_frame(prompt, usehist, dirpick)
         ubyte fieldcol = BANNER_LEFT + 1 + lsb(strings.length(prompt))     ; one space after the prompt label
         ubyte n = 0
@@ -2843,7 +2849,7 @@ main {
                     dest[n] = 0
                     if n != 0 and usehist {
                         hist_count = hist_store(dest)
-                        hist_save(histname, &xtree.base_path)
+                        hist_save(histname, themes.path_to("hist"))
                     }
                     box_close()
                     return n != 0 or allow_empty
