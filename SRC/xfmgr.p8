@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 185          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 186          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -175,9 +175,17 @@ main {
     ; buffers (inputbuf, hist_line) are left as their own storage - they'd cost more code than saved.
     ; INVARIANT: do NOT add a use of a guest that can be live at the same time as its host or a
     ; sibling on the same slot - they share physical bytes and would silently corrupt each other.
-    ; Slot A (cm_src, 133 B): sa_line, exit_dir
+    ; Slot A (cm_src, 133 B): sa_line, exit_dir, syn_line
     uword sa_line  = &cm_src                ; composed ShowAll/Find results row (path + name)
     uword exit_dir = &cm_src                ; dir the host shell is left in on quit
+    ; The viewer's syntax-colouring line + colour buffers. These MUST be main RAM: tview (bank 2)
+    ; fills syn_line, then JSRFARs into xsyntax (bank 9) to fill syn_col - and neither bank can see
+    ; the other's RAM, while main RAM stays mapped below $A000 throughout. Aliasing the copy/move
+    ; scratch costs zero new bytes and is safe by the slot rule above: V is a top-level file-pane
+    ; command, so no copy/move (nor ShowAll/Find) can be in flight while the viewer owns the screen.
+    uword syn_line = &cm_src                ; one logical source line, <= SYN_LINE_MAX bytes
+    uword syn_col  = &cm_dst                ; one colour attribute byte per column (first cm_dst guest)
+                                            ; cap = shared.SYN_LINE_MAX (128), well inside both 133 B hosts
     ; Slot B (cm_sdir, 81 B): find_lc
     uword find_lc  = &cm_sdir               ; Ctrl-F lowercased filespec (whole-disk crawl)
     ubyte cm_fail                           ; copy_one failure point: 0 ok/none, 1 src-open, 2 dst-open, 3 write
@@ -200,7 +208,22 @@ main {
     const ubyte VIEW_BANK = 2
     extsub @bank 2 $A000 = tview_init()
     extsub @bank 2 $A003 = view_file(uword nameptr @R0)
+    ; $A006 hands tview the syntax-colouring setup: whether xsyntax.ovl loaded, and the two
+    ; MAIN-RAM buffers the two overlays share. They must be main-RAM (not in either bank),
+    ; because while bank 9 is mapped tview's own bank-2 RAM is invisible - see SYN_BANK below.
+    extsub @bank 2 $A006 = view_set_syn(ubyte ok @R0, uword lineptr @R1, uword colptr @R2)
     bool viewer_ok                          ; tview.ovl loaded OK -> V uses the banked viewer
+
+    ; --- banked syntax-colouring overlay (xsyntax) ---
+    ; xsyntax.p8 is a %output library blob in reserved HIRAM bank 9. UNLIKE every other overlay
+    ; here it is NOT called by main - tview (bank 2) JSRFARs into it once per rendered line. That
+    ; is legal: the X16 KERNAL's JSRFAR "works independently of which RAM or ROM bank the currently
+    ; executing code is residing in" (X16 Reference - 05 - KERNAL, $FF6E). Main only LOADS it and
+    ; reports the result to tview via view_set_syn; the extsub decls for its entries live in
+    ; tview.p8. It lives in its own bank because bank 2 has ~424 bytes free and this needs ~1.8 KB.
+    const ubyte SYN_BANK = 9
+    extsub @bank 9 $A000 = xsyntax_init()
+    bool syn_ok                             ; xsyntax.ovl loaded OK -> the viewer can colour
 
     ; --- banked BMX image viewer (ximgview) overlay ---
     ; ximgview.p8 is a %output library blob loaded into reserved HIRAM bank 5. It displays a
@@ -213,9 +236,13 @@ main {
 
     ; --- banked ZSM music engine (zsmkit v2, release 2.8) ---
     ; zsmkit.bin is a pre-built library blob (mooinglemur/zsmkit) loaded at $A000 into reserved
-    ; HIRAM bank 6; its jump table is fixed at $A000, $A003, ... Only main (always mapped below
-    ; $9F00) may call it - a banked overlay cannot @bank-call a different bank. P dispatches here
-    ; for a .zsm. The engine needs a ~255-byte low-RAM scratch: we hand it golden RAM $0400, but
+    ; HIRAM bank 6; its jump table is fixed at $A000, $A003, ... Only main calls it, and P
+    ; dispatches here for a .zsm.
+    ; (NB: "a banked overlay cannot @bank-call a different bank" used to be asserted here and is
+    ; NOT true in general - JSRFAR is bank-agnostic and tview->xsyntax relies on that; see
+    ; SYN_BANK above. Keep zsmkit main-driven anyway: it is an external blob and its engine state
+    ; and low-RAM scratch are managed from here.)
+    ; The engine needs a ~255-byte low-RAM scratch: we hand it golden RAM $0400, but
     ; X16 Edit also uses $0400-$07FF, so we re-init at the top of EVERY play_zsm (not once).
     const ubyte ZSM_BANK   = 6
     const uword ZSM_LOWRAM = $0400
@@ -350,6 +377,22 @@ main {
         cx16.pop_rambank()
         if viewer_ok
             tview_init()                ; extsub @bank 2: clears the overlay's in-bank BSS ONCE
+
+        ; load the xsyntax colouring overlay into its reserved bank (SYN_BANK), then tell tview
+        ; whether it is there and where the two shared main-RAM buffers live. tview verifies the
+        ; bank independently (its probe entry) before it ever colours anything, so a half-loaded
+        ; or mis-linked overlay degrades to plain text rather than JSRFARing into garbage.
+        cx16.push_rambank(SYN_BANK)
+        syn_ok = diskio.loadlib("xsyntax.ovl", $a000) != 0
+        cx16.pop_rambank()
+        if syn_ok
+            xsyntax_init()              ; extsub @bank 9: clears the overlay's in-bank BSS ONCE
+        if viewer_ok {
+            ubyte syn_flag = 0
+            if syn_ok
+                syn_flag = 1
+            view_set_syn(syn_flag, syn_line, syn_col)
+        }
 
         ; load the miscutil overlay into its reserved bank (MISC_BANK) the same way
         cx16.push_rambank(MISC_BANK)

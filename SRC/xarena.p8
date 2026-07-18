@@ -17,12 +17,13 @@
 xarena {
     %option ignore_unused
 
-    const ubyte FIRST_BANK = 9          ; bank 0 = Kernal; bank 1 = xtree dir-extras;
+    const ubyte FIRST_BANK = 10         ; bank 0 = Kernal; bank 1 = xtree dir-extras;
                                         ; bank 2 = tview; bank 3 = miscutil; bank 4 = uiutil;
                                         ; bank 5 = ximgview; bank 6 = zsmkit engine;
                                         ; bank 7 = xmusic wav player (ZSM/MUS_BANK in xfmgr);
                                         ; bank 8 = xtree dir-NAME slab (NAME_BANK in xtree);
-                                        ; arena = 9..max_bank
+                                        ; bank 9 = xsyntax (SYN_BANK in xfmgr, called BY tview);
+                                        ; arena = 10..max_bank
     const uword WIN_START  = $a000
     const uword WIN_END    = $bf00      ; reserve $bf00-$bfff as scratch / guard
 

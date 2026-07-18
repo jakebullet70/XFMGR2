@@ -41,3 +41,6 @@
 - [Music player (P key)](xfmgr-music-player.md) — .zsm via zsmkit bank 6 (main-driven), .wav via xmusic overlay bank 7 (poll-AFLOW); magic-byte sniff
 - [Music player polish (V2)](xfmgr-music-v2.md) — backlog: ADPCM wav, README, elapsed time, real-SD buffer, volume/seek
 - [ASCII file byte-match](prog8-ascii-file-byte-match.md) — parsing an ASCII disk file needs raw ASCII codes; prog8 char literals are PETSCII and silently never match letters
+- [Bank-to-bank JSRFAR works](x16-bank-to-bank-jsrfar.md) — an overlay CAN @bank-call another bank; the limit is data visibility, not the call
+- [Deployed filenames UPPERCASE](x16-deployed-filenames-uppercase.md) — lowercase source literal + UPPERCASE file on disk; the emulator hides the bug
+- [Viewer syntax colouring](xfmgr-syntax-colouring.md) — DONE build 186: xsyntax in bank 9, called by tview; bank 2 now has 10 bytes free

@@ -29,12 +29,36 @@ main {
     %option ignore_unused
 
     ; Jump table so callable entry offsets stay fixed across rebuilds. The compiler prepends
-    ; `jmp start` at $A000 (library init), so: $A000 = start (init), $A003 = view_file.
-    %jmptable ( main.view_file )
+    ; `jmp start` at $A000 (library init), so: $A000 = start (init), $A003 = view_file,
+    ; $A006 = view_set_syn.
+    %jmptable ( main.view_file, main.view_set_syn )
 
-    const ubyte VTOP   = 1             ; first text row (row 0 = header)
-    const ubyte VROWS  = 28            ; text rows 1..28
-    const ubyte VWIDTH = 79            ; wrap column (keep off col 79 to avoid auto-scroll)
+    ; --- syntax colouring, in ANOTHER bank (xsyntax.p8, bank 9) ---
+    ; We are ourselves a bank overlay, and we call out to a second one. That is legal: the X16
+    ; KERNAL's JSRFAR - which is what prog8 emits for `extsub @bank` - "works independently of
+    ; which RAM or ROM bank the currently executing code is residing in" (X16 Reference - 05 -
+    ; KERNAL, $FF6E). It is done ONCE PER RENDERED LINE (<=28 per page), so the cost is noise
+    ; next to the disk read this renderer already does.
+    ;
+    ; WHY NOT JUST PUT IT IN HERE: this overlay has ~424 bytes free to $C000 and the colouriser
+    ; is ~1.8 KB. Bank 9 also gives it room to grow.
+    ;
+    ; THE RULE THAT SHAPES EVERYTHING BELOW: while bank 9 is mapped, OUR OWN bank-2 RAM is not
+    ; visible - so viewbuf and friends are unreachable from there. The line and colour buffers
+    ; must therefore live in MAIN RAM (mapped below $A000 regardless of bank); xfmgr owns them
+    ; and hands us the pointers via view_set_syn.
+    const ubyte SYN_BANK = 9
+    extsub @bank 9 $A003 = syn_setbufs(uword src @R0, uword dest @R1)
+    extsub @bank 9 $A006 = syn_paint(ubyte slen @R0, ubyte mode @R1, ubyte row @R2, ubyte col @R3, uword mrange @R4)
+    extsub @bank 9 $A009 = syn_probe() -> ubyte @A
+    extsub @bank 9 $A00C = syn_detect_ovl(uword nameptr @R0) -> ubyte @A
+    const ubyte SYN_PROBE_MAGIC = $5a   ; must match syntax.PROBE_MAGIC in xsyntax.p8
+
+    ; Geometry now lives in shared-const so xsyntax's colour pass walks the SAME cells this
+    ; renderer drew (it re-derives the wrap from these); aliased here to keep the short names.
+    const ubyte VTOP   = shared.VIEW_TOP    ; first text row (row 0 = header)
+    const ubyte VROWS  = shared.VIEW_ROWS   ; text rows 1..28
+    const ubyte VWIDTH = shared.VIEW_WIDTH  ; wrap column (keep off col 79 to avoid auto-scroll)
     const ubyte SCR_BOT = 29           ; footer row
     const uword HEXPAGE = VROWS * 16   ; bytes shown per hex page (VROWS rows x 16 bytes)
 
@@ -74,6 +98,26 @@ main {
     bool is_zsm                        ; current file starts with the ZSM 'zm' magic
     ubyte[16] zsm_hdr                  ; the 16 raw header bytes, read once per file
 
+    ; --- syntax colouring state (all UNINITIALIZED -> BSS tail, per the jmptable rule above) ---
+    bool syn_avail                     ; xsyntax.ovl loaded AND its probe answered -> safe to call
+    uword syn_line_p                   ; main-RAM buffer we accumulate one logical line into
+                                       ; (the colour buffer's pointer is forwarded straight to
+                                       ; xsyntax, which is the only side that ever reads it)
+    ubyte syn_mode                     ; 0 = off, 1 = BASIC/BASLOAD, 2 = Markdown
+    ; per-logical-line accumulator. The anchor (row/col/off) is captured lazily at the line's FIRST
+    ; drawn character, which is what makes CR/LF pairs, blank lines and a page-boundary split all
+    ; fall out correctly without special cases.
+    ubyte ln_len                       ; bytes accumulated so far (capped at shared.SYN_LINE_MAX)
+    ubyte ln_row                       ; screen row (0-based within the text area) of the line's 1st char
+    ubyte ln_col                       ; screen column of the line's 1st char
+    ; Find-highlight run for the current line, as line-relative COLUMNS (m0 == m1 -> none). The
+    ; draw loop already does a 32-bit "is this byte inside the search hit?" test per character to
+    ; paint that highlight, so we just piggyback on its answer and note the column. That keeps ALL
+    ; the syntax path's arithmetic 8-bit - the 32-bit version of this cost ~600 bytes of an overlay
+    ; that only had 424 to spare.
+    ubyte syn_m0
+    ubyte syn_m1
+
     sub start() {
         ; library init entrypoint ($A000). The compiler emits the BSS-clear here; this must
         ; do NO UI or system init (the caller/XFMGR owns the screen). Call ONCE after load.
@@ -85,7 +129,49 @@ main {
         ; The caller keeps XFMGR in screen mode $01 and repaints after we return.
         void strings.copy(nameptr, namebuf)
         zsm_detect()                    ; set is_zsm + fill zsm_hdr before the view loop
+        syn_detect()                    ; pick BASIC/Markdown/off from the file extension
         view_run()
+    }
+
+    sub view_set_syn(ubyte ok @R0, uword lineptr @R1, uword colptr @R2) {
+        ; entry ($A006), called ONCE at startup. Capture the @Rn params before anything else (they
+        ; ARE cx16.r0-r2). `ok` is xfmgr's loadlib result for xsyntax.ovl - we must not JSRFAR into
+        ; bank 9 unless it says the blob is there. Given that, we then ask the overlay to identify
+        ; itself: only a correct magic proves the jump table really is at its fixed offsets AND
+        ; that a bank-to-bank call works on this machine. Anything else -> plain text, no colour.
+        ubyte lok = ok
+        uword lcol = colptr
+        syn_line_p = lineptr
+        syn_avail = false
+        syn_mode = 0
+        if lok != 0 and syn_line_p != 0 and lcol != 0 {
+            syn_avail = syn_probe() == SYN_PROBE_MAGIC
+            if syn_avail
+                syn_setbufs(syn_line_p, lcol)   ; hand the overlay the shared buffers once
+        }
+    }
+
+    sub syn_detect() {
+        ; Ask xsyntax to pick the colouring mode from the extension. The matching itself lives in
+        ; bank 9 (space - this overlay had ~424 bytes free), and since bank 9 cannot see OUR RAM,
+        ; the name has to be staged into the shared main-RAM buffer first. Safe to borrow it here:
+        ; it only holds accumulated lines during a render, and nothing has rendered yet.
+        syn_mode = 0
+        if syn_avail {
+            void strings.copy(namebuf, syn_line_p)
+            syn_mode = syn_detect_ovl(syn_line_p)
+        }
+    }
+
+    sub syn_flush() {
+        ; Hand the logical line we just drew to xsyntax, which classifies AND paints it. The
+        ; find-highlight columns were recorded by the draw loop as it went (see syn_m0/syn_m1),
+        ; so there is nothing to compute here.
+        if ln_len != 0
+            syn_paint(ln_len, syn_mode, ln_row, ln_col, mkword(syn_m0, syn_m1))
+        ln_len = 0
+        syn_m0 = 0
+        syn_m1 = 0
     }
 
     sub zsm_detect() {
@@ -212,6 +298,12 @@ main {
         ; found-text highlight: bytes [view_match, view_match+plen) get the find colour via setclr
         ubyte plen = lsb(strings.length(view_find))
         long mend = view_match + plen
+        ; syntax colouring: on only for a real draw of a recognised file type. Cached into module
+        ; vars because syn_flush() runs outside this sub's scope.
+        ; (syn_m0/syn_m1 need no reset here - syn_flush clears them after every line, and every
+        ; page ends with a flush, so they are already zero on entry.)
+        bool docolor = draw and syn_avail and syn_mode != 0
+        ln_len = 0
         repeat {
             uword n = diskio.f_read(&viewbuf, 250)
             if n == 0 {
@@ -231,6 +323,8 @@ main {
                 if ch == 13 or ch == 10 {
                     if ch == 13
                         prev_cr = true
+                    if docolor
+                        syn_flush()         ; end of a logical line -> colour what we just drew
                     row++
                     col = 0
                     if row >= VROWS {
@@ -240,13 +334,38 @@ main {
                 } else {
                     if ch < 32 or ch > 126
                         ch = '.'
+                    if docolor {
+                        ; Anchor the line lazily at its FIRST drawn char. Doing it here rather than
+                        ; at the CR/LF handler is what makes CR/LF pairs (the LF is swallowed
+                        ; earlier by `continue`), blank lines, and a page starting mid-line all work
+                        ; without special-casing any of them.
+                        if ln_len == 0 {
+                            ln_row = row
+                            ln_col = col
+                        }
+                        ; Store the CLAMPED byte so column k of the buffer is exactly the glyph in
+                        ; column k on screen. Past the cap we keep drawing; the tail stays default.
+                        if ln_len < shared.SYN_LINE_MAX {
+                            @(syn_line_p + ln_len) = ch
+                            ln_len++
+                        }
+                    }
                     if draw {
                         ; setchr writes the screen code straight to VRAM - no PETSCII control-code
                         ; interpretation, so no byte value can scroll the view. setclr paints only
                         ; the find-highlight cells; the rest keep the blanked content colour.
                         txt.setchr(col, VTOP + row, scr_of(ch))
-                        if plen != 0 and consumed-1 >= view_match and consumed-1 < mend
+                        if plen != 0 and consumed-1 >= view_match and consumed-1 < mend {
                             txt.setclr(col, VTOP + row, (shared.FIND_BG << 4) | shared.FIND_FG)
+                            ; Reuse this 32-bit verdict to note the hit's line-relative columns, so
+                            ; the syntax pass can leave those cells alone without repeating the math.
+                            ; ln_len was already bumped for this byte, so its index is ln_len-1.
+                            if docolor and ln_len != 0 {
+                                if syn_m0 == syn_m1
+                                    syn_m0 = ln_len - 1     ; first hit cell on this line
+                                syn_m1 = ln_len             ; one past the last so far
+                            }
+                        }
                     }
                     col++
                     if col >= VWIDTH {
@@ -262,6 +381,10 @@ main {
             if full
                 break
         }
+        ; Colour the last line, which ends at EOF or at the page break rather than a CR/LF (a line
+        ; terminated normally has already flushed itself, leaving ln_len 0 -> this is a no-op).
+        if docolor
+            syn_flush()
         diskio.f_close()
         return consumed
     }
@@ -666,6 +789,13 @@ main {
             txt.print("ind  ")
             bar_key("N")
             txt.print("ext  ")
+            ; Colour toggle: only advertised where it does something (text page, overlay loaded),
+            ; which also keeps the bar short enough that the right-hand position indicator - drawn
+            ; last at col 79-w - doesn't have to clip into it.
+            if syn_avail and not view_hex {
+                bar_key("C")
+                txt.print("olour  ")
+            }
             bar_key("Q")
             txt.print("uit")
             ; Space=find-next hint, shown only while a search term is active (view_find non-empty)
@@ -779,6 +909,18 @@ main {
                         view_jump()
                     else
                         view_notify(" not found")
+                }
+                'c' -> {                        ; C: cycle syntax colouring off -> BASIC -> md -> off
+                    ; Offered on ANY text file, not just recognised ones: detection is a suffix
+                    ; match, so this is the escape hatch when it guesses wrong (or when a BASIC
+                    ; listing is saved under some extension we don't know).
+                    ; No hex/ZSM guard: those renderers ignore syn_mode entirely, so cycling while
+                    ; one is showing is harmless and simply takes effect on return to the text page.
+                    if syn_avail {
+                        syn_mode++
+                        if syn_mode > 2
+                            syn_mode = 0
+                    }
                 }
             }
         }

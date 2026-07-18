@@ -1,12 +1,13 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 185)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 186)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
  the left, the selected directory's FILES on the right, with file tagging, a
- banked text/hex viewer, a BMX image viewer, a whole-disk Find, and a full set
- of file operations - copy, move, rename, delete, mkdir and prune - plus edit
- via the ROM X16 Edit and switchable colour themes.
+ banked text/hex viewer with BASIC/Markdown syntax colouring, a BMX image
+ viewer, a whole-disk Find, and a full set of file operations - copy, move,
+ rename, delete, mkdir and prune - plus edit via the ROM X16 Edit and
+ switchable colour themes.
 
  The bottom command menu is MODIFIER-DRIVEN. By default it shows MENU (plain
  keys). Hold CTRL for the CTRL menu, hold ALT (the Commodore key) for the ALT
@@ -103,6 +104,20 @@
                the BMX image viewer; any key returns to the file list.
 
    Big files that are too large for the pager fall back to the ROM X16 Edit.
+
+------------------------------------------------------------------------------
+ Syntax colouring in the viewer (C)
+------------------------------------------------------------------------------
+   Auto        BASIC / BASLOAD source (.bas, .bas.txt, .basl, .bl) and
+               Markdown (.md) are coloured automatically when opened.
+   BASIC       Statement keywords, built-in functions, "strings", numbers,
+               and REM / ## comments each get their own colour. A dotted
+               BASLOAD label (DIR.READ.BIN) stays plain - it is one name.
+   Markdown    A leading # is a heading, ## or deeper a subheading.
+   C           Cycles colouring off -> BASIC -> Markdown -> off, so you can
+               colour a listing saved under any extension (or turn it off).
+   Needs       xsyntax.ovl beside the program; without it the viewer simply
+               shows plain text and the C key is not offered.
 
 ------------------------------------------------------------------------------
  Music playback (P)

@@ -1,0 +1,341 @@
+; xsyntax - syntax colouring for XFMGR2's banked text viewer (tview).
+;
+; Ported from x16-MSEDIT's SRC/syntax.p8. classify() scans ONE line of text and writes a
+; per-column colour byte into a caller buffer (one txt.setclr attribute per document column).
+; Highlighting is STATELESS per line - strings, REM comments and ## comments all end at
+; end-of-line - so no state carries between lines. That keeps this a pure leaf module: it
+; reads the line via a pointer, writes colours via a pointer, and needs nothing else.
+;
+; WHY ITS OWN BANK: tview (bank 2) is full - ~424 bytes free to $C000, and this needs ~1.5 KB.
+; A banked overlay CAN call another bank: the X16 KERNAL's JSRFAR "works independently of which
+; RAM or ROM bank the currently executing code is residing in" (X16 Reference - 05 - KERNAL,
+; JSRFAR at $FF6E), which is what prog8's `extsub @bank` emits. So tview JSRFARs in here once
+; per rendered line. Cost is ~28 cross-bank calls per page - nothing next to the disk read.
+;
+; THE CATCH, and why the buffers are main-RAM pointers: while THIS bank is mapped at $A000,
+; tview's own bank-2 RAM is NOT visible. So the source line and the colour buffer cannot live
+; in either overlay - they are main-RAM buffers owned by xfmgr.p8 and handed to tview at
+; startup, and main RAM stays mapped below $A000 no matter which bank is active.
+;
+; ASCII, NOT PETSCII. tview renders RAW FILE BYTES, so the text arriving here is ASCII - unlike
+; MSEDIT, which classifies its PETSCII editor buffer. `%encoding iso` below makes every literal
+; in this module ASCII (iso-8859-15 agrees with ASCII across A-Z/a-z/0-9/punctuation), so the
+; keyword tables are stored as the bytes a real file actually contains. Without it, prog8's
+; default PETSCII literals would encode A-Z as $C1-$DA and NOTHING would ever match - silently.
+; This module does no diskio and prints nothing, so it has no reason to want PETSCII anywhere
+; (contrast SRC/themes.p8, which must stay PETSCII for its literal filename).
+
+%encoding iso
+%import textio             ; this overlay paints its own colour pass - see syn_paint()
+%import strings            ; strings.length, for the extension match in detect()
+%import "shared-const"
+
+; --- loadable-library overlay: headerless blob loaded at $A000 into a HIRAM bank and called
+;     via `extsub @bank`. %output library => no zeropage / no sysinit / jmp start entry;
+;     %memtop hard-fails the build if the overlay outgrows the $A000-$BFFF window.
+%address $A000
+%memtop  $C000
+%output  library
+%zeropage dontuse
+
+main {
+    %option ignore_unused
+
+    ; Jump table so callable entry offsets stay fixed across rebuilds. The compiler prepends
+    ; `jmp start` at $A000 (library init), so: $A000 = start, $A003/$A006/$A009 = the entries.
+    ;
+    ; The real code lives in the `syntax` block below, per the two-block library pattern in the
+    ; prog8 manual (docs/source/binlibrary.rst). That is deliberate and load-bearing here: the
+    ; keyword tables are INITIALIZED data, and prog8 emits a block's initialized variables inline
+    ; BEFORE its code - which would shove this jump table off $A003 if they shared a block.
+    ; Keeping `main` var-free means only `syntax` gets that inline data, safely after the table.
+    ; $A003 = syn_setbufs, $A006 = syn_paint, $A009 = syn_probe, $A00C = syn_detect.
+    %jmptable ( syntax.setbufs, syntax.paint, syntax.probe, syntax.detect )
+
+    sub start() {
+        ; library init entrypoint ($A000). The compiler emits the BSS-clear here; this must do
+        ; NO UI or system init (the caller owns the screen). Call ONCE after load.
+    }
+}
+
+syntax {
+    %option ignore_unused
+
+    const ubyte PROBE_MAGIC = $5a       ; probe() returns this; see the note on probe() below
+
+    ; REM is matched specially (it comments the rest of the line), so it's kept out of the tables.
+    str rem_kw = "REM"
+
+    ; X16 BASIC keyword sets: Commodore BASIC V2 + the Commander X16 additions. Statements are
+    ; coloured as keywords; value-returning functions get their own colour (like sub names in an
+    ; IDE theme). Stored as space-delimited blobs and matched case-insensitively (fold/eq), which
+    ; costs far less than uword[] tables (those add ~188 bytes of lsb/msb pointers on top of the
+    ; same string bytes). Function forms keep any trailing '$'. Statements are split CBM/X16 only
+    ; to keep each str under the 255-char limit; both classify as keywords.
+    str kw_stmt  = "END FOR NEXT DATA INPUT DIM READ LET GOTO RUN IF RESTORE GOSUB RETURN STOP ON WAIT LOAD SAVE VERIFY DEF POKE PRINT CONT LIST CLR CMD SYS OPEN CLOSE GET NEW TO THEN NOT STEP AND OR GO ELSE"
+    str kw_stmtx = "VPOKE SCREEN PSET LINE FRAME RECT CIRCLE CHAR MOUSE COLOR LOCATE CLS DOS OLD MON VLOAD BLOAD BSAVE BVERIFY BOOT RESET KEY BANK MENU FONT"
+    str kw_func  = "SGN INT ABS USR FRE POS SQR RND LOG EXP COS SIN TAN ATN PEEK LEN VAL ASC TAB SPC FN STR$ CHR$ LEFT$ RIGHT$ MID$ VPEEK HEX$ BIN$"
+
+    sub probe() -> ubyte {
+        ; entry ($A009). Returns PROBE_MAGIC and nothing else. tview calls this ONCE after load
+        ; and only enables colouring if it gets the magic back, which proves three things at once:
+        ; the .ovl loaded, the jump table really is at its fixed offsets, and the bank-to-bank
+        ; JSRFAR works on this machine. Any of those failing degrades to plain text instead of
+        ; JSRFARing into an unloaded bank.
+        return PROBE_MAGIC
+    }
+
+    sub detect(uword nameptr @R0) -> ubyte {
+        ; entry ($A00C). Pick a colouring mode from the FILENAME: 0 = off, 1 = BASIC, 2 = Markdown.
+        ; nameptr must point into MAIN RAM - tview's own copy of the name is in bank 2, invisible
+        ; from here, so it copies the name across before calling.
+        ;
+        ; This cannot use magic bytes the way tview's ZSM sniffer (or xfmgr's sniff_kind) does:
+        ; BASIC source and Markdown are plain text with no signature. A suffix match is the only
+        ; option, which is exactly the thing that has bitten this codebase before on filename
+        ; encoding - hence name_fold below, and hence the C key, which lets the user override a
+        ; wrong guess. It lives in THIS bank purely for space: tview had ~424 bytes to spare.
+        uword np = nameptr
+        ; ".bas.txt" must be tested FIRST and on its own: a name ending ".bas.txt" does NOT end
+        ; with ".bas", so the general BASIC case below would miss it.
+        if ends_ci(np, ".bas.txt") or ends_ci(np, ".bas") or ends_ci(np, ".basl") or ends_ci(np, ".bl")
+            return 1
+        if ends_ci(np, ".md")
+            return 2
+        return 0
+    }
+
+    sub name_fold(ubyte b) -> ubyte {
+        ; Canonicalise a FILENAME letter to ASCII lowercase across every encoding the name might
+        ; arrive in, so the iso: literals above (already ASCII lowercase) compare equal to all of
+        ; them. Deliberately separate from fold(): that one canonicalises file CONTENT, which is
+        ; always ASCII, and must not start treating high bytes as letters.
+        ;   ascii A-Z ($41-$5a) and petscii a-z (the same $41-$5a) -> +$20
+        ;   petscii A-Z ($c1-$da)                                  -> -$60
+        ;   ascii a-z ($61-$7a)                                    -> already canonical
+        if b >= $41 and b <= $5a
+            return b + $20
+        if b >= $c1 and b <= $da
+            return b - $60
+        return b
+    }
+
+    sub ends_ci(uword name, str suffix) -> bool {
+        ; case- and encoding-insensitive "does name end with suffix?"
+        ubyte nl = lsb(strings.length(name))
+        ubyte sl = lsb(strings.length(suffix))
+        if sl > nl
+            return false
+        uword np = name + nl - sl
+        ubyte i
+        for i in 0 to sl - 1 {
+            if name_fold(@(np + i)) != name_fold(suffix[i])
+                return false
+        }
+        return true
+    }
+
+    sub fold(ubyte b) -> ubyte {
+        ; ASCII letters -> lowercase so either case matches; everything else is returned as-is.
+        if b >= 'A' and b <= 'Z'
+            return b + $20
+        return b
+    }
+
+    sub is_letter(ubyte b) -> bool {
+        return (b >= 'A' and b <= 'Z') or (b >= 'a' and b <= 'z')
+    }
+
+    sub is_digit(ubyte b) -> bool {
+        return b >= '0' and b <= '9'
+    }
+
+    sub eq(uword a, uword b, ubyte n) -> bool {
+        ; compare n bytes case-insensitively (letters folded; '$' etc. compared literally)
+        ubyte i
+        for i in 0 to n - 1 {
+            if fold(@(a + i)) != fold(@(b + i))
+                return false
+        }
+        return true
+    }
+
+    sub in_blob(uword blob, uword tp, ubyte tlen) -> bool {
+        ; true if token tp[0..tlen) matches a whole space-delimited word in blob (folded).
+        ; (s is hoisted - prog8 vars are function-scoped, there is no block scope.)
+        ubyte i = 0
+        ubyte s
+        while @(blob + i) != 0 {
+            s = i                                   ; word start
+            while @(blob + i) != 0 and @(blob + i) != ' '
+                i++
+            if (i - s) == tlen and eq(blob + s, tp, tlen)
+                return true
+            while @(blob + i) == ' '                ; skip the separator(s)
+                i++
+        }
+        return false
+    }
+
+    sub lookup(uword tp, ubyte tlen) -> ubyte {
+        ; classify an identifier token: 2 = REM (comment), 1 = statement keyword,
+        ; 3 = built-in function, 0 = plain.
+        if tlen == 3 and eq(tp, rem_kw, 3)
+            return 2
+        if in_blob(kw_stmt, tp, tlen)
+            return 1
+        if in_blob(kw_stmtx, tp, tlen)
+            return 1
+        if in_blob(kw_func, tp, tlen)
+            return 3
+        return 0
+    }
+
+    ; Buffer pointers, handed over once by tview at startup. Both point into MAIN RAM (see the
+    ; module header): src_p is the line tview accumulated, col_p is where we write the colours.
+    uword src_p
+    uword col_p
+
+    sub setbufs(uword src @R0, uword dest @R1) {
+        ; entry ($A003), called ONCE. Capture the @Rn params immediately - they ARE cx16.r0-r1.
+        src_p = src
+        col_p = dest
+    }
+
+    sub paint(ubyte slen @R0, ubyte mode @R1, ubyte row @R2, ubyte col @R3, uword mrange @R4) {
+        ; entry ($A006). Classify the accumulated line AND paint it. Both halves live here rather
+        ; than in tview because tview's bank has ~424 bytes free and this one has ~6 KB - and the
+        ; screen is VERA, which is I/O and therefore reachable whichever RAM bank is mapped.
+        ;
+        ; row/col are where the line's FIRST character was drawn; we re-walk from there with the
+        ; same wrap rule tview used, so cell k of the line is cell k of the colour buffer.
+        ; mrange packs the find-highlight run as line-relative columns (msb = first, lsb = one
+        ; past last, equal = no overlap): that highlight is painted by tview's character pass and
+        ; must stay ON TOP of syntax colour, so those columns are skipped here. Packing it as one
+        ; uword keeps the whole thing byte math - the 32-bit file offsets stay on tview's side.
+        ubyte nchars = slen             ; not `len` - that is a prog8 builtin
+        ubyte m0 = msb(mrange)
+        ubyte m1 = lsb(mrange)
+        if nchars == 0
+            return
+        if mode == 2
+            md_line(src_p, nchars, col_p)
+        else
+            basic_line(src_p, nchars, col_p)
+        ubyte r = row
+        ubyte c = col
+        ubyte k
+        for k in 0 to nchars - 1 {
+            if r >= shared.VIEW_ROWS
+                break                       ; the rest of the line is off the bottom of the page
+            ; Skip default-coloured cells - the row was already blanked to the content colour, so
+            ; rewriting it would only cost time - and skip the active find hit.
+            ubyte a = @(col_p + k)
+            if a != shared.SYN_DEFAULT and not (k >= m0 and k < m1)
+                txt.setclr(c, shared.VIEW_TOP + r, a)
+            c++
+            if c >= shared.VIEW_WIDTH {
+                c = 0
+                r++
+            }
+        }
+    }
+
+    sub md_line(uword src, ubyte slen, uword dest) {
+        ; Markdown colouring: minimal, two colours. A line whose FIRST character
+        ; is '#' (so '#', '##', '###' ... all count) is a heading; every other line is plain body
+        ; text. Line-oriented and stateless, like the BASIC path.
+        ;
+        ; '#' (H1) and '##'-or-deeper (H2) get DIFFERENT colours. The "/#" ESCAPE needs no special
+        ; case: an escaped heading starts with '/', not '#', so the first-char test leaves it body-
+        ; coloured. The '/' is shown verbatim - this is a file VIEWER, so what is on disk is what
+        ; is shown; dropping a real byte belongs to a rendered view, not here.
+        if slen == 0
+            return                          ; guard: `for i in 0 to slen-1` would wrap to 0..255
+        ubyte col = shared.SYN_DEFAULT
+        if @(src) == '#' {
+            col = shared.SYN_KEYWORD                ; '#'  heading
+            if slen > 1 and @(src + 1) == '#'
+                col = shared.SYN_FUNCTION           ; '##' (or deeper) subheading
+        }
+        ubyte i
+        for i in 0 to slen - 1
+            @(dest + i) = col
+    }
+
+    sub basic_line(uword src, ubyte slen, uword dest) {
+        ; Fill dest[0..slen) with a per-column colour byte for the BASIC line at src.
+        ubyte i = 0
+        ubyte d                             ; scratch lookahead byte (function-scoped in prog8)
+        while i < slen {
+            ubyte c = @(src + i)
+            if c == '"' {                       ; string literal, to the closing quote or EOL
+                @(dest + i) = shared.SYN_STRING
+                i++
+                bool closed = false
+                while i < slen and not closed {
+                    @(dest + i) = shared.SYN_STRING
+                    if @(src + i) == '"'
+                        closed = true
+                    i++
+                }
+            } else if c == '#' and i + 1 < slen and @(src + i + 1) == '#' {
+                while i < slen {                ; ## -> BASLOAD comment: colour the rest of the line
+                    @(dest + i) = shared.SYN_COMMENT
+                    i++
+                }
+            } else {
+                if is_letter(c) {               ; identifier / keyword / BASLOAD label
+                    ubyte ts = i
+                    i++
+                    while i < slen {
+                        d = @(src + i)
+                        ; '.' is a legal char INSIDE a BASLOAD label (DIR.READ.BIN.NUM16), so it
+                        ; keeps the whole dotted name as ONE token. No keyword contains a '.', so a
+                        ; label can never match the tables -> it stays default-coloured, and an
+                        ; embedded keyword-like fragment (the READ in DIR.READ) is not mis-coloured
+                        ; as the READ statement.
+                        if is_letter(d) or is_digit(d) or d == '.'
+                            i++
+                        else
+                            break
+                    }
+                    if i < slen and @(src + i) == '$'    ; trailing '$' (string func / var)
+                        i++
+                    ubyte kind = lookup(src + ts, i - ts)
+                    if kind == 2 {              ; REM -> colour the rest of the line
+                        while ts < slen {
+                            @(dest + ts) = shared.SYN_COMMENT
+                            ts++
+                        }
+                        i = slen
+                    } else {
+                        ubyte col = shared.SYN_DEFAULT
+                        if kind == 1
+                            col = shared.SYN_KEYWORD
+                        if kind == 3
+                            col = shared.SYN_FUNCTION
+                        while ts < i {
+                            @(dest + ts) = col
+                            ts++
+                        }
+                    }
+                } else {
+                    if is_digit(c) {            ; numeric constant / line number
+                        while i < slen {
+                            d = @(src + i)
+                            if is_digit(d) or d == '.' {
+                                @(dest + i) = shared.SYN_NUMBER
+                                i++
+                            } else
+                                break
+                        }
+                    } else {                    ; operator / punctuation / space
+                        @(dest + i) = shared.SYN_DEFAULT
+                        i++
+                    }
+                }
+            }
+        }
+    }
+}
