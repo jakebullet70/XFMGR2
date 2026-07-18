@@ -1,13 +1,13 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:186)*
+*(build:188)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
 on the right, with file **tagging**, a banked **text/hex viewer**, a **BMX image
 viewer**, **music playback** (`.zsm`/`.wav`), a whole-disk **Find**, and a full set of file operations — copy, move,
 rename, delete, mkdir and prune — plus editing via the ROM-resident X16 Edit and
-switchable **colour themes**.
+switchable **color themes**.
 
 <img width="642" height="507" alt="image" src="https://github.com/user-attachments/assets/c4acdb79-510c-4650-8d78-15b4cee30b13" />
 
@@ -44,7 +44,7 @@ switchable **colour themes**.
 - **Edit** (`E`) — hands the file off to the ROM-resident **X16 Edit**, then returns.
 - **Execute-and-return** (`Alt-X`) — quit XFMGR and chain-run the selected program.
 - **File-spec filter** (`F`) — restrict the file list to a wildcard (e.g. `*.prg`).
-- **Colour themes** (`Alt-F10`) — hands off to a standalone theme picker (`XFSETUP.PRG`)
+- **Color themes** (`Alt-F10`) — hands off to a standalone theme picker (`XFSETUP.PRG`)
   that remaps the palette and saves the choice to `xfmgr.cfg`; XFMGR reapplies it at
   startup.
 - **Root-anchored startup** — the tree is anchored at the drive root; the folder you
@@ -121,7 +121,7 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `Alt-X` | Execute — quit XFMGR and chain-run the selected program |
 | `Alt-Q` | Quit, leaving the shell in the **currently selected** directory |
 | `Alt-F3` | Re-log the current context (sub-folders in the DIR pane, files in the FILE pane) |
-| `Alt-F10` | Open the colour-theme setup (quits to the standalone `XFSETUP.PRG`) |
+| `Alt-F10` | Open the color-theme setup (quits to the standalone `XFSETUP.PRG`) |
 
 ### Global
 
@@ -177,7 +177,7 @@ banks 2–5 hold four code overlays, bank 6 the **zsmkit** music engine, bank 7 
 | `xfmgr.p8` | main module | TUI + key loop, file ops, prompts, screen helpers | dual-pane draw, tagging, all `op_*` operations |
 
 `xfsetup.p8` builds to a **separate** `XFSETUP.PRG` (a full `$0801` program, not an
-overlay) — the `Alt-F10` colour-theme picker; `themes.p8` does the palette remap and
+overlay) — the `Alt-F10` color-theme picker; `themes.p8` does the palette remap and
 reads/writes `xfmgr.cfg`.
 
 Key decisions:
@@ -204,7 +204,7 @@ Key decisions:
 The tree is **anchored at the drive root** (`base_path = "/"`), so every path built
 from a tree node is absolute. At startup XFMGR captures the launch folder
 (`diskio.curdir()`) before any disk call can clobber it, loads the five overlays into
-their reserved banks, applies the saved colour theme, then descends the tree from root,
+their reserved banks, applies the saved color theme, then descends the tree from root,
 logging and expanding each level so the launch folder is pre-selected and visible.
 
 Because navigation is root-relative, copy/move destinations resolve from the **drive
@@ -215,7 +215,7 @@ returns the shell to the **launch** directory, while `Alt-Q` returns it to the
 **Input history** is per prompt-category, stored under `hist/` on the drive root
 (e.g. `hist/copy.his`, `hist/move.his`). Each ring keeps the most-recent entries,
 newest first; the folder is created on first save and missing files load silently as
-empty. The **colour theme** is stored in `xfmgr.cfg` next to the program.
+empty. The **color theme** is stored in `xfmgr.cfg` next to the program.
 
 ## Installing
 
@@ -256,7 +256,7 @@ Building `xfmgr.p8` also compiles its companions:
   About), `ximgview.ovl` (BMX image viewer) and `xmusic.ovl` (`.wav` PCM player). Each
   is a headerless `%output` library loaded into a reserved HIRAM bank at runtime (the
   build renames prog8's `.bin` to `.ovl`).
-- **`xfsetup.prg`** — the standalone colour-theme picker launched by `Alt-F10`.
+- **`xfsetup.prg`** — the standalone color-theme picker launched by `Alt-F10`.
 - **`install.prg`** — the standalone self-installer (see [Installing](#installing)).
 
 All compiler output (`.prg`, `.ovl`, and the intermediate `.asm`/`.vice-mon-list`) is
@@ -299,7 +299,7 @@ emulator / `Ctrl-M` on hardware.
 cross-directory) and ShowAll, whole-disk Find, sorting, the full file-operation set
 (copy / move / rename / delete / mkdir / prune), the banked text/hex viewer, the BMX
 image viewer, `.zsm`/`.wav` music playback, edit via X16 Edit, execute-and-return,
-switchable colour themes, root-anchored startup and persistent input history are all
+switchable color themes, root-anchored startup and persistent input history are all
 implemented, with confirmation prompts on destructive actions and status banners for
 errors.
 

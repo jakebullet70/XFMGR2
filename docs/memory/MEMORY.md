@@ -29,7 +29,7 @@
 - [Filename literals must be lowercase](prog8-filename-literals-lowercase.md) — uppercase source A-Z encodes to $C1-DA and the FS won't match; use lowercase
 - [Overlay RAM strategy](xfmgr-overlay-ram-strategy.md) — bank map (…7=xmusic, 8=dir-name slab, arena 9+), UI-in-overlay, name_ptr staging
 - [BMX image viewer](xfmgr-bmx-image-viewer.md) — V on *.bmx -> bank-5 ximgview overlay; png2bmx converter in tools/ (Python off-PATH)
-- [Colour theme setup](xfmgr-color-theme-setup.md) — Alt-F10 -> standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
+- [Color theme setup](xfmgr-color-theme-setup.md) — Alt-F10 -> standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
 - [Cfg read via loadlib](xfmgr-cfg-read-exists-guard.md) — cfg_read LOADs xfmgr.cfg like an overlay; never f_open (absent file corrupts menu draw)
 - [Overlays are .OVL](xfmgr-overlay-extension-ovl.md) — bank overlays ship as .ovl; build.bat renames prog8's .bin
 - [Theme contrast rules](xfmgr-theme-contrast-rules.md) — keys(7) must pop off text(1); idx14 is both border-fg and selbar-bg
@@ -43,4 +43,4 @@
 - [ASCII file byte-match](prog8-ascii-file-byte-match.md) — parsing an ASCII disk file needs raw ASCII codes; prog8 char literals are PETSCII and silently never match letters
 - [Bank-to-bank JSRFAR works](x16-bank-to-bank-jsrfar.md) — an overlay CAN @bank-call another bank; the limit is data visibility, not the call
 - [Deployed filenames UPPERCASE](x16-deployed-filenames-uppercase.md) — lowercase source literal + UPPERCASE file on disk; the emulator hides the bug
-- [Viewer syntax colouring](xfmgr-syntax-colouring.md) — DONE build 186: xsyntax in bank 9, called by tview; bank 2 now has 10 bytes free
+- [Viewer syntax coloring](xfmgr-syntax-coloring.md) — DONE build 187: xsyntax in bank 9, called by tview; find prompt moved there too

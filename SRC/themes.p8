@@ -1,10 +1,10 @@
-; themes - shared colour-theme + config module for XFMGR2 and the XFSETUP utility.
+; themes - shared color-theme + config module for XFMGR2 and the XFSETUP utility.
 ;
 ; Imported (compiled in) by BOTH SRC/xfmgr.p8 and SRC/xfsetup.p8 so the preset tables and the
 ; apply/config routines stay in one source of truth. NOT an overlay - plain inline code, so
 ; initialised tables here are fine (no %jmptable to shove).
 ;
-; A "theme" repaints the VERA palette RGB of the handful of colour INDICES the UI draws with
+; A "theme" repaints the VERA palette RGB of the handful of color INDICES the UI draws with
 ; (see SRC/shared-const.p8). Because txt.color2() and the embedded \x9e/\x05 footer codes both
 ; select those same indices, remapping the palette re-themes the WHOLE UI with zero draw-code
 ; changes. apply_theme() always baselines from cx16.set_default_palette() (the exact ROM default,
@@ -24,8 +24,8 @@ themes {
     const ubyte FIRST = 1               ; theme ids are 1..LAST (1 = Classic = ROM default)
     const ubyte LAST  = 5
 
-    ; The UI colour INDICES a theme repaints (order matches the RGB rows below):
-    ;   0  = black / drop-shadow (shared.BLACK; box_shadow recolours cells to index 0, so a theme
+    ; The UI color INDICES a theme repaints (order matches the RGB rows below):
+    ;   0  = black / drop-shadow (shared.BLACK; box_shadow recolors cells to index 0, so a theme
     ;                          with a pure-black field-bg must give index 0 a dark grey or the box
     ;                          shadow is invisible - see High-Contrast below)
     ;   1  = body text        (shared.CLR_FG)
@@ -34,7 +34,7 @@ themes {
     ;   14 = titles / hilite   (shared.CLR_TITLE, and HILITE bg / CLR_BOX fg)
     ubyte[5] THEME_IDX = [0, 1, 7, 11, 14]
 
-    ; RGB444 (0..15 each) for ids 2..5, five colours per theme, in THEME_IDX order.
+    ; RGB444 (0..15 each) for ids 2..5, five colors per theme, in THEME_IDX order.
     ; id 1 (Classic) has no row - it is just cx16.set_default_palette().
     ;                     black       FGtext       accent       field-bg     title/hilite
     ubyte[60] THEME_RGB = [
@@ -53,7 +53,7 @@ themes {
         cx16.set_default_palette()
         if id < 2 or id > LAST
             return
-        ubyte base = (id - 2) * 15          ; 15 bytes (5 colours x rgb) per custom theme
+        ubyte base = (id - 2) * 15          ; 15 bytes (5 colors x rgb) per custom theme
         ubyte slot
         for slot in 0 to 4 {
             ubyte off = base + slot*3
@@ -80,7 +80,7 @@ themes {
         ; the cfg + overlays live), LOAD the cfg with a headerless KERNAL LOAD (diskio.load_raw - the
         ; same cbm.LOAD the overlays' loadlib uses, just the honest name for raw data instead of a
         ; library blob; NEVER f_open, whose read-channel traffic on an ABSENT file corrupted the
-        ; following UI draw / bottom-menu colours), then restore the original dir. load_raw returns 0
+        ; following UI draw / bottom-menu colors), then restore the original dir. load_raw returns 0
         ; when the file isn't found. curdir() points into a transient shared buffer, so copy it out
         ; BEFORE any other diskio call.
         ubyte id = 1

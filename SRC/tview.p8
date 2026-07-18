@@ -33,18 +33,18 @@ main {
     ; $A006 = view_set_syn.
     %jmptable ( main.view_file, main.view_set_syn )
 
-    ; --- syntax colouring, in ANOTHER bank (xsyntax.p8, bank 9) ---
+    ; --- syntax coloring, in ANOTHER bank (xsyntax.p8, bank 9) ---
     ; We are ourselves a bank overlay, and we call out to a second one. That is legal: the X16
     ; KERNAL's JSRFAR - which is what prog8 emits for `extsub @bank` - "works independently of
     ; which RAM or ROM bank the currently executing code is residing in" (X16 Reference - 05 -
     ; KERNAL, $FF6E). It is done ONCE PER RENDERED LINE (<=28 per page), so the cost is noise
     ; next to the disk read this renderer already does.
     ;
-    ; WHY NOT JUST PUT IT IN HERE: this overlay has ~424 bytes free to $C000 and the colouriser
+    ; WHY NOT JUST PUT IT IN HERE: this overlay has ~424 bytes free to $C000 and the colorizer
     ; is ~1.8 KB. Bank 9 also gives it room to grow.
     ;
     ; THE RULE THAT SHAPES EVERYTHING BELOW: while bank 9 is mapped, OUR OWN bank-2 RAM is not
-    ; visible - so viewbuf and friends are unreachable from there. The line and colour buffers
+    ; visible - so viewbuf and friends are unreachable from there. The line and color buffers
     ; must therefore live in MAIN RAM (mapped below $A000 regardless of bank); xfmgr owns them
     ; and hands us the pointers via view_set_syn.
     const ubyte SYN_BANK = 9
@@ -52,9 +52,10 @@ main {
     extsub @bank 9 $A006 = syn_paint(ubyte slen @R0, ubyte mode @R1, ubyte row @R2, ubyte col @R3, uword mrange @R4)
     extsub @bank 9 $A009 = syn_probe() -> ubyte @A
     extsub @bank 9 $A00C = syn_detect_ovl(uword nameptr @R0) -> ubyte @A
+    extsub @bank 9 $A00F = syn_read_find(uword outptr @R0) -> ubyte @A
     const ubyte SYN_PROBE_MAGIC = $5a   ; must match syntax.PROBE_MAGIC in xsyntax.p8
 
-    ; Geometry now lives in shared-const so xsyntax's colour pass walks the SAME cells this
+    ; Geometry now lives in shared-const so xsyntax's color pass walks the SAME cells this
     ; renderer drew (it re-derives the wrap from these); aliased here to keep the short names.
     const ubyte VTOP   = shared.VIEW_TOP    ; first text row (row 0 = header)
     const ubyte VROWS  = shared.VIEW_ROWS   ; text rows 1..28
@@ -62,7 +63,7 @@ main {
     const ubyte SCR_BOT = 29           ; footer row
     const uword HEXPAGE = VROWS * 16   ; bytes shown per hex page (VROWS rows x 16 bytes)
 
-    ; status-bar + content colours now live in SRC/shared-const.p8 (block `shared`), shared
+    ; status-bar + content colors now live in SRC/shared-const.p8 (block `shared`), shared
     ; with XFMGR; referenced as shared.* below. Standard blue bar, white text; the bottom-menu
     ; hotkey highlight is BLACK.
 
@@ -98,12 +99,13 @@ main {
     bool is_zsm                        ; current file starts with the ZSM 'zm' magic
     ubyte[16] zsm_hdr                  ; the 16 raw header bytes, read once per file
 
-    ; --- syntax colouring state (all UNINITIALIZED -> BSS tail, per the jmptable rule above) ---
+    ; --- syntax coloring state (all UNINITIALIZED -> BSS tail, per the jmptable rule above) ---
     bool syn_avail                     ; xsyntax.ovl loaded AND its probe answered -> safe to call
     uword syn_line_p                   ; main-RAM buffer we accumulate one logical line into
-                                       ; (the colour buffer's pointer is forwarded straight to
+                                       ; (the color buffer's pointer is forwarded straight to
                                        ; xsyntax, which is the only side that ever reads it)
     ubyte syn_mode                     ; 0 = off, 1 = BASIC/BASLOAD, 2 = Markdown
+    ubyte syn_auto                     ; mode C switches back ON to: the detected one, else BASIC
     ; per-logical-line accumulator. The anchor (row/col/off) is captured lazily at the line's FIRST
     ; drawn character, which is what makes CR/LF pairs, blank lines and a page-boundary split all
     ; fall out correctly without special cases.
@@ -138,7 +140,7 @@ main {
         ; ARE cx16.r0-r2). `ok` is xfmgr's loadlib result for xsyntax.ovl - we must not JSRFAR into
         ; bank 9 unless it says the blob is there. Given that, we then ask the overlay to identify
         ; itself: only a correct magic proves the jump table really is at its fixed offsets AND
-        ; that a bank-to-bank call works on this machine. Anything else -> plain text, no colour.
+        ; that a bank-to-bank call works on this machine. Anything else -> plain text, no color.
         ubyte lok = ok
         uword lcol = colptr
         syn_line_p = lineptr
@@ -152,14 +154,17 @@ main {
     }
 
     sub syn_detect() {
-        ; Ask xsyntax to pick the colouring mode from the extension. The matching itself lives in
+        ; Ask xsyntax to pick the coloring mode from the extension. The matching itself lives in
         ; bank 9 (space - this overlay had ~424 bytes free), and since bank 9 cannot see OUR RAM,
         ; the name has to be staged into the shared main-RAM buffer first. Safe to borrow it here:
         ; it only holds accumulated lines during a render, and nothing has rendered yet.
         syn_mode = 0
+        syn_auto = 1                ; unrecognised extension -> C forces BASIC, the useful default
         if syn_avail {
             void strings.copy(namebuf, syn_line_p)
             syn_mode = syn_detect_ovl(syn_line_p)
+            if syn_mode != 0
+                syn_auto = syn_mode
         }
     }
 
@@ -202,7 +207,7 @@ main {
     sub bar_fill(ubyte row) {
         ; paint a full-width status bar (cols 0..79) in our standard blue. Uses setchr/setclr
         ; (direct, no cursor move) so it can safely fill col 79 / the bottom row without the
-        ; auto-scroll that chrout would cause there. Leaves the cursor colour at white-on-blue.
+        ; auto-scroll that chrout would cause there. Leaves the cursor color at white-on-blue.
         ubyte c
         for c in 0 to 79 {
             txt.setchr(c, row, sc:' ')
@@ -295,10 +300,10 @@ main {
         ; prev_cr so it is swallowed instead of drawing a blank first content line
         bool prev_cr = lastskip == 13
         bool full = false
-        ; found-text highlight: bytes [view_match, view_match+plen) get the find colour via setclr
+        ; found-text highlight: bytes [view_match, view_match+plen) get the find color via setclr
         ubyte plen = lsb(strings.length(view_find))
         long mend = view_match + plen
-        ; syntax colouring: on only for a real draw of a recognised file type. Cached into module
+        ; syntax coloring: on only for a real draw of a recognised file type. Cached into module
         ; vars because syn_flush() runs outside this sub's scope.
         ; (syn_m0/syn_m1 need no reset here - syn_flush clears them after every line, and every
         ; page ends with a flush, so they are already zero on entry.)
@@ -324,7 +329,7 @@ main {
                     if ch == 13
                         prev_cr = true
                     if docolor
-                        syn_flush()         ; end of a logical line -> colour what we just drew
+                        syn_flush()         ; end of a logical line -> color what we just drew
                     row++
                     col = 0
                     if row >= VROWS {
@@ -353,7 +358,7 @@ main {
                     if draw {
                         ; setchr writes the screen code straight to VRAM - no PETSCII control-code
                         ; interpretation, so no byte value can scroll the view. setclr paints only
-                        ; the find-highlight cells; the rest keep the blanked content colour.
+                        ; the find-highlight cells; the rest keep the blanked content color.
                         txt.setchr(col, VTOP + row, scr_of(ch))
                         if plen != 0 and consumed-1 >= view_match and consumed-1 < mend {
                             txt.setclr(col, VTOP + row, (shared.FIND_BG << 4) | shared.FIND_FG)
@@ -381,7 +386,7 @@ main {
             if full
                 break
         }
-        ; Colour the last line, which ends at EOF or at the page break rather than a CR/LF (a line
+        ; Color the last line, which ends at EOF or at the page break rather than a CR/LF (a line
         ; terminated normally has already flushed itself, leaving ln_len 0 -> this is a no-op).
         if docolor
             syn_flush()
@@ -617,41 +622,20 @@ main {
     }
 
     sub view_read_find() -> bool {
-        ; read a search term on the footer row; false if cancelled or empty
-        bar_fill(SCR_BOT)
-        txt.plot(0, SCR_BOT)
-        txt.print(" Find: ")
-        ubyte n = 0
+        ; Read a search term on the footer row; false if cancelled or empty. The prompt itself
+        ; lives in bank 9 (see syn_read_find) - this overlay had literally run out of space. It
+        ; writes into the shared main-RAM buffer, which is the only memory both banks can see, and
+        ; we copy the result into view_find here.
+        ;
+        ; Borrowing syn_line_p is safe: it only holds accumulated lines DURING a render, and F is
+        ; dispatched from view_run's key loop, between renders.
         view_find[0] = 0
-        txt.plot(7, SCR_BOT)
-        repeat {
-            g_key = wait_key()
-            if g_key == 13 {
-                view_find[n] = 0
-                return n != 0
-            }
-            if g_key == 27 or g_key == 3 {
-                view_find[0] = 0            ; cancelled -> no active search term (hides the hint)
-                return false
-            }
-            if g_key == 20 {                    ; backspace
-                if n != 0 {
-                    n--
-                    view_find[n] = 0
-                    txt.plot(7 + n, SCR_BOT)
-                    txt.spc()
-                    txt.plot(7 + n, SCR_BOT)
-                }
-            } else {
-                if g_key >= $c1 and g_key <= $da
-                    g_key -= $80
-                if n < 32 and g_key >= 32 and g_key < 127 {
-                    view_find[n] = g_key
-                    txt.chrout(g_key)
-                    n++
-                }
-            }
-        }
+        if not syn_avail
+            return false            ; no bank 9 -> no prompt (F silently does nothing)
+        if syn_read_find(syn_line_p) == 0
+            return false
+        void strings.copy(syn_line_p, view_find)
+        return true
     }
 
     sub view_notify(str m) {
@@ -789,12 +773,11 @@ main {
             txt.print("ind  ")
             bar_key("N")
             txt.print("ext  ")
-            ; Colour toggle: only advertised where it does something (text page, overlay loaded),
-            ; which also keeps the bar short enough that the right-hand position indicator - drawn
-            ; last at col 79-w - doesn't have to clip into it.
-            if syn_avail and not view_hex {
+            ; Color toggle, advertised whenever the overlay is loaded - including in hex mode,
+            ; where it still works and simply takes effect on return to the text page.
+            if syn_avail {
                 bar_key("C")
-                txt.print("olour  ")
+                txt.print("olor  ")
             }
             bar_key("Q")
             txt.print("uit")
@@ -904,23 +887,37 @@ main {
                             view_notify(" not found")
                     }
                 }
-                'n', ' ' -> {                   ; N or Space: find next
+                'n', ' ' -> {                   ; N or Space: find next, wrapping at end-of-file
+                    ; On reaching EOF with no further hit, retry from offset 0 so a search cycles
+                    ; round the file instead of dead-ending. After a successful F the term is known
+                    ; to be present, so this second scan all but always succeeds; the only case that
+                    ; scans twice for nothing is N pressed after an F that already found nothing.
                     if view_find_at(view_next)
                         view_jump()
-                    else
+                    else if view_find_at(0) {
+                        view_jump()
+                        view_notify(" wrapped to top")
+                    } else
                         view_notify(" not found")
                 }
-                'c' -> {                        ; C: cycle syntax colouring off -> BASIC -> md -> off
+                'c' -> {                        ; C: cycle syntax coloring off -> BASIC -> md -> off
                     ; Offered on ANY text file, not just recognised ones: detection is a suffix
                     ; match, so this is the escape hatch when it guesses wrong (or when a BASIC
                     ; listing is saved under some extension we don't know).
-                    ; No hex/ZSM guard: those renderers ignore syn_mode entirely, so cycling while
-                    ; one is showing is harmless and simply takes effect on return to the text page.
-                    if syn_avail {
-                        syn_mode++
-                        if syn_mode > 2
-                            syn_mode = 0
-                    }
+                    ; Straight ON/OFF, deliberately NOT a 3-way off/BASIC/Markdown cycle: on a
+                    ; BASIC file the Markdown step colors nothing (no leading '#' lines), so it
+                    ; looked identical to "off" and the key appeared to need two presses to do
+                    ; anything. Switching back on uses the extension's mode, or BASIC if the
+                    ; extension was unrecognised - which is what forcing color on is usually for.
+                    ; No hex/ZSM guard: those renderers ignore syn_mode entirely, so toggling
+                    ; while one is showing is harmless and takes effect on return to the text page.
+                    ; No syn_avail test: the render gate (docolor) already requires it, so
+                    ; toggling with no overlay loaded just has no effect - and the footer
+                    ; doesn't advertise the key in that case anyway.
+                    if syn_mode != 0
+                        syn_mode = 0
+                    else
+                        syn_mode = syn_auto
                 }
             }
         }

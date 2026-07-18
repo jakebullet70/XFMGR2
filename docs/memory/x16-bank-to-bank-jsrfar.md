@@ -23,9 +23,9 @@ the safe form.)
 
 **The real constraint is DATA, not the call.** While bank N is mapped at $A000, the caller's own
 bank RAM is invisible. So anything shared between two overlays must live in **main RAM** (mapped
-below $A000 regardless of bank) and be passed as a pointer. In XFMGR the viewer's line + colour
+below $A000 regardless of bank) and be passed as a pointer. In XFMGR the viewer's line + color
 buffers are main-RAM buffers owned by xfmgr.p8, handed to tview at startup, which forwards them to
-xsyntax - see [[xfmgr-syntax-colouring]]. A name/string held in the calling overlay must be
+xsyntax - see [[xfmgr-syntax-coloring]]. A name/string held in the calling overlay must be
 `strings.copy`'d into that shared buffer before the far call can see it.
 
 **Always gate the far call.** Calling into a bank whose overlay failed to load jumps into garbage.

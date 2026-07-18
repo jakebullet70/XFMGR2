@@ -1,10 +1,10 @@
-; xsyntax - syntax colouring for XFMGR2's banked text viewer (tview).
+; xsyntax - syntax coloring for XFMGR2's banked text viewer (tview).
 ;
 ; Ported from x16-MSEDIT's SRC/syntax.p8. classify() scans ONE line of text and writes a
-; per-column colour byte into a caller buffer (one txt.setclr attribute per document column).
+; per-column color byte into a caller buffer (one txt.setclr attribute per document column).
 ; Highlighting is STATELESS per line - strings, REM comments and ## comments all end at
 ; end-of-line - so no state carries between lines. That keeps this a pure leaf module: it
-; reads the line via a pointer, writes colours via a pointer, and needs nothing else.
+; reads the line via a pointer, writes colors via a pointer, and needs nothing else.
 ;
 ; WHY ITS OWN BANK: tview (bank 2) is full - ~424 bytes free to $C000, and this needs ~1.5 KB.
 ; A banked overlay CAN call another bank: the X16 KERNAL's JSRFAR "works independently of which
@@ -13,7 +13,7 @@
 ; per rendered line. Cost is ~28 cross-bank calls per page - nothing next to the disk read.
 ;
 ; THE CATCH, and why the buffers are main-RAM pointers: while THIS bank is mapped at $A000,
-; tview's own bank-2 RAM is NOT visible. So the source line and the colour buffer cannot live
+; tview's own bank-2 RAM is NOT visible. So the source line and the color buffer cannot live
 ; in either overlay - they are main-RAM buffers owned by xfmgr.p8 and handed to tview at
 ; startup, and main RAM stays mapped below $A000 no matter which bank is active.
 ;
@@ -26,7 +26,7 @@
 ; (contrast SRC/themes.p8, which must stay PETSCII for its literal filename).
 
 %encoding iso
-%import textio             ; this overlay paints its own colour pass - see syn_paint()
+%import textio             ; this overlay paints its own color pass - see syn_paint()
 %import strings            ; strings.length, for the extension match in detect()
 %import "shared-const"
 
@@ -49,8 +49,8 @@ main {
     ; keyword tables are INITIALIZED data, and prog8 emits a block's initialized variables inline
     ; BEFORE its code - which would shove this jump table off $A003 if they shared a block.
     ; Keeping `main` var-free means only `syntax` gets that inline data, safely after the table.
-    ; $A003 = syn_setbufs, $A006 = syn_paint, $A009 = syn_probe, $A00C = syn_detect.
-    %jmptable ( syntax.setbufs, syntax.paint, syntax.probe, syntax.detect )
+    ; $A003 = setbufs, $A006 = paint, $A009 = probe, $A00C = detect, $A00F = read_find.
+    %jmptable ( syntax.setbufs, syntax.paint, syntax.probe, syntax.detect, syntax.read_find )
 
     sub start() {
         ; library init entrypoint ($A000). The compiler emits the BSS-clear here; this must do
@@ -67,7 +67,7 @@ syntax {
     str rem_kw = "REM"
 
     ; X16 BASIC keyword sets: Commodore BASIC V2 + the Commander X16 additions. Statements are
-    ; coloured as keywords; value-returning functions get their own colour (like sub names in an
+    ; colored as keywords; value-returning functions get their own color (like sub names in an
     ; IDE theme). Stored as space-delimited blobs and matched case-insensitively (fold/eq), which
     ; costs far less than uword[] tables (those add ~188 bytes of lsb/msb pointers on top of the
     ; same string bytes). Function forms keep any trailing '$'. Statements are split CBM/X16 only
@@ -78,15 +78,82 @@ syntax {
 
     sub probe() -> ubyte {
         ; entry ($A009). Returns PROBE_MAGIC and nothing else. tview calls this ONCE after load
-        ; and only enables colouring if it gets the magic back, which proves three things at once:
+        ; and only enables coloring if it gets the magic back, which proves three things at once:
         ; the .ovl loaded, the jump table really is at its fixed offsets, and the bank-to-bank
         ; JSRFAR works on this machine. Any of those failing degrades to plain text instead of
         ; JSRFARing into an unloaded bank.
         return PROBE_MAGIC
     }
 
+    sub read_find(uword outptr @R0) -> ubyte {
+        ; entry ($A00F). Read a search term on the viewer's footer row and write it to outptr
+        ; (MAIN RAM - tview's own buffers are in bank 2 and invisible here). Returns the length;
+        ; 0 means cancelled or empty. Lives in this bank purely to reclaim space in tview's, which
+        ; ran out entirely; it is viewer chrome, not syntax coloring.
+        ;
+        ; Keys are stored RAW, exactly as tview did it. They arrive as PETSCII, while file content
+        ; is ASCII - tview's view_fold reconciles the two (PETSCII 'a' $41 +$20 -> $61 = ASCII 'a',
+        ; and ASCII $61 is already $61). Folding here would break that.
+        uword outp = outptr
+        bar_fill(shared.VIEW_BOT)
+        txt.plot(0, shared.VIEW_BOT)
+        ; petscii: overrides this module's iso default - the viewer runs in the PETSCII charset,
+        ; so an ISO-encoded literal would come out as garbage glyphs through txt.print.
+        txt.print(petscii:" Find: ")
+        ubyte n = 0
+        @(outp) = 0
+        txt.plot(7, shared.VIEW_BOT)
+        repeat {
+            ubyte k = wait_key()
+            if k == 13 {
+                @(outp + n) = 0
+                return n
+            }
+            if k == 27 or k == 3 {
+                @(outp) = 0                 ; cancelled -> no active term (hides the Space hint)
+                return 0
+            }
+            if k == 20 {                    ; backspace
+                if n != 0 {
+                    n--
+                    @(outp + n) = 0
+                    txt.plot(7 + n, shared.VIEW_BOT)
+                    txt.spc()
+                    txt.plot(7 + n, shared.VIEW_BOT)
+                }
+            } else {
+                if k >= $c1 and k <= $da
+                    k -= $80
+                if n < 32 and k >= 32 and k < 127 {
+                    @(outp + n) = k
+                    txt.chrout(k)
+                    n++
+                }
+            }
+        }
+    }
+
+    sub wait_key() -> ubyte {
+        repeat {
+            ubyte k = cbm.GETIN2()
+            if k != 0
+                return k
+        }
+    }
+
+    sub bar_fill(ubyte row) {
+        ; paint a full-width status bar in the viewer's standard blue. setchr/setclr (no cursor
+        ; move) so filling col 79 / the bottom row can't trigger the auto-scroll chrout would.
+        ubyte c
+        for c in 0 to 79 {
+            txt.setchr(c, row, sc:' ')
+            txt.setclr(c, row, (shared.BAR_BG << 4) | shared.BAR_FG)
+        }
+        txt.color2(shared.BAR_FG, shared.BAR_BG)
+    }
+
     sub detect(uword nameptr @R0) -> ubyte {
-        ; entry ($A00C). Pick a colouring mode from the FILENAME: 0 = off, 1 = BASIC, 2 = Markdown.
+        ; entry ($A00C). Pick a coloring mode from the FILENAME: 0 = off, 1 = BASIC, 2 = Markdown.
         ; nameptr must point into MAIN RAM - tview's own copy of the name is in bank 2, invisible
         ; from here, so it copies the name across before calling.
         ;
@@ -192,7 +259,7 @@ syntax {
     }
 
     ; Buffer pointers, handed over once by tview at startup. Both point into MAIN RAM (see the
-    ; module header): src_p is the line tview accumulated, col_p is where we write the colours.
+    ; module header): src_p is the line tview accumulated, col_p is where we write the colors.
     uword src_p
     uword col_p
 
@@ -208,10 +275,10 @@ syntax {
         ; screen is VERA, which is I/O and therefore reachable whichever RAM bank is mapped.
         ;
         ; row/col are where the line's FIRST character was drawn; we re-walk from there with the
-        ; same wrap rule tview used, so cell k of the line is cell k of the colour buffer.
+        ; same wrap rule tview used, so cell k of the line is cell k of the color buffer.
         ; mrange packs the find-highlight run as line-relative columns (msb = first, lsb = one
         ; past last, equal = no overlap): that highlight is painted by tview's character pass and
-        ; must stay ON TOP of syntax colour, so those columns are skipped here. Packing it as one
+        ; must stay ON TOP of syntax color, so those columns are skipped here. Packing it as one
         ; uword keeps the whole thing byte math - the 32-bit file offsets stay on tview's side.
         ubyte nchars = slen             ; not `len` - that is a prog8 builtin
         ubyte m0 = msb(mrange)
@@ -228,7 +295,7 @@ syntax {
         for k in 0 to nchars - 1 {
             if r >= shared.VIEW_ROWS
                 break                       ; the rest of the line is off the bottom of the page
-            ; Skip default-coloured cells - the row was already blanked to the content colour, so
+            ; Skip default-colored cells - the row was already blanked to the content color, so
             ; rewriting it would only cost time - and skip the active find hit.
             ubyte a = @(col_p + k)
             if a != shared.SYN_DEFAULT and not (k >= m0 and k < m1)
@@ -242,13 +309,13 @@ syntax {
     }
 
     sub md_line(uword src, ubyte slen, uword dest) {
-        ; Markdown colouring: minimal, two colours. A line whose FIRST character
+        ; Markdown coloring: minimal, two colors. A line whose FIRST character
         ; is '#' (so '#', '##', '###' ... all count) is a heading; every other line is plain body
         ; text. Line-oriented and stateless, like the BASIC path.
         ;
-        ; '#' (H1) and '##'-or-deeper (H2) get DIFFERENT colours. The "/#" ESCAPE needs no special
+        ; '#' (H1) and '##'-or-deeper (H2) get DIFFERENT colors. The "/#" ESCAPE needs no special
         ; case: an escaped heading starts with '/', not '#', so the first-char test leaves it body-
-        ; coloured. The '/' is shown verbatim - this is a file VIEWER, so what is on disk is what
+        ; colored. The '/' is shown verbatim - this is a file VIEWER, so what is on disk is what
         ; is shown; dropping a real byte belongs to a rendered view, not here.
         if slen == 0
             return                          ; guard: `for i in 0 to slen-1` would wrap to 0..255
@@ -264,7 +331,7 @@ syntax {
     }
 
     sub basic_line(uword src, ubyte slen, uword dest) {
-        ; Fill dest[0..slen) with a per-column colour byte for the BASIC line at src.
+        ; Fill dest[0..slen) with a per-column color byte for the BASIC line at src.
         ubyte i = 0
         ubyte d                             ; scratch lookahead byte (function-scoped in prog8)
         while i < slen {
@@ -280,7 +347,7 @@ syntax {
                     i++
                 }
             } else if c == '#' and i + 1 < slen and @(src + i + 1) == '#' {
-                while i < slen {                ; ## -> BASLOAD comment: colour the rest of the line
+                while i < slen {                ; ## -> BASLOAD comment: color the rest of the line
                     @(dest + i) = shared.SYN_COMMENT
                     i++
                 }
@@ -292,8 +359,8 @@ syntax {
                         d = @(src + i)
                         ; '.' is a legal char INSIDE a BASLOAD label (DIR.READ.BIN.NUM16), so it
                         ; keeps the whole dotted name as ONE token. No keyword contains a '.', so a
-                        ; label can never match the tables -> it stays default-coloured, and an
-                        ; embedded keyword-like fragment (the READ in DIR.READ) is not mis-coloured
+                        ; label can never match the tables -> it stays default-colored, and an
+                        ; embedded keyword-like fragment (the READ in DIR.READ) is not mis-colored
                         ; as the READ statement.
                         if is_letter(d) or is_digit(d) or d == '.'
                             i++
@@ -303,7 +370,7 @@ syntax {
                     if i < slen and @(src + i) == '$'    ; trailing '$' (string func / var)
                         i++
                     ubyte kind = lookup(src + ts, i - ts)
-                    if kind == 2 {              ; REM -> colour the rest of the line
+                    if kind == 2 {              ; REM -> color the rest of the line
                         while ts < slen {
                             @(dest + ts) = shared.SYN_COMMENT
                             ts++

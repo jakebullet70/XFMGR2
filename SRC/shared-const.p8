@@ -35,10 +35,10 @@ shared {
     const ubyte FIND_FG    = BLACK      ; found-text highlight: black text ...
     const ubyte FIND_BG    = CLR_ACCENT ; ... on yellow, so a search hit stands out on the gray page
 
-    ; --- syntax colouring (tview text pages + the xsyntax overlay) ---
-    ; Full ATTRIBUTE bytes (bg<<4)|fg, not nibbles: the colouriser writes one of these per column
+    ; --- syntax coloring (tview text pages + the xsyntax overlay) ---
+    ; Full ATTRIBUTE bytes (bg<<4)|fg, not nibbles: the colorizer writes one of these per column
     ; and tview passes it straight to txt.setclr. Background is always the content field, so a
-    ; coloured cell sits flush with the rest of the page.
+    ; colored cell sits flush with the rest of the page.
     ;
     ; Three of the six foregrounds are themed indices (1/7/14 - see themes.THEME_IDX), so they
     ; follow an Alt-F10 theme change for free. STRING/NUMBER/COMMENT use indices themes.p8 does
@@ -48,17 +48,18 @@ shared {
     const ubyte SYN_FUNCTION = (CONTENT_BG << 4) | CLR_ACCENT  ; built-in functions / md subheadings
     const ubyte SYN_STRING   = (CONTENT_BG << 4) | 13          ; "quoted strings" - light green
     const ubyte SYN_NUMBER   = (CONTENT_BG << 4) | 10          ; numeric constants - light red
-    const ubyte SYN_COMMENT  = (CONTENT_BG << 4) | 12          ; REM / ## to end of line - mid grey
+    const ubyte SYN_COMMENT  = (CONTENT_BG << 4) | 12          ; REM / ## to end of line - mid gray
 
     ; --- viewer text-page geometry ---
-    ; Shared because xsyntax paints the colour pass itself (it walks the same cells with the same
+    ; Shared because xsyntax paints the color pass itself (it walks the same cells with the same
     ; wrap rule tview drew them with), so the two MUST agree on the layout byte for byte.
     const ubyte VIEW_TOP   = 1          ; first text row (row 0 = header bar)
     const ubyte VIEW_ROWS  = 28         ; text rows 1..28
     const ubyte VIEW_WIDTH = 79         ; wrap column (keep off col 79 to avoid auto-scroll)
+    const ubyte VIEW_BOT   = 29         ; footer/status row (the find prompt draws here)
 
-    ; Longest logical line the viewer colours. Both main-RAM host buffers (xfmgr's cm_src/cm_dst,
+    ; Longest logical line the viewer colors. Both main-RAM host buffers (xfmgr's cm_src/cm_dst,
     ; 133 B each) must hold this plus slack; a longer line still DRAWS in full, its tail just stays
-    ; default-coloured. Shared so xfmgr's buffer sizing and tview's accumulator cap can't drift.
+    ; default-colored. Shared so xfmgr's buffer sizing and tview's accumulator cap can't drift.
     const ubyte SYN_LINE_MAX = 128
 }
