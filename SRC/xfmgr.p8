@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 185          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 186          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -88,6 +88,20 @@ main {
     uword cur_blocks                    ; total blocks of visible files in cur_dir
     ubyte saved_mode                    ; screen mode to restore on exit
     ubyte saved_charset                 ; pre-launch charset (2=upper/gfx 3=lower); restored on exit
+
+    ; --- CAPS LOCK: off for the session, restored on exit ---
+    ; Typed text (filenames, search terms, wildcards) would otherwise be captured uppercase, and
+    ; XFMGR's command keys only fold PETSCII $C1-$DA back by hand at each read site.
+    ;
+    ; The KERNAL gives us a documented way to READ caps - kbdbuf_get_modifiers() bit 4 - but NONE
+    ; to clear it: the kbd_leds extapi drives only the LED and says outright that it "does not
+    ; change the state of the kernal's caps lock toggle". The toggle itself is the KERNAL's shflag
+    ; byte, which lives in RAM BANK 0 (the memory map marks $A000-$BEFF there "System Reserved").
+    ; Its address is NOT part of any published API and could move in a future ROM - so caps_off()
+    ; proves it is the right byte before writing. See caps_off() for that check.
+    const uword KBD_SHFLAG = $a80c      ; KERNAL shflag, in RAM bank 0 (undocumented - verified at runtime)
+    const ubyte MOD_CAPS   = $10        ; shflag / kbdbuf_get_modifiers bit 4 = caps lock
+    bool caps_was_on                    ; true = caps was on at launch AND we cleared it -> restore on exit
     ubyte saved_color                   ; pre-launch text colour (bg<<4|fg); restored on exit
 
     ; per-keystroke "what changed" flags, so we repaint only the affected regions
@@ -312,6 +326,7 @@ main {
         ; remember the current mode (returns mode, width, height) to restore on exit
         saved_mode, cx16.r0L, cx16.r0H = cx16.get_screen_mode()
         snapshot_machine_state()                 ; capture charset + text colour before we change anything
+        caps_off()                               ; CAPS LOCK off for the session; caps_restore() puts it back
         cx16.set_screen_mode(SCREEN_MODE)        ; 80x30
 
         ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D/Ctrl-F/Ctrl-M)
@@ -491,6 +506,9 @@ main {
         txt.clear_screen()
         cx16.set_screen_mode(saved_mode)         ; restore the original screen mode
         restore_machine_state()                  ; re-apply the user's charset + text colour (CINT reset them)
+        caps_restore()                           ; and put CAPS LOCK back as we found it
+        ; NB: this sits before ALL three exit branches (run_exit / setup_exit / plain quit), so
+        ; every way out of XFMGR restores caps - including the chain_run hand-offs.
         if run_exit {
             ; hand off to BASIC: load + run the selected program via the dynamic keyboard
             diskio.chdir(pathbuf)               ; the selected file's directory
@@ -517,6 +535,40 @@ main {
         ubyte cx_row
         cx_col, cx_row = txt.get_cursor()
         saved_color = txt.getclr(cx_col, cx_row)
+    }
+
+    sub caps_off() {
+        ; Remember whether CAPS LOCK is on and, if so, turn it off for the session.
+        caps_was_on = false
+        ubyte mods = cx16.kbdbuf_get_modifiers()
+        ; parens are redundant - prog8 binds & (prec 7) TIGHTER than == (11), the opposite of C -
+        ; but they cost nothing and stop this reading as a bug to anyone carrying C habits.
+        if (mods & MOD_CAPS) == 0
+            return                              ; already off: nothing to save, and nothing to poke
+
+        ; Caps IS on, so we have to write the KERNAL's shflag - there is no API for it (see the
+        ; KBD_SHFLAG note above). Guard the write: the byte at KBD_SHFLAG must read back EXACTLY
+        ; what the DOCUMENTED kbdbuf_get_modifiers() just returned. That is a strong check,
+        ; because we only get here when caps is set, so we are matching a specific non-zero value
+        ; ($10 plus whatever else is held) rather than a likely-coincidental zero. If a future
+        ; ROM relocates shflag the two disagree and we leave caps alone - the feature quietly
+        ; does nothing instead of corrupting an unrelated KERNAL variable.
+        cx16.push_rambank(0)
+        if @(KBD_SHFLAG) == mods {
+            @(KBD_SHFLAG) = mods & (255 - MOD_CAPS)
+            caps_was_on = true
+        }
+        cx16.pop_rambank()
+    }
+
+    sub caps_restore() {
+        ; Put CAPS LOCK back exactly as we found it. Only ever runs when caps_off() confirmed the
+        ; address and actually cleared the bit, so this never writes on an unverified ROM.
+        if not caps_was_on
+            return
+        cx16.push_rambank(0)
+        @(KBD_SHFLAG) = @(KBD_SHFLAG) | MOD_CAPS
+        cx16.pop_rambank()
     }
 
     sub restore_machine_state() {
