@@ -284,8 +284,8 @@ main {
     ; picker (hist_popup) stays in main and reads entries via the hist_get entry. hist_count is
     ; authoritative here; hist_load/hist_store return it so main can cache it (for the picker + the
     ; "any history?" check). diskio is shared with prune (already imported). `histdir` is the
-    ; ABSOLUTE path of the hist folder, passed in because the overlay can reach neither themes nor
-    ; xtree: main resolves it with themes.path_to("hist"), which derives the install folder from the
+    ; ABSOLUTE path of the INSTALL folder, passed in because the overlay can reach neither themes nor
+    ; xtree: main resolves it with themes.progdir_cd(), which derives it from the
     ; root XT launcher. It used to be the drive root plus hard-coded chdir("xfmgr")/chdir("hist")
     ; hops, which silently found nothing if XFMGR lived anywhere but /xfmgr. Register args are captured into
     ; locals before the first strings/diskio call (which clobbers cx16.r0-r3) - same discipline as
@@ -328,15 +328,17 @@ main {
     }
 
     sub hist_load(uword cat @R0, uword base @R1) -> ubyte {
-        ; entry ($A009): load /xfmgr/hist/<cat>.his into the ring; returns the entry count.
+        ; entry ($A009): load <install>/hist/<cat>.his into the ring; returns the entry count.
         uword lcat  = cat
         uword lbase = base
         his_set_fname(lcat)
         hist_count = 0
-        ; `base` is now the ABSOLUTE hist folder, resolved by main from the XT launcher
-        ; (themes.path_to("hist")) - it used to be the tree root plus hard-coded chdir("xfmgr")
-        ; and chdir("hist") hops, which broke if XFMGR was installed anywhere but /xfmgr.
+        ; `base` is the ABSOLUTE install folder, resolved by main from the XT launcher
+        ; (themes.progdir_cd()) - it used to be the tree root plus a hard-coded chdir("xfmgr"),
+        ; which broke if XFMGR was installed anywhere but /xfmgr. "hist" stays relative: it is our
+        ; own fixed subfolder name, and mkdir in hist_save REQUIRES it to be relative (see there).
         diskio.chdir(lbase)
+        diskio.chdir("hist")                 ; if missing, cwd just stays in the install folder
         if diskio.f_open(his_fname) {
             repeat {
                 ubyte ln
@@ -388,15 +390,17 @@ main {
     }
 
     sub hist_save(uword cat @R0, uword base @R1) {
-        ; entry ($A00F): write the ring (newest first, one entry per line) to /xfmgr/hist/<cat>.his,
+        ; entry ($A00F): write the ring (newest first, one per line) to <install>/hist/<cat>.his,
         ; creating the hist/ dir on first use.
         uword lcat  = cat
         uword lbase = base
         his_set_fname(lcat)
-        ; `base` is the ABSOLUTE hist folder (see hist_load), so mkdir it by that same absolute
-        ; path - no chdir-to-parent dance, and it lands correctly wherever XFMGR is installed.
-        diskio.mkdir(lbase)                  ; harmless if it already exists
+        ; `base` is the ABSOLUTE install folder (see hist_load). The mkdir MUST be relative and
+        ; must follow the chdir: CMDR-DOS is `MD[path]:name` and diskio.mkdir only emits "md:"+name,
+        ; so mkdir("/xfmgr/hist") would ask for a directory whose NAME contains slashes.
         diskio.chdir(lbase)
+        diskio.mkdir("hist")                 ; harmless if it already exists
+        diskio.chdir("hist")
         diskio.delete(his_fname)             ; replace any previous file cleanly
         if diskio.f_open_w(his_fname) {
             ubyte nl = 13

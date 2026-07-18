@@ -289,21 +289,22 @@ main {
     ; expander, the recursive directory-prune engine, and the input-history ring). $A000 = init;
     ; $A003 = wildcard_expand(orig @R0, pat @R1, out @R2);
     ; $A006 = prune_dir(parent @R0, name @R1) -> ubyte, ONE dir/call (0=done, 1=more, 255=err);
-    ; $A009 = hist_load(cat @R0, histdir @R1) -> count; $A00C = hist_store(str @R0) -> count;
-    ; $A00F = hist_save(cat @R0, histdir @R1); $A012 = hist_get(slot @R0, out @R1);
+    ; $A009 = hist_load(cat @R0, instdir @R1) -> count; $A00C = hist_store(str @R0) -> count;
+    ; $A00F = hist_save(cat @R0, instdir @R1); $A012 = hist_get(slot @R0, out @R1);
     ; $A015 = stream_copy(src @R0, dst @R1) -> uword (lsb=fail 0/1/2/3, msb=DOS code).
     const ubyte MISC_BANK = 3
     extsub @bank 3 $A000 = miscutil_init()
     extsub @bank 3 $A003 = wildcard_expand(uword origptr @R0, uword patptr @R1, uword outptr @R2)
     extsub @bank 3 $A006 = prune_dir(uword parptr @R0, uword nameptr @R1) -> ubyte @A
     ; history ring lives in the overlay; main caches the count returned by load/store. cat is the
-    ; category name; histdir is the ABSOLUTE hist folder, which main resolves with
-    ; themes.path_to("hist") - the overlay can't reach themes, and it must NOT assume /xfmgr (it
-    ; used to chdir base + "xfmgr" + "hist", which broke anywhere else). The picker reads slots via
+    ; category name; instdir is the ABSOLUTE install folder, which main resolves with
+    ; themes.progdir_cd() - the overlay can't reach themes, and it must NOT assume /xfmgr (it used
+    ; to chdir base + "xfmgr", which broke anywhere else). It appends "hist" itself, relatively,
+    ; because that subfolder has to be creatable with CMDR-DOS's MD. The picker reads slots via
     ; hist_get into hist_line. If misc_ok is false, input_line skips history entirely.
-    extsub @bank 3 $A009 = hist_load(uword cat @R0, uword histdir @R1) -> ubyte @A
+    extsub @bank 3 $A009 = hist_load(uword cat @R0, uword instdir @R1) -> ubyte @A
     extsub @bank 3 $A00C = hist_store(uword sptr @R0) -> ubyte @A
-    extsub @bank 3 $A00F = hist_save(uword cat @R0, uword histdir @R1)
+    extsub @bank 3 $A00F = hist_save(uword cat @R0, uword instdir @R1)
     extsub @bank 3 $A012 = hist_get(ubyte slot @R0, uword outptr @R1)
     ; the file-copy byte pump lives in the overlay too (its 255-byte buffer no longer costs main
     ; RAM). src is an absolute path, dst a bare name in the CWD the caller chdir'd into.
@@ -2833,8 +2834,16 @@ main {
         ; (return true with an empty dest) instead of behaving like Cancel - the caller then supplies
         ; its own default (e.g. filespec's "*"). ESC always returns false.
         bool usehist = misc_ok and strings.length(histname) != 0    ; no overlay / empty histname -> no history UI
+        ; MUST hoist progdir_cd() into a local before any hist_* call. Those take their args in
+        ; cx16.r0/r1, and prog8 stores the FIRST arg into r0 and only THEN evaluates the second -
+        ; so calling progdir_cd() inline there destroys the category pointer already sitting in r0
+        ; (it uses strings.copy/length, which clobber r0-r3). The compiler does NOT warn about this.
+        ; The symptom was perfect: mkdir("hist") is a literal so the folder appeared, but the
+        ; filename was built from garbage and nothing was ever written. progpath is stable until
+        ; the next path_to/progdir_cd call, so holding the pointer across the call is safe.
+        uword histdir = themes.progdir_cd()
         if usehist
-            hist_count = hist_load(histname, themes.path_to("hist"))      ; banked ring; cache the returned count
+            hist_count = hist_load(histname, histdir)      ; banked ring; cache the returned count
         input_frame(prompt, usehist, dirpick)
         ubyte fieldcol = BANNER_LEFT + 1 + lsb(strings.length(prompt))     ; one space after the prompt label
         ubyte n = 0
@@ -2849,7 +2858,7 @@ main {
                     dest[n] = 0
                     if n != 0 and usehist {
                         hist_count = hist_store(dest)
-                        hist_save(histname, themes.path_to("hist"))
+                        hist_save(histname, histdir)        ; histdir hoisted above - see the note there
                     }
                     box_close()
                     return n != 0 or allow_empty

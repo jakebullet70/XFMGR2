@@ -130,6 +130,22 @@ themes {
         progdir[cut] = 0                                ; drop the filename, keep the folder
     }
 
+    sub progdir_cd() -> str {
+        ; The install folder with the trailing '/' stripped, ready for chdir().
+        ; Why this exists: CMDR-DOS `CD:` accepts a whole path, but `MD` is `MD[path]:name` - the
+        ; path goes BEFORE the colon, and diskio.mkdir() only ever emits "md:"+name. So a caller
+        ; that needs to CREATE a subfolder must chdir here first and then mkdir RELATIVELY;
+        ; mkdir("/xfmgr/hist") would ask for a directory whose *name* contains slashes.
+        ; ("/" at the root stays "/" - a bare "" is not a valid chdir target.)
+        if not dir_known
+            find_progdir()
+        void strings.copy(progdir, progpath)
+        ubyte n = lsb(strings.length(progpath))
+        if n > 1 and progpath[n-1] == '/'
+            progpath[n-1] = 0
+        return progpath
+    }
+
     sub path_to(str fname) -> str {
         ; progdir + fname, e.g. "/xfmgr/" + "tview.ovl". NOTE: one shared buffer - consume the
         ; result before the next path_to() call (every caller passes it straight into a disk call).
