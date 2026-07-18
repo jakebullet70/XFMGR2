@@ -26,9 +26,9 @@ main {
     ; a missing file is reported and skipped, not fatal. xfmgr.cfg ships a default (Classic) theme so
     ; a fresh install has one, but an EXISTING /xfmgr/xfmgr.cfg is PRESERVED on reinstall (see the
     ; copy loop) so a user's saved theme survives an update.
-    str[10] FILES = ["xfmgr.prg", "tview.ovl", "miscutil.ovl", "uiutil.ovl",
-                     "ximgview.ovl", "xmusic.ovl", "xfsetup.prg", "zsmkit.bin", "xfmgr.hlp",
-                     "xfmgr.cfg"]
+    str[11] FILES = ["xfmgr.prg", "tview.ovl", "miscutil.ovl", "uiutil.ovl",
+                     "ximgview.ovl", "xmusic.ovl", "xsyntax.ovl", "xfsetup.prg", "zsmkit.bin",
+                     "xfmgr.hlp", "xfmgr.cfg"]
 
     ; the root launcher, byte-for-byte: $0801 PRG holding  10 LOAD "/XFMGR/XFMGR.PRG"
     ubyte[28] XT_BYTES = [

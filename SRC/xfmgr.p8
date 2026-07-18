@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 185          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 188          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -77,8 +77,8 @@ main {
 
     ; Menu/footer key glyphs are typed straight into the petscii:"" strings that draw them
     ; (the X16 has no CP437): ←=$5f + ┘=$fd form the ENTER/return symbol "←┘"; ↑=$5e is the
-    ; up-arrow. Colour is likewise embedded (\x9e=accent \x05=fg) - see the memory note on
-    ; embedded PETSCII colour codes. No named glyph consts needed any more.
+    ; up-arrow. Color is likewise embedded (\x9e=accent \x05=fg) - see the memory note on
+    ; embedded PETSCII color codes. No named glyph consts needed any more.
 
     ubyte focus
     ubyte tree_cursor, tree_top
@@ -88,7 +88,7 @@ main {
     uword cur_blocks                    ; total blocks of visible files in cur_dir
     ubyte saved_mode                    ; screen mode to restore on exit
     ubyte saved_charset                 ; pre-launch charset (2=upper/gfx 3=lower); restored on exit
-    ubyte saved_color                   ; pre-launch text colour (bg<<4|fg); restored on exit
+    ubyte saved_color                   ; pre-launch text color (bg<<4|fg); restored on exit
 
     ; per-keystroke "what changed" flags, so we repaint only the affected regions
     ; (e.g. moving in the file column never touches the directory column). The *_cur
@@ -175,9 +175,17 @@ main {
     ; buffers (inputbuf, hist_line) are left as their own storage - they'd cost more code than saved.
     ; INVARIANT: do NOT add a use of a guest that can be live at the same time as its host or a
     ; sibling on the same slot - they share physical bytes and would silently corrupt each other.
-    ; Slot A (cm_src, 133 B): sa_line, exit_dir
+    ; Slot A (cm_src, 133 B): sa_line, exit_dir, syn_line
     uword sa_line  = &cm_src                ; composed ShowAll/Find results row (path + name)
     uword exit_dir = &cm_src                ; dir the host shell is left in on quit
+    ; The viewer's syntax-coloring line + color buffers. These MUST be main RAM: tview (bank 2)
+    ; fills syn_line, then JSRFARs into xsyntax (bank 9) to fill syn_col - and neither bank can see
+    ; the other's RAM, while main RAM stays mapped below $A000 throughout. Aliasing the copy/move
+    ; scratch costs zero new bytes and is safe by the slot rule above: V is a top-level file-pane
+    ; command, so no copy/move (nor ShowAll/Find) can be in flight while the viewer owns the screen.
+    uword syn_line = &cm_src                ; one logical source line, <= SYN_LINE_MAX bytes
+    uword syn_col  = &cm_dst                ; one color attribute byte per column (first cm_dst guest)
+                                            ; cap = shared.SYN_LINE_MAX (128), well inside both 133 B hosts
     ; Slot B (cm_sdir, 81 B): find_lc
     uword find_lc  = &cm_sdir               ; Ctrl-F lowercased filespec (whole-disk crawl)
     ubyte cm_fail                           ; copy_one failure point: 0 ok/none, 1 src-open, 2 dst-open, 3 write
@@ -200,7 +208,22 @@ main {
     const ubyte VIEW_BANK = 2
     extsub @bank 2 $A000 = tview_init()
     extsub @bank 2 $A003 = view_file(uword nameptr @R0)
+    ; $A006 hands tview the syntax-coloring setup: whether xsyntax.ovl loaded, and the two
+    ; MAIN-RAM buffers the two overlays share. They must be main-RAM (not in either bank),
+    ; because while bank 9 is mapped tview's own bank-2 RAM is invisible - see SYN_BANK below.
+    extsub @bank 2 $A006 = view_set_syn(ubyte ok @R0, uword lineptr @R1, uword colptr @R2)
     bool viewer_ok                          ; tview.ovl loaded OK -> V uses the banked viewer
+
+    ; --- banked syntax-coloring overlay (xsyntax) ---
+    ; xsyntax.p8 is a %output library blob in reserved HIRAM bank 9. UNLIKE every other overlay
+    ; here it is NOT called by main - tview (bank 2) JSRFARs into it once per rendered line. That
+    ; is legal: the X16 KERNAL's JSRFAR "works independently of which RAM or ROM bank the currently
+    ; executing code is residing in" (X16 Reference - 05 - KERNAL, $FF6E). Main only LOADS it and
+    ; reports the result to tview via view_set_syn; the extsub decls for its entries live in
+    ; tview.p8. It lives in its own bank because bank 2 has ~424 bytes free and this needs ~1.8 KB.
+    const ubyte SYN_BANK = 9
+    extsub @bank 9 $A000 = xsyntax_init()
+    bool syn_ok                             ; xsyntax.ovl loaded OK -> the viewer can color
 
     ; --- banked BMX image viewer (ximgview) overlay ---
     ; ximgview.p8 is a %output library blob loaded into reserved HIRAM bank 5. It displays a
@@ -213,9 +236,13 @@ main {
 
     ; --- banked ZSM music engine (zsmkit v2, release 2.8) ---
     ; zsmkit.bin is a pre-built library blob (mooinglemur/zsmkit) loaded at $A000 into reserved
-    ; HIRAM bank 6; its jump table is fixed at $A000, $A003, ... Only main (always mapped below
-    ; $9F00) may call it - a banked overlay cannot @bank-call a different bank. P dispatches here
-    ; for a .zsm. The engine needs a ~255-byte low-RAM scratch: we hand it golden RAM $0400, but
+    ; HIRAM bank 6; its jump table is fixed at $A000, $A003, ... Only main calls it, and P
+    ; dispatches here for a .zsm.
+    ; (NB: "a banked overlay cannot @bank-call a different bank" used to be asserted here and is
+    ; NOT true in general - JSRFAR is bank-agnostic and tview->xsyntax relies on that; see
+    ; SYN_BANK above. Keep zsmkit main-driven anyway: it is an external blob and its engine state
+    ; and low-RAM scratch are managed from here.)
+    ; The engine needs a ~255-byte low-RAM scratch: we hand it golden RAM $0400, but
     ; X16 Edit also uses $0400-$07FF, so we re-init at the top of EVERY play_zsm (not once).
     const ubyte ZSM_BANK   = 6
     const uword ZSM_LOWRAM = $0400
@@ -311,7 +338,7 @@ main {
 
         ; remember the current mode (returns mode, width, height) to restore on exit
         saved_mode, cx16.r0L, cx16.r0H = cx16.get_screen_mode()
-        snapshot_machine_state()                 ; capture charset + text colour before we change anything
+        snapshot_machine_state()                 ; capture charset + text color before we change anything
         cx16.set_screen_mode(SCREEN_MODE)        ; 80x30
 
         ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D/Ctrl-F/Ctrl-M)
@@ -351,6 +378,22 @@ main {
         if viewer_ok
             tview_init()                ; extsub @bank 2: clears the overlay's in-bank BSS ONCE
 
+        ; load the xsyntax coloring overlay into its reserved bank (SYN_BANK), then tell tview
+        ; whether it is there and where the two shared main-RAM buffers live. tview verifies the
+        ; bank independently (its probe entry) before it ever colors anything, so a half-loaded
+        ; or mis-linked overlay degrades to plain text rather than JSRFARing into garbage.
+        cx16.push_rambank(SYN_BANK)
+        syn_ok = diskio.loadlib("xsyntax.ovl", $a000) != 0
+        cx16.pop_rambank()
+        if syn_ok
+            xsyntax_init()              ; extsub @bank 9: clears the overlay's in-bank BSS ONCE
+        if viewer_ok {
+            ubyte syn_flag = 0
+            if syn_ok
+                syn_flag = 1
+            view_set_syn(syn_flag, syn_line, syn_col)
+        }
+
         ; load the miscutil overlay into its reserved bank (MISC_BANK) the same way
         cx16.push_rambank(MISC_BANK)
         misc_ok = diskio.loadlib("miscutil.ovl", $a000) != 0
@@ -386,9 +429,9 @@ main {
         if music_ok
             xmusic_init()               ; extsub @bank 7: clears the overlay's in-bank BSS ONCE
 
-        ; apply the saved colour theme. cfg_read() is self-contained - it hops into /xfmgr/ to LOAD
+        ; apply the saved color theme. cfg_read() is self-contained - it hops into /xfmgr/ to LOAD
         ; the cfg and restores the cwd itself - so it works regardless of where we are here.
-        ; A palette remap - full_redraw below repaints in the themed colours. Missing cfg -> Classic.
+        ; A palette remap - full_redraw below repaints in the themed colors. Missing cfg -> Classic.
         themes.apply_theme(themes.cfg_read())
 
         diskio.chdir(pathbuf)           ; back to the launch dir so the tree anchors where we started
@@ -490,7 +533,7 @@ main {
 
         txt.clear_screen()
         cx16.set_screen_mode(saved_mode)         ; restore the original screen mode
-        restore_machine_state()                  ; re-apply the user's charset + text colour (CINT reset them)
+        restore_machine_state()                  ; re-apply the user's charset + text color (CINT reset them)
         if run_exit {
             ; hand off to BASIC: load + run the selected program via the dynamic keyboard
             diskio.chdir(pathbuf)               ; the selected file's directory
@@ -501,16 +544,16 @@ main {
             chain_run("/xfmgr/xfsetup.prg")
         } else {
             diskio.chdir(exit_dir)              ; leave the shell in the chosen directory
-            txt.clear_screen()                  ; clean screen (in the restored charset/colours) before the sign-off
+            txt.clear_screen()                  ; clean screen (in the restored charset/colors) before the sign-off
             txt.print("xfmgr done.\n")
         }
     }
 
     sub snapshot_machine_state() {
-        ; capture the user's charset + text colour so exit can put them back (set_screen_mode's CINT
+        ; capture the user's charset + text color so exit can put them back (set_screen_mode's CINT
         ; resets both to X16 defaults). Read while STILL in the launch screen mode.
         saved_charset = cx16.get_charset()          ; 1=ISO 2=PETSCII upper/gfx 3=PETSCII lower (0=unknown)
-        ; text colour = the colour matrix at the cursor cell. MUST use txt.getclr, not a hand-computed
+        ; text color = the color matrix at the cursor cell. MUST use txt.getclr, not a hand-computed
         ; VERA address: the text matrix has a fixed 256-byte row stride (128 cols), so row*width*2 is
         ; wrong for row>0 - that was the earlier "bad background" bug. High nibble=bg, low nibble=fg.
         ubyte cx_col
@@ -520,7 +563,7 @@ main {
     }
 
     sub restore_machine_state() {
-        ; undo XFMGR's charset + colour changes: re-apply what snapshot_machine_state() captured (the
+        ; undo XFMGR's charset + color changes: re-apply what snapshot_machine_state() captured (the
         ; set_screen_mode call just above already reset them to X16 defaults via its CINT).
         if saved_charset >= 1 and saved_charset <= 3
             cx16.screen_set_charset(saved_charset, 0)       ; 0 ptr = built-in ROM charset
@@ -568,8 +611,8 @@ main {
         hilite_row(0, 79, MSGROW, shared.CLR_BOTTOM_PROMPT_BG)
         ; "[Yes]   Esc Cancel", right-justified so " Cancel" ends at col 78 (matches prompt_hint)
         ubyte hcol = 79 - (5 + 3 + 3 + 7)               ; "[Yes]"(5)+"   "(3)  "Esc"(3)+" Cancel"(7)
-        hcol = hint_key(hcol, "", "[")                  ; bracket in normal text colour
-        hcol = hint_key(hcol, "Y", "es]   ")            ; only the Y is the hotkey colour
+        hcol = hint_key(hcol, "", "[")                  ; bracket in normal text color
+        hcol = hint_key(hcol, "Y", "es]   ")            ; only the Y is the hotkey color
         hcol = hint_key(hcol, "Esc", " Cancel")
         repeat {
             when cmd_key() {                    ; case-folded, so Y works shifted or not
@@ -649,7 +692,7 @@ main {
     sub handle_alt(ubyte letter) {
         ; ALT-key commands
         when letter {
-            $15 -> {                        ; Alt-F10: open the colour-theme setup (either pane)
+            $15 -> {                        ; Alt-F10: open the color-theme setup (either pane)
                                             ; ($15 = F10; passes through unchanged like Alt-F3=134)
                 op_setup()
                 if not setup_exit
@@ -905,8 +948,8 @@ main {
                         txt.color2(shared.CLR_FG, shared.CLR_BG)   ; restore app theme after CINT reset the palette
                     } else if viewer_ok {
                         view_file(&namebuf)             ; tview reads via its own bank-2 buffer (returns on Q/ESC)
-                        txt.color2(shared.CLR_FG, shared.CLR_BG)   ; viewer left the text colour blue; restore app theme
-                                                     ; (full_redraw's blanks use the current colour)
+                        txt.color2(shared.CLR_FG, shared.CLR_BG)   ; viewer left the text color blue; restore app theme
+                                                     ; (full_redraw's blanks use the current color)
                     } else {
                         op_edit()               ; overlays missing -> fall back to X16 Edit
                     }
@@ -979,7 +1022,7 @@ main {
     }
 
     sub blank_span(ubyte col0, ubyte col1, ubyte row) {
-        ; erase a horizontal run to spaces in the base colour (resets any bar colour)
+        ; erase a horizontal run to spaces in the base color (resets any bar color)
         txt.plot(col0, row)
         ubyte c
         for c in col0 to col1
@@ -1223,7 +1266,7 @@ main {
             txt.plot(FILE_SIZE, srow)
             txt.print_uw(xfiles.get_blocks(i))
             ; tagged files are flagged by the '*' marker only - the row keeps the
-            ; normal colours (no bar). The focused selection bar still wins on the cursor.
+            ; normal colors (no bar). The focused selection bar still wins on the cursor.
             if i == file_cursor and focus == FOCUS_FILE
                 hilite_row(FILE_MARK, FILE_BAR_R, srow, shared.HILITE)
         }
@@ -2166,7 +2209,7 @@ main {
     }
 
     sub op_setup() {
-        ; Alt-F10: open the standalone colour-theme setup. It is a separate PRG, so launching it
+        ; Alt-F10: open the standalone color-theme setup. It is a separate PRG, so launching it
         ; QUITS XFMGR - all logged folders and tags are lost. On save it relaunches XFMGR, which
         ; re-reads and applies the chosen theme. ENTER = go, ESC = cancel (no No option).
         if confirm_enter("Setup? loses logged dirs + tags") {
@@ -2176,7 +2219,7 @@ main {
 
     sub op_help() {
         ; F1: show the help text (xfmgr.hlp, shipped alongside the .prg) in the text viewer.
-        ; Mirrors the V text path: chdir to /xfmgr, view by bare name, restore the theme colour
+        ; Mirrors the V text path: chdir to /xfmgr, view by bare name, restore the theme color
         ; the viewer left blue. Caller sets dirty_full - the viewer took the whole screen.
         if not viewer_ok {
             flash("viewer overlay missing")
@@ -2185,7 +2228,7 @@ main {
         diskio.chdir("/xfmgr")                      ; the help file lives with the .prg + overlays
         void strings.copy("xfmgr.hlp", namebuf)
         view_file(&namebuf)                         ; returns on Q/ESC
-        txt.color2(shared.CLR_FG, shared.CLR_BG)    ; viewer left the colour blue; restore app theme
+        txt.color2(shared.CLR_FG, shared.CLR_BG)    ; viewer left the color blue; restore app theme
     }
 
     sub op_execute() {
@@ -2253,7 +2296,7 @@ main {
     sub hist_draw_row(ubyte srow, uword textptr, bool selected) {
         ; (re)draw a single history row: clear it, print the entry, highlight if selected.
         ; Matches how draw_box's box_row + the list loop paint a base row, so an
-        ; unselected redraw is pixel-identical to the original (resets any bar colour).
+        ; unselected redraw is pixel-identical to the original (resets any bar color).
         txt.color(shared.CLR_FG)
         blank_span(HIST_PX0+1, HIST_PX1-1, srow)
         txt.plot(HIST_PX0+2, srow)
@@ -2281,7 +2324,7 @@ main {
             ui_draw_box(HIST_PX0, boxtop, HIST_PX1, boxtop+rows+2)
             ui_box_header(HIST_PX0, HIST_PX1, boxtop, " Recent ")
         }
-        ; key hints in a centered footer on the bottom border, as ONE embedded-colour
+        ; key hints in a centered footer on the bottom border, as ONE embedded-color
         ; string (\x9e=accent, \x05=fg; ←┘=ENTER glyph). Visible length = 23.
         txt.plot(HIST_PX0 + 1 + (HIST_PX1 - HIST_PX0 - 1 - 23) / 2, boxtop+rows+2)
         txt.print(petscii:"\x9e ←┘\x05 Select  \x9eESC\x05 Cancel ")
@@ -2548,7 +2591,7 @@ main {
         ; draw one visible list row (0..PICK_VIS-1): the SAME tree connectors + markers + name the
         ; main dir pane draws (build_tree_line), plus a selection bar if it is the cursor entry.
         ; Same draw path as the full repaint, so a non-cursor redraw exactly restores the base row
-        ; (blank_span resets any bar colour).
+        ; (blank_span resets any bar color).
         ubyte srow = PICK_Y0 + 2 + row
         txt.color(shared.CLR_FG)
         blank_span(PICK_X0+1, PICK_X1-1, srow)
@@ -2580,13 +2623,13 @@ main {
         ubyte idx
         ; draw the box chrome ONCE (outside the loop, so it never flickers on scroll): an
         ; empty-title box, a white header bar, a blank spacer line under it, then a centered
-        ; hotkey footer on the bottom border with the keys picked out in the accent colour.
+        ; hotkey footer on the bottom border with the keys picked out in the accent color.
         const ubyte BIW = PICK_X1 - PICK_X0 - 1         ; box interior width
         if ui_ok {
             ui_draw_box(PICK_X0, PICK_Y0, PICK_X1, PICK_Y1)
             ui_box_header(PICK_X0, PICK_X1, PICK_Y0, " Pick a dir ")
         }
-        ; footer (42 visible chars) as ONE embedded-colour string instead of 8 colour + 8
+        ; footer (42 visible chars) as ONE embedded-color string instead of 8 color + 8
         ; print calls. In-string PETSCII codes: \x9e = shared.CLR_ACCENT (yellow), \x05 = shared.CLR_FG
         ; (white); ←┘ is the ENTER glyph. Ends white so the list rows below inherit shared.CLR_FG.
         txt.plot(PICK_X0 + 1 + (BIW - 42) / 2, PICK_Y1)
@@ -2842,7 +2885,7 @@ main {
     }
 
     sub bar_key(str s) {
-        ; a highlighted hotkey on the bar, accent colour on blue (matches the main command menu's
+        ; a highlighted hotkey on the bar, accent color on blue (matches the main command menu's
         ; hotkey look), then revert to white-on-blue. Single-letter keys are printed letter-in-word:
         ; bar_key("U") then the rest of "Untag", so only the U is picked out - like "MENU:" below.
         txt.color2(shared.CLR_ACCENT, shared.BAR_BG)

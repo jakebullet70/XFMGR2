@@ -1,7 +1,7 @@
-; xfsetup - standalone colour-theme picker for XFMGR2.
+; xfsetup - standalone color-theme picker for XFMGR2.
 ;
 ; A normal $0801 PRG (NOT a bank overlay). XFMGR launches it via chain_run (Alt-F10); it lets the
-; user pick a colour theme with live preview, writes the choice to /xfmgr/xfmgr.cfg, then
+; user pick a color theme with live preview, writes the choice to /xfmgr/xfmgr.cfg, then
 ; chain_runs back to /xfmgr/xfmgr.prg - which cold-starts, reads the cfg and applies the theme.
 ; Because setup is stateless w.r.t. XFMGR's tree/arena, no state snapshot is needed; the only cost
 ; is XFMGR's ~2s reload. Themes are palette remaps (see SRC/themes.p8), so this runs in the same
@@ -90,7 +90,7 @@ main {
         txt.print(" XFSETUP ")
         txt.color(shared.CLR_FG)
         txt.plot(BX0 + 3, BY0 + 2)
-        txt.print("Colour theme:")
+        txt.print("Color theme:")
         txt.plot(BX0 + 2, BY1 - 2)
         txt.print(petscii:"\x9eH\x05 Clear history")
         txt.plot(BX0 + 2, BY1 - 1)
@@ -109,7 +109,7 @@ main {
     }
 
     sub clear_msg_row() {
-        ; blank the message row (BY1-4) inside the box, in the current bg colour
+        ; blank the message row (BY1-4) inside the box, in the current bg color
         txt.color2(shared.CLR_FG, shared.CLR_BG)
         txt.plot(BX0 + 1, BY1 - 4)
         ubyte c
@@ -134,7 +134,7 @@ main {
     }
 
     sub refresh() {
-        themes.apply_theme(sel)                     ; live preview: recolour the whole screen
+        themes.apply_theme(sel)                     ; live preview: recolor the whole screen
         ubyte i
         for i in 0 to themes.LAST - themes.FIRST {  ; 0..4
             ubyte id  = themes.FIRST + i            ; 1..5

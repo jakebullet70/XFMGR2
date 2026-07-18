@@ -29,20 +29,29 @@ rem 'COPY /Y "%~dp0miscutil.ovl" "%RUNDIR%\miscutil.ovl" >NUL
 REM 2b) also copy all built files into run\xfmgr
 SET XFMGRDIR=%RUNDIR%\xfmgr
 IF NOT EXIST "%XFMGRDIR%" MKDIR "%XFMGRDIR%"
-COPY /Y "%~dp0build\xfmgr.prg" "%XFMGRDIR%\xfmgr.prg" >NUL
-COPY /Y "%~dp0build\tview.ovl" "%XFMGRDIR%\tview.ovl" >NUL
-COPY /Y "%~dp0build\miscutil.ovl" "%XFMGRDIR%\miscutil.ovl" >NUL
-COPY /Y "%~dp0build\uiutil.ovl" "%XFMGRDIR%\uiutil.ovl" >NUL
-COPY /Y "%~dp0build\ximgview.ovl" "%XFMGRDIR%\ximgview.ovl" >NUL
-COPY /Y "%~dp0build\xmusic.ovl" "%XFMGRDIR%\xmusic.ovl" >NUL
-COPY /Y "%~dp0build\xfsetup.prg" "%XFMGRDIR%\xfsetup.prg" >NUL
+REM DESTINATION NAMES ARE UPPERCASE ON PURPOSE. prog8's default PETSCII encodes a lowercase
+REM source literal ("xsyntax.ovl", "xfmgr.hlp", ...) to bytes $41-$5A - which ARE the UPPERCASE
+REM ASCII letters - and those are the bytes the filesystem is asked to match. So every file the
+REM program opens by name must be uppercase on disk, or a case-sensitive filesystem (a real SD
+REM card) won't find it. The emulator's Windows host-fs is case-insensitive and hides this
+REM completely, so getting it wrong only ever shows up on hardware. build\ stays lowercase (it is
+REM just an intermediate dir, and nothing on the X16 reads from it) - this staging step is the
+REM boundary where the naming has to become correct.
+COPY /Y "%~dp0build\xfmgr.prg" "%XFMGRDIR%\XFMGR.PRG" >NUL
+COPY /Y "%~dp0build\tview.ovl" "%XFMGRDIR%\TVIEW.OVL" >NUL
+COPY /Y "%~dp0build\miscutil.ovl" "%XFMGRDIR%\MISCUTIL.OVL" >NUL
+COPY /Y "%~dp0build\uiutil.ovl" "%XFMGRDIR%\UIUTIL.OVL" >NUL
+COPY /Y "%~dp0build\ximgview.ovl" "%XFMGRDIR%\XIMGVIEW.OVL" >NUL
+COPY /Y "%~dp0build\xmusic.ovl" "%XFMGRDIR%\XMUSIC.OVL" >NUL
+COPY /Y "%~dp0build\xsyntax.ovl" "%XFMGRDIR%\XSYNTAX.OVL" >NUL
+COPY /Y "%~dp0build\xfsetup.prg" "%XFMGRDIR%\XFSETUP.PRG" >NUL
 REM the zsmkit music-engine blob (bank 6) - a static library asset (not built), kept at root
-COPY /Y "%~dp0zsmkit.bin" "%XFMGRDIR%\zsmkit.bin" >NUL
+COPY /Y "%~dp0zsmkit.bin" "%XFMGRDIR%\ZSMKIT.BIN" >NUL
 REM stage the F1 help text (a static asset, not built) alongside the .prg
-COPY /Y "%~dp0xfmgr.hlp" "%XFMGRDIR%\xfmgr.hlp" >NUL
+COPY /Y "%~dp0xfmgr.hlp" "%XFMGRDIR%\XFMGR.HLP" >NUL
 REM seed a default theme cfg ONLY if none exists yet, so a theme set via xfsetup in the emulator
 REM survives a rebuild (mirrors the installer's preserve-existing-cfg behaviour).
-IF NOT EXIST "%XFMGRDIR%\xfmgr.cfg" COPY /Y "%~dp0xfmgr.cfg" "%XFMGRDIR%\xfmgr.cfg" >NUL
+IF NOT EXIST "%XFMGRDIR%\XFMGR.CFG" COPY /Y "%~dp0xfmgr.cfg" "%XFMGRDIR%\XFMGR.CFG" >NUL
 
 REM 2b') stage a RELEASE test folder (NOT /xfmgr) holding every release file plus the
 REM      installer, so install.prg can be exercised the way an end user would:
@@ -55,8 +64,8 @@ COPY /Y "%XFMGRDIR%\*.bin" "%RELDIR%\" >NUL
 COPY /Y "%XFMGRDIR%\*.hlp" "%RELDIR%\" >NUL
 REM the default theme cfg is a release file too (installer ships + preserves it) - stage it from the
 REM root so install.prg finds it here; without this a fresh install reports "xfmgr.cfg not found".
-COPY /Y "%~dp0xfmgr.cfg" "%RELDIR%\" >NUL
-COPY /Y "%~dp0build\install.prg" "%RELDIR%\install.prg" >NUL
+COPY /Y "%~dp0xfmgr.cfg" "%RELDIR%\XFMGR.CFG" >NUL
+COPY /Y "%~dp0build\install.prg" "%RELDIR%\INSTALL.PRG" >NUL
 
 REM 2c) stage the sample media (tracked in samples\ / vendored) into the browse root so the
 REM     V/P players have something to open. run\ is gitignored; samples\ is the source of truth.

@@ -1,12 +1,13 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 185)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 188)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
  the left, the selected directory's FILES on the right, with file tagging, a
- banked text/hex viewer, a BMX image viewer, a whole-disk Find, and a full set
- of file operations - copy, move, rename, delete, mkdir and prune - plus edit
- via the ROM X16 Edit and switchable colour themes.
+ banked text/hex viewer with BASIC/Markdown syntax coloring, a BMX image
+ viewer, a whole-disk Find, and a full set of file operations - copy, move,
+ rename, delete, mkdir and prune - plus edit via the ROM X16 Edit and
+ switchable color themes.
 
  The bottom command menu is MODIFIER-DRIVEN. By default it shows MENU (plain
  keys). Hold CTRL for the CTRL menu, hold ALT (the Commodore key) for the ALT
@@ -72,7 +73,7 @@
    Alt-X       Execute - quit XFMGR and chain-run the selected program
    Alt-Q       Quit, leaving the shell in the CURRENTLY SELECTED directory
    Alt-F3      Re-log the current context (sub-folders in DIR, files in FILE)
-   Alt-F10     Open the colour-theme setup (quits to XFSETUP.PRG)
+   Alt-F10     Open the color-theme setup (quits to XFSETUP.PRG)
 
 ------------------------------------------------------------------------------
  In text prompts (Copy, Move, Rename, Mkdir, Filespec, Tag-spec, Find)
@@ -105,6 +106,21 @@
    Big files that are too large for the pager fall back to the ROM X16 Edit.
 
 ------------------------------------------------------------------------------
+ Syntax coloring in the viewer (C)
+------------------------------------------------------------------------------
+   Auto        BASIC / BASLOAD source (.bas, .bas.txt, .basl, .bl) and
+               Markdown (.md) are colored automatically when opened.
+   BASIC       Statement keywords, built-in functions, "strings", numbers,
+               and REM / ## comments each get their own color. A dotted
+               BASLOAD label (DIR.READ.BIN) stays plain - it is one name.
+   Markdown    A leading # is a heading, ## or deeper a subheading.
+   C           Toggles coloring on / off. Switching back on uses the mode
+               for the file's extension, or BASIC if the extension was not
+               recognised - so C also colors a listing saved under any name.
+   Needs       xsyntax.ovl beside the program; without it the viewer simply
+               shows plain text and the C key is not offered.
+
+------------------------------------------------------------------------------
  Music playback (P)
 ------------------------------------------------------------------------------
    ZSM         .zsm songs play through the zsmkit engine (FM + PSG + PCM).
@@ -122,8 +138,10 @@
 ------------------------------------------------------------------------------
    PgDn/PgUp   Page          T  Top        B  Bottom
    H           Toggle hex / text
-   F           Find a string
-   N / Space    Repeat the search (find next)
+   F           Find a string (always searches from the top)
+   N / Space   Repeat the search. At end-of-file it wraps back to the top
+               and reports "wrapped to top", so a search cycles round.
+   C           Toggle syntax coloring on / off (see below)
    Q / Esc     Exit back to the file list
 
 ------------------------------------------------------------------------------
@@ -166,7 +184,7 @@
      +-- XFMGR/            everything else lives here
           +-- XFMGR.PRG        the main program
           +-- *.OVL            banked overlays (viewer, image, music, ui, misc)
-          +-- XFSETUP.PRG      the colour-theme setup (Alt-F10)
+          +-- XFSETUP.PRG      the color-theme setup (Alt-F10)
           +-- ZSMKIT.BIN       the ZSM music engine
           +-- XFMGR.HLP        this help file
           +-- XFMGR.CFG        your saved theme (kept across updates)
