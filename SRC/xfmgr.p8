@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 190          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 191          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -453,8 +453,27 @@ main {
         if music_ok
             xmusic_init()               ; extsub @bank 7: clears the overlay's in-bank BSS ONCE
 
-        ; apply the saved color theme. cfg_read() is self-contained - it hops into /xfmgr/ to LOAD
-        ; the cfg and restores the cwd itself - so it works regardless of where we are here.
+        ; every overlay above must have loaded - report any that didn't, by name, before the UI
+        ; comes up (see check_overlays for why this is worth a full-screen stop)
+        ovl_missing = 0
+        if not viewer_ok
+            ovl_missing |= %00000001
+        if not syn_ok
+            ovl_missing |= %00000010
+        if not misc_ok
+            ovl_missing |= %00000100
+        if not ui_ok
+            ovl_missing |= %00001000
+        if not imgview_ok
+            ovl_missing |= %00010000
+        if not zsm_ok
+            ovl_missing |= %00100000
+        if not music_ok
+            ovl_missing |= %01000000
+        check_overlays()
+
+        ; apply the saved color theme. cfg_read() reads the cfg by ABSOLUTE path (themes.path_to),
+        ; so it works regardless of where we are here and leaves the cwd alone.
         ; A palette remap - full_redraw below repaints in the themed colors. Missing cfg -> Classic.
         themes.apply_theme(themes.cfg_read())
 
@@ -2275,6 +2294,49 @@ main {
         ; re-reads and applies the chosen theme. ENTER = go, ESC = cancel (no No option).
         if confirm_enter("Setup? loses logged dirs + tags") {
             setup_exit = true
+        }
+    }
+
+    ; ---- startup overlay verification ----
+    ; Names in load order; bit N of ovl_missing corresponds to OVL_NAMES[N].
+    str[7] OVL_NAMES = ["tview.ovl", "xsyntax.ovl", "miscutil.ovl", "uiutil.ovl",
+                        "ximgview.ovl", "zsmkit.bin", "xmusic.ovl"]
+    ubyte ovl_missing                   ; bit set = that overlay failed to load
+
+    sub check_overlays() {
+        ; A missing overlay used to fail SILENTLY - the feature just went dead, and the first
+        ; visible sign was usually a mangled bottom menu rather than anything naming a file. That
+        ; is a miserable thing to debug (it cost us a session when the install moved to a folder
+        ; the launcher didn't name), so say plainly which files are missing and where we looked.
+        ;
+        ; We report ONLY the loadlib results already in hand. We deliberately do NOT f_open the
+        ; files to double-check them: a read-channel open on an ABSENT file is exactly what
+        ; corrupts the following UI draw (the same trap that forced cfg_read onto load_raw), so a
+        ; "verify everything exists" probe would risk causing the very corruption it reports on.
+        if ovl_missing == 0
+            return
+        txt.color2(shared.CLR_FG, shared.CLR_BG)
+        txt.clear_screen()
+        txt.print("\n xfmgr2 - startup problem\n\n")
+        txt.print(" not found in ")
+        txt.print(themes.path_to(""))            ; the install folder, empty filename = folder itself
+        txt.print("\n\n")
+        ubyte i
+        for i in 0 to len(OVL_NAMES) - 1 {
+            if (ovl_missing & (1 << i)) != 0 {   ; parens: '&' binds TIGHTER than '==' in prog8
+                txt.print("   ")
+                txt.print(OVL_NAMES[i])
+                txt.nl()
+            }
+        }
+        txt.print("\n that folder is read from the /xt launcher\n")
+        txt.print(" in the drive root. either re-run\n")
+        txt.print(" install.prg, or point /xt at the folder\n")
+        txt.print(" that actually holds these files.\n")
+        txt.print("\n press a key to continue anyway.\n")
+        repeat {
+            if cbm.GETIN2() != 0
+                break
         }
     }
 

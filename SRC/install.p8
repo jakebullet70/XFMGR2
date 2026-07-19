@@ -4,12 +4,19 @@
 ; the .ovl overlays, xfsetup.prg, zsmkit.bin, xfmgr.hlp) plus this installer into ONE
 ; folder on their SD card, boots the X16, CDs into that folder and runs it. The installer:
 ;   * reports the folder it is running from,
-;   * creates /XFMGR on the drive root,
-;   * copies the app files into /XFMGR (255-byte stream copy, same pump XFMGR uses),
-;   * writes the tiny root launcher /XT ("10 LOAD \"/XFMGR/XFMGR.PRG\""),
+;   * picks the install folder (see below) and creates it if needed,
+;   * copies the app files into it (255-byte stream copy, same pump XFMGR uses),
+;   * writes the tiny root launcher /XT ("10 LOAD \"<folder>/XFMGR.PRG\""),
 ; so the app can then be launched from anywhere with the caret-run command:  ^/xt
 ;
-; If it is run from a folder that is ALREADY /xfmgr (e.g. the user copied a ready-made
+; WHERE IT INSTALLS: /XFMGR by default, but an EXISTING /XT already names the folder a
+; previous install used - and XFMGR itself resolves its overlays + cfg from exactly that
+; path at runtime (themes.find_progdir). So if /XT is present and points somewhere else,
+; we offer to update THAT install in place rather than silently scattering a second copy
+; into /XFMGR and leaving the launcher pointing at the old one. Answer N to install to
+; /XFMGR anyway - the launcher is then repointed there.
+;
+; If it is run from a folder that IS the install target (e.g. the user copied a ready-made
 ; XFMGR folder to the root), the copy step is skipped - source==dest would truncate the
 ; files - and only the /XT launcher is written.
 ;
@@ -30,16 +37,18 @@ main {
                      "ximgview.ovl", "xmusic.ovl", "xsyntax.ovl", "xfsetup.prg", "zsmkit.bin",
                      "xfmgr.hlp", "xfmgr.cfg"]
 
-    ; the root launcher, byte-for-byte: $0801 PRG holding  10 LOAD "/XFMGR/XFMGR.PRG"
-    ubyte[28] XT_BYTES = [
-        $01,$08, $19,$08, $0a,$00, $93,
-        $22, $2f,$58,$46,$4d,$47,$52, $2f,$58,$46,$4d,$47,$52,$2e,$50,$52,$47, $22,
-        $00, $00,$00 ]
+    str  DEF_TARGET = "/xfmgr"   ; where we install when no /xt says otherwise
+    const ubyte TARGET_MAX = 48  ; cap on a path parsed out of /xt (keeps the buffers below sane)
 
     ubyte[80] cur                ; folder we were launched from (copied out of curdir's transient buffer)
     ubyte[96] srcabs             ; absolute source path built per file: cur + "/" + name
     ubyte[255] cpbuf             ; stream-copy chunk buffer
     ubyte[210] hbuf              ; scratch for reading a readme's "(Build N)" line (padded for safety)
+    ubyte[64] target             ; chosen install folder, absolute, NO trailing slash
+    ubyte[64] xtdir              ; install folder parsed out of an existing /xt
+    ubyte[64] xtbuf              ; /xt load buffer (the launcher is ~28 bytes)
+    ubyte[96] xtline             ; "<target>/xfmgr.prg" while building the launcher
+    ubyte[112] xtout             ; the launcher image we write back out
 
     ; ask_action() return codes
     const ubyte ACT_CANCEL  = 0
@@ -60,7 +69,7 @@ main {
         txt.color2(1, 6)          ; 1 = white text, 6 = blue field; clear_screen paints it full-screen
         txt.clear_screen()
         txt.print("\n\n")
-        txt.print("xfmgr2 installer (a07)\n\n")
+        txt.print("xfmgr2 installer (a08)\n\n")
 
         ; curdir() points into a transient shared buffer - copy it out before any other disk call.
         void strings.copy(diskio.curdir(), cur)
@@ -72,7 +81,27 @@ main {
         txt.print(cur)
         txt.nl()
 
-        bool already = is_target_dir()      ; are we already sitting in /xfmgr ?
+        ; ---- pick the install folder ----
+        ; Default /xfmgr, unless an existing /xt names a different one - in which case offer to
+        ; update that install where it already lives. Asked BEFORE the build comparison below,
+        ; because the answer decides which folder we go and read a build number out of.
+        void strings.copy(DEF_TARGET, target)
+        if read_xt_dir() and strings.compare_nocase(xtdir, DEF_TARGET) != 0 {
+            txt.print("found /xt -> ")
+            txt.print(xtdir)
+            txt.nl()
+            txt.nl()
+            txt.print("install there?  ")
+            if ask_yes(true)
+                void strings.copy(xtdir, target)
+            txt.nl()
+        }
+        txt.print("install to:   ")
+        txt.print(target)
+        txt.nl()
+
+        ; are we already sitting IN the install folder? (source==dest -> skip the copy)
+        bool already = strings.compare_nocase(cur, target) == 0
 
         ; the version we are about to install: build number stamped in THIS folder's xfmgr.hlp
         ; readme (0 if the readme is missing or has no "(Build N)" marker).
@@ -92,7 +121,7 @@ main {
             ; launched from INSIDE /xfmgr: source==dest would truncate the files, so we skip the
             ; copy and only (re)write the /xt launcher. Confirm, default Yes.
             txt.nl()
-            txt.print("files are already in /xfmgr.\n")
+            txt.print("files are already in the target folder.\n")
             txt.print("write the /xt launcher?  ")
             act = ask_action(true)
             txt.nl()
@@ -113,15 +142,15 @@ main {
             }
             diskio.f_close()
 
-            ; Detect any prior install: CD into /xfmgr and read its BARE "xfmgr.hlp" (OPEN takes a
-            ; plain filename - no path resolution - so we must be IN the dir; the app chdir's before
+            ; Detect any prior install: CD into the target and read its BARE "xfmgr.hlp" (OPEN takes
+            ; a plain filename - no path resolution - so we must be IN the dir; the app chdir's before
             ; every f_open for the same reason). A CD onto a MISSING dir is a silent no-op, so gate
             ; on status_code()==0 (the app's dir-exists probe) - else we'd re-read the release
             ; folder's own xfmgr.hlp and report a phantom install. read_build returns 0 for a
             ; folder with no readable xfmgr.hlp.
             uword inst_build = 0
-            diskio.chdir("/xfmgr")
-            bool have_xfmgr = diskio.status_code() == 0     ; did the CD land? -> /xfmgr exists
+            diskio.chdir(target)
+            bool have_xfmgr = diskio.status_code() == 0     ; did the CD land? -> target exists
             if have_xfmgr
                 inst_build = read_build("xfmgr.hlp")
             diskio.chdir(cur)                               ; back to the launch folder
@@ -140,7 +169,7 @@ main {
                 scen = SC_SAME
 
             ; one concise status line about the target folder
-            txt.print("/xfmgr:        ")
+            txt.print("target:        ")
             if scen == SC_FRESH
                 txt.print("not found  (fresh install)\n")
             else if scen == SC_UNKNOWN
@@ -192,10 +221,30 @@ main {
             txt.print("** test mode - no files copied **\n\n")
 
         if not already {
-            ; create /xfmgr (harmless if it already exists) and make it the copy destination
-            diskio.chdir("/")
-            diskio.mkdir("xfmgr")
-            diskio.chdir("/xfmgr")
+            ; Make the target the copy destination, creating it if it isn't there.
+            ; mkdir MUST be relative: CMDR-DOS is MD[path]:name (the path goes BEFORE the colon)
+            ; and diskio.mkdir only ever emits "md:"+name, so mkdir("/a/b") would ask for a folder
+            ; whose NAME contains slashes. That limits creation to a DIRECT child of the root -
+            ; which is all we need, because a deeper target can only have come from an existing
+            ; /xt, and that means the folder is already there. If the chdir still fails we bail
+            ; rather than dumping the copies into the launch folder.
+            diskio.chdir(target)
+            if diskio.status_code() != 0 {
+                ubyte si
+                bool nested
+                si, nested = strings.rfind(&target[1], '/')     ; another '/' past the leading one?
+                if not nested {
+                    diskio.chdir("/")
+                    diskio.mkdir(&target[1])                    ; skip the leading '/' -> bare name
+                    diskio.chdir(target)
+                }
+                if diskio.status_code() != 0 {
+                    txt.print("cannot open or create ")
+                    txt.print(target)
+                    txt.print("\n\nnothing was installed.\n")
+                    return
+                }
+            }
 
             ubyte i
             for i in 0 to len(FILES) - 1 {
@@ -238,20 +287,43 @@ main {
 
     ;====================================================================
 
-    ; are we launched from a folder whose basename is "xfmgr"?
-    sub is_target_dir() -> bool {
-        return basename_is_xfmgr(cur)
-    }
-
-    ; case-insensitive test: is the last path component of `p` == "xfmgr"?
-    sub basename_is_xfmgr(str p) -> bool {
-        ubyte idx
-        bool found
-        idx, found = strings.rfind(p, '/')
-        uword bp = p
-        if found
-            bp = p + idx + 1
-        return strings.compare_nocase(bp, "xfmgr") == 0
+    ; Parse the install folder out of an existing root launcher /xt into `xtdir`, WITHOUT a
+    ; trailing slash (so it drops straight into chdir and the compare in start()). Returns false
+    ; if /xt is missing, unparsable, or names a bare root path. This is the same parse XFMGR
+    ; itself does at runtime (themes.find_progdir) - the launcher is a tokenized
+    ; `10 LOAD "<path>/XFMGR.PRG"`, so we take what is between the quotes up to the last '/'.
+    ;
+    ; The bytes inside /xt are the same PETSCII our string literals compile to (both put a-z at
+    ; $41-$5A), so the path copies straight across with no re-encoding.
+    sub read_xt_dir() -> bool {
+        xtdir[0] = 0
+        uword endaddr = diskio.load_raw("/xt", &xtbuf)
+        if endaddr == 0 {
+            void diskio.status()                ; drop the FILE NOT FOUND (else the LED blinks)
+            return false
+        }
+        ubyte n = lsb(endaddr - &xtbuf)
+        if n > len(xtbuf)
+            n = len(xtbuf)
+        ubyte i = 0
+        while i < n and xtbuf[i] != $22         ; opening quote
+            i++
+        if i >= n
+            return false
+        i++
+        ubyte j = 0
+        ubyte cut = 0                           ; chars up to and including the LAST '/'
+        while i < n and xtbuf[i] != $22 and j < TARGET_MAX {
+            xtdir[j] = xtbuf[i]
+            j++
+            if xtbuf[i] == '/'
+                cut = j
+            i++
+        }
+        if cut < 2                              ; "" or a bare "/" - nothing useful to offer
+            return false
+        xtdir[cut-1] = 0                        ; drop the filename AND the trailing slash
+        return true
     }
 
     ; srcabs = cur + "/" + name  (cur is normalised; bare root "/" yields "/name")
@@ -304,14 +376,60 @@ main {
         return false
     }
 
-    ; write the 28-byte /xt launcher into the current dir
+    ; Write the /xt launcher into the current dir, pointed at the chosen target: a tokenized
+    ; $0801 BASIC program holding  10 LOAD "<target>/XFMGR.PRG".  Built rather than shipped as a
+    ; fixed blob because the path length varies with the install folder.
+    ;
+    ;   $0801: <next-line ptr>   = $0809 + pathlen (the address of the trailing $00 $00)
+    ;   $0803: $0a $00           line number 10
+    ;   $0805: $93               LOAD token
+    ;   $0806: $22 <path> $22    the quoted path
+    ;          $00               end of line
+    ;          $00 $00           end of program
+    ; total on disk = 2 (load address) + pathlen + 10
     sub write_xt() -> bool {
+        void strings.copy(target, xtline)
+        void strings.append(xtline, "/xfmgr.prg")
+        ubyte plen = strings.length(xtline)
+        uword nxt = $0809 + plen
+        xtout[0] = $01              ; load address $0801
+        xtout[1] = $08
+        xtout[2] = lsb(nxt)
+        xtout[3] = msb(nxt)
+        xtout[4] = $0a              ; line 10
+        xtout[5] = $00
+        xtout[6] = $93              ; LOAD
+        xtout[7] = $22
+        ubyte i
+        for i in 0 to plen - 1
+            xtout[8 + i] = xtline[i]
+        xtout[8 + plen] = $22
+        xtout[9 + plen] = $00       ; end of line
+        xtout[10 + plen] = $00      ; end of program
+        xtout[11 + plen] = $00
         diskio.delete("xt")
         if not diskio.f_open_w("xt")
             return false
-        void diskio.f_write(&XT_BYTES, len(XT_BYTES))
+        void diskio.f_write(&xtout, plen + 12)
         diskio.f_close_w()
         return true
+    }
+
+    ; plain yes/no prompt (no dry-run option). `def` is what ENTER selects; ESC = no.
+    sub ask_yes(bool def) -> bool {
+        if def
+            txt.print("[y]/n ")
+        else
+            txt.print("y/[n] ")
+        repeat {
+            ubyte k = getkey()
+            when k {
+                'y', 'Y' -> return true
+                'n', 'N', 27 -> return false
+                13 -> return def
+                else -> { }
+            }
+        }
     }
 
     ; parse the "(Build N)" marker out of an xfmgr.hlp readme (it sits on line 2). Returns the
