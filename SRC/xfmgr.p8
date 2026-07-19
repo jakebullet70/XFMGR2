@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 193          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 194          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -1514,6 +1514,10 @@ main {
             flash("can't prune the drive root")
             return
         }
+        ; The EMPTY history category is deliberate - it switches the history UI off for this one
+        ; prompt (input_line: usehist = misc_ok and length(histname) != 0). Typing "prune" out in
+        ; full is the speed bump in front of an irreversible subtree delete; with history, UP+ENTER
+        ; would confirm it in two keys. Do not "fix" this by naming a category.
         if not input_line("PRUNE - type 'prune' to confirm:", inputbuf, 49, "", false, false)
             return
         if strings.compare(inputbuf, "prune") != 0 {
