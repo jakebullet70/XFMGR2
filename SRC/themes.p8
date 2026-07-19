@@ -95,35 +95,43 @@ themes {
                                             ; installer creates, and what the old hard-coded
                                             ; chdir("/xfmgr") assumed - so this is never a regression.
     str  progdir  = "?" * 32                ; install folder incl. trailing slash (empty = at root)
-    str  progpath = "?" * 44                ; progdir + a filename, built by path_to()
-    ubyte[32] xtbuf                         ; XT launcher load buffer (the launcher is 28 bytes)
+    ; DUAL USE. Normally progdir + a filename, built by path_to(). It is ALSO the load buffer
+    ; find_progdir() reads the XT launcher into - safe because find_progdir only ever writes
+    ; progdir, and both its callers (path_to / progdir_cd) don't touch progpath until AFTER it
+    ; has returned. That retired a separate 32-byte xtbuf which was, at 32, too small: an XT is
+    ; pathlen+12 bytes, so a 22-char path like "/utils/xfmgr/xfmgr.prg" made a 34-byte launcher
+    ; and load_raw ran 2 bytes off the end of it into dir_known on every startup.
+    ; 64 covers a launcher path of 52 chars, comfortably past the 31-char cap the parse below
+    ; puts on progdir.
+    str  progpath = "?" * 64
     bool dir_known = false
 
     sub find_progdir() {
         ; Parse the install folder out of the root XT launcher; called once, lazily, by path_to().
         dir_known = true
         void strings.copy(DEF_DIR, progdir)
-        uword endaddr = diskio.load_raw(XT_NAME, &xtbuf)
+        ; load into progpath - see the note on its declaration for why that is safe here
+        uword endaddr = diskio.load_raw(XT_NAME, &progpath)
         if endaddr == 0 {
             void diskio.status()            ; drop the FILE NOT FOUND (else the activity LED blinks)
             return                          ; no launcher -> keep DEF_DIR
         }
-        ubyte n = lsb(endaddr - &xtbuf)
-        if n > 32
-            n = 32
+        ubyte n = lsb(endaddr - &progpath)
+        if n > 64
+            n = 64
         ; the quoted path inside the tokenized BASIC line:  LOAD "<path>"
         ubyte i = 0
-        while i < n and xtbuf[i] != $22                 ; opening quote
+        while i < n and progpath[i] != $22              ; opening quote
             i++
         if i >= n
             return                                      ; no quote -> keep DEF_DIR
         i++
         ubyte j = 0
         ubyte cut = 0                                   ; chars up to and including the LAST '/'
-        while i < n and xtbuf[i] != $22 and j < 31 {
-            progdir[j] = xtbuf[i]
+        while i < n and progpath[i] != $22 and j < 31 {
+            progdir[j] = progpath[i]
             j++
-            if xtbuf[i] == '/'
+            if progpath[i] == '/'
                 cut = j
             i++
         }

@@ -9,3 +9,6 @@ build/
 run/*
 __pycache__/
 *.pyc
+
+# release ZIPs are build artifacts - attach them to a GitHub release, do not commit them
+release/
