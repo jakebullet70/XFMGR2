@@ -45,3 +45,4 @@
 - [Deployed filenames UPPERCASE](x16-deployed-filenames-uppercase.md) — lowercase source literal + UPPERCASE file on disk; the emulator hides the bug
 - [Viewer syntax coloring](xfmgr-syntax-coloring.md) — DONE build 187: xsyntax in bank 9, called by tview; find prompt moved there too
 - [CAPS LOCK breaks ALT/CTRL](x16-caps-lock-breaks-alt-ctrl.md) — DONE build 189: no API clears caps; shflag $A80C bank 0, verified before poking
+- [@Rn param clobber](prog8-rn-param-clobber.md) — never pass a call as an arg to an @Rn sub; r0 dies before the call, no warning

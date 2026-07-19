@@ -16,7 +16,8 @@
 
 %import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 %import strings
-%import textio             ; DEBUG: for the cfg-not-found halt message in cfg_read (remove with the debug block)
+; (no textio: the cfg-not-found DEBUG block that needed it is gone - it froze the program in a
+;  bare `repeat {}` whenever xfmgr.cfg was missing, which find_progdir's absolute paths now fix)
 
 themes {
     %option ignore_unused
@@ -72,40 +73,99 @@ themes {
 
     str  CFG_NAME = "xfmgr.cfg"
     ubyte[24] cfg_line                      ; cfg load buffer (read) / write buffer
-    ubyte[80] savedir                       ; cfg_read: caller's cwd, saved across the /xfmgr/ hop
+
+    ; ---- where the program lives (cfg + the .ovl overlays) ----
+    ; NOT hard-coded: the root launcher `XT` (a tokenized `10 LOAD"/XFMGR/XFMGR.PRG"`) already names
+    ; the folder XFMGR was installed into, so we read the path out of ITS quotes and keep everything
+    ; up to the last '/'. That makes the install location the installer's business alone - move the
+    ; programs, point XT at them, and the cfg + every overlay follow automatically. Ported from
+    ; x16-MSEDIT's SRC/theme.p8 (find_progdir / path_to), which does the same with its `ED` launcher.
+    ;
+    ; The bytes inside XT are the same PETSCII our string literals compile to (both put a-z at
+    ; $41-$5A), so the path can be copied straight out with no re-encoding.
+    ;
+    ; There is deliberately NO save/restore of the working directory anywhere below, and none is
+    ; needed: XT is read via an ABSOLUTE path ("/xt") and the folder parsed out of it is absolute
+    ; too, so every path path_to() builds resolves the same whatever cwd we were launched in. That
+    ; replaced an 80-byte savedir buffer and a chdir dance in cfg_read.
+    str  XT_NAME  = "/xt"                   ; the launcher, at the fsroot ROOT. ABSOLUTE on purpose:
+                                            ; it must be readable no matter which folder we were
+                                            ; launched from, and a bare "xt" would miss it.
+    str  DEF_DIR  = "/xfmgr/"               ; fallback when XT is missing/unparsable. Matches what the
+                                            ; installer creates, and what the old hard-coded
+                                            ; chdir("/xfmgr") assumed - so this is never a regression.
+    str  progdir  = "?" * 32                ; install folder incl. trailing slash (empty = at root)
+    str  progpath = "?" * 44                ; progdir + a filename, built by path_to()
+    ubyte[32] xtbuf                         ; XT launcher load buffer (the launcher is 28 bytes)
+    bool dir_known = false
+
+    sub find_progdir() {
+        ; Parse the install folder out of the root XT launcher; called once, lazily, by path_to().
+        dir_known = true
+        void strings.copy(DEF_DIR, progdir)
+        uword endaddr = diskio.load_raw(XT_NAME, &xtbuf)
+        if endaddr == 0 {
+            void diskio.status()            ; drop the FILE NOT FOUND (else the activity LED blinks)
+            return                          ; no launcher -> keep DEF_DIR
+        }
+        ubyte n = lsb(endaddr - &xtbuf)
+        if n > 32
+            n = 32
+        ; the quoted path inside the tokenized BASIC line:  LOAD "<path>"
+        ubyte i = 0
+        while i < n and xtbuf[i] != $22                 ; opening quote
+            i++
+        if i >= n
+            return                                      ; no quote -> keep DEF_DIR
+        i++
+        ubyte j = 0
+        ubyte cut = 0                                   ; chars up to and including the LAST '/'
+        while i < n and xtbuf[i] != $22 and j < 31 {
+            progdir[j] = xtbuf[i]
+            j++
+            if xtbuf[i] == '/'
+                cut = j
+            i++
+        }
+        progdir[cut] = 0                                ; drop the filename, keep the folder
+    }
+
+    sub progdir_cd() -> str {
+        ; The install folder with the trailing '/' stripped, ready for chdir().
+        ; Why this exists: CMDR-DOS `CD:` accepts a whole path, but `MD` is `MD[path]:name` - the
+        ; path goes BEFORE the colon, and diskio.mkdir() only ever emits "md:"+name. So a caller
+        ; that needs to CREATE a subfolder must chdir here first and then mkdir RELATIVELY;
+        ; mkdir("/xfmgr/hist") would ask for a directory whose *name* contains slashes.
+        ; ("/" at the root stays "/" - a bare "" is not a valid chdir target.)
+        if not dir_known
+            find_progdir()
+        void strings.copy(progdir, progpath)
+        ubyte n = lsb(strings.length(progpath))
+        if n > 1 and progpath[n-1] == '/'
+            progpath[n-1] = 0
+        return progpath
+    }
+
+    sub path_to(str fname) -> str {
+        ; progdir + fname, e.g. "/xfmgr/" + "tview.ovl". NOTE: one shared buffer - consume the
+        ; result before the next path_to() call (every caller passes it straight into a disk call).
+        if not dir_known
+            find_progdir()
+        void strings.copy(progdir, progpath)
+        void strings.append(progpath, fname)
+        return progpath
+    }
 
     sub cfg_read() -> ubyte {
         ; Return the saved theme id (1..LAST). Missing file / bad content -> 1 (Classic).
-        ; Self-contained: save the caller's current dir, hop into the program's /xfmgr/ folder (where
-        ; the cfg + overlays live), LOAD the cfg with a headerless KERNAL LOAD (diskio.load_raw - the
-        ; same cbm.LOAD the overlays' loadlib uses, just the honest name for raw data instead of a
-        ; library blob; NEVER f_open, whose read-channel traffic on an ABSENT file corrupted the
-        ; following UI draw / bottom-menu colors), then restore the original dir. load_raw returns 0
-        ; when the file isn't found. curdir() points into a transient shared buffer, so copy it out
-        ; BEFORE any other diskio call.
+        ; Reads <progdir>xfmgr.cfg by ABSOLUTE path (see find_progdir), so it needs no chdir and
+        ; leaves the caller's working directory untouched. Uses the headerless KERNAL LOAD
+        ; (diskio.load_raw - the same cbm.LOAD the overlays' loadlib uses, just the honest name for
+        ; raw data rather than a library blob); NEVER f_open, whose read-channel traffic on an
+        ; ABSENT file corrupted the following UI draw / bottom-menu colors. load_raw returns 0 when
+        ; the file isn't there.
         ubyte id = 1
-        void strings.copy(diskio.curdir(), savedir)
-        diskio.chdir("/xfmgr")               ; lowercase: petscii a-z -> $41-5A, the bytes the FS matches
-        ; ===== start DEBUG: only when the cfg is MISSING - dump vars + freeze so they can be read =====
-        ; diskio.exists() opens the file with f_open - the SAME read-channel traffic the production
-        ; path avoids (it corrupts the following UI draw on an ABSENT file). We halt right after, so
-        ; the corruption never reaches the screen: this is a diagnostic to eyeball WHY the cfg isn't
-        ; found from inside /xfmgr/. If it IS found, skip the probe entirely and load as normal.
-        ; Remove this whole block (and the textio import) when done.
-        if not diskio.exists(CFG_NAME) {
-            txt.print("\ncfg_read DEBUG - cfg NOT found\ncaller cwd: ")
-            txt.print(savedir)
-            txt.print("\nhere: ")
-            txt.print(diskio.curdir())      ; should be the program's /xfmgr/ folder
-            txt.print("\nlooked for: ")
-            txt.print(CFG_NAME)
-            txt.print("\n-- halted --")
-            repeat {
-                ; STOP: freeze here so the debug lines stay on screen (reset the emulator to exit)
-            }
-        }
-        ; ===== end DEBUG =====
-        uword endaddr = diskio.load_raw(CFG_NAME, &cfg_line)
+        uword endaddr = diskio.load_raw(path_to(CFG_NAME), &cfg_line)
         if endaddr != 0 {
             @(endaddr) = 0                  ; NUL-terminate the loaded bytes for the parser
             ; parse "theme=N": find '=' then take the following digit
@@ -118,17 +178,19 @@ themes {
                     id = d - '0'
             }
         }
-        diskio.chdir(savedir)               ; back to where the caller was
         if id < FIRST or id > LAST
             id = 1
         return id
     }
 
     sub cfg_write(ubyte id) {
-        ; Overwrite /xfmgr/xfmgr.cfg with "theme=<id>\r". Delete-then-open for a portable overwrite
-        ; (same trick hist_save uses).
-        diskio.delete(CFG_NAME)
-        if diskio.f_open_w(CFG_NAME) {
+        ; Overwrite <progdir>xfmgr.cfg with "theme=<id>\r". Delete-then-open for a portable
+        ; overwrite (same trick hist_save uses). Absolute path -> no chdir needed, and the caller's
+        ; working directory is left alone. path_to() is called twice rather than stashing its result
+        ; in another 44-byte buffer: it rebuilds the same string deterministically, so the second
+        ; call is just a strings.copy+append - far cheaper than the RAM here.
+        diskio.delete(path_to(CFG_NAME))
+        if diskio.f_open_w(path_to(CFG_NAME)) {
             void strings.copy("theme=", cfg_line)   ; 6 chars + NUL
             cfg_line[6] = '0' + id
             cfg_line[7] = 13                        ; CR
