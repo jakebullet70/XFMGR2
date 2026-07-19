@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 192          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 193          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -1562,7 +1562,7 @@ main {
             select_dir(xtree.vis_idx[uprow])
             box_open()                                      ; 2-row white box, like relog/copy
             box_left(CMDROW1, "Prune OK")
-            sys.wait(90)                                     ; show ~1.5s, then auto-dismiss (no keypress)
+            wait_or_key(90)                                  ; ~1.5s, or any key to dismiss sooner
             box_close()
         } else {
             flash("Prune failed (partial) - rescan the dir")
@@ -2113,7 +2113,7 @@ main {
             2 -> box_left(CMDROW2, "size")
             else -> box_left(CMDROW2, "name")
         }
-        sys.wait(45)                ; ~0.75s, then the menu repaints over it
+        wait_or_key(45)             ; ~0.75s, or any key; then the menu repaints over it
         box_close()
         dirty_files = true
         dirty_cmd = true            ; the ALT menu shows the active sort mode
@@ -2146,7 +2146,7 @@ main {
             box_append_uw(added)
             void strings.append(cm_dst, " new")
             box_left(CMDROW2, cm_dst)
-            sys.wait(120)
+            wait_or_key(120)
             box_close()
             return
         } else {
@@ -2164,7 +2164,7 @@ main {
         box_append_uw(xfiles.ft_count)
         void strings.append(cm_dst, " file(s)")
         box_left(CMDROW2, cm_dst)
-        sys.wait(90)               ; show the box ~2 seconds, then auto-dismiss
+        wait_or_key(90)            ; ~1.5s, or any key to dismiss sooner
         box_close()
     }
 
@@ -2529,8 +2529,27 @@ main {
         box_close()
     }
 
+    ; Hold a message for `jiffies` (1/60s each) OR until a key is pressed, whichever comes first.
+    ; uiutil has its own copy of this for the toasts it owns - a few dozen bytes duplicated is
+    ; cheaper than adding a jmptable entry and a cross-bank call just to share it.
+    ;
+    ; The buffer is DRAINED first: these boxes go up immediately after the command key that
+    ; caused them, so a still-queued keypress would blink the message away before it can be read.
+    sub wait_or_key(uword jiffies) {
+        while cbm.GETIN2() != 0 {
+            ; drain typeahead left over from the command that triggered this message
+        }
+        uword n = 0
+        while n < jiffies {
+            sys.waitvsync()                 ; one jiffy, same tick sys.wait() counts
+            if cbm.GETIN2() != 0
+                return
+            n++
+        }
+    }
+
     sub toast(str m) {
-        ; brief self-dismissing status (~1.5 s), no keypress.
+        ; brief self-dismissing status (~1.5 s), or any key to dismiss it sooner.
         box_open()
         if ui_ok
             ui_toast(m)

@@ -78,12 +78,32 @@ main {
     }
 
     sub ui_toast(uword mptr @R0) {
-        ; brief self-dismissing message (~1.5s), no keypress.
+        ; brief self-dismissing message (~1.5s), or any key to dismiss it sooner.
         do_toast(mptr)
     }
     sub do_toast(str m) {
         box_left(CMDROW1, m)
-        sys.wait(90)
+        wait_or_key(90)
+    }
+
+    ; Hold a message for `jiffies` (1/60s each) OR until a key is pressed, whichever comes first.
+    ; Replaces a bare sys.wait() at every toast site: the full linger is right when you want to
+    ; read the result, but maddening when you already know what it says and want to carry on.
+    ;
+    ; The buffer is DRAINED first. Toasts are shown immediately after the command key that caused
+    ; them, and on a repeat/typeahead that key is often still queued - without the drain the
+    ; message would blink past before it could be read, which is the opposite of the point.
+    sub wait_or_key(uword jiffies) {
+        while cbm.GETIN2() != 0 {
+            ; drain typeahead left over from the command that triggered this message
+        }
+        uword n = 0
+        while n < jiffies {
+            sys.waitvsync()                 ; one jiffy, same tick sys.wait() counts
+            if cbm.GETIN2() != 0
+                return
+            n++
+        }
     }
 
     sub ui_ask_yn(uword qptr @R0, ubyte default_yes @R1) -> ubyte {
@@ -199,7 +219,7 @@ main {
         void strings.append(cm_dst, " file(s)")
         box_left(CMDROW1, cm_dst)
         if failed == 0 and skipped == 0 {
-            sys.wait(120)
+            wait_or_key(120)
             return
         }
         cm_dst[0] = 0
@@ -208,7 +228,7 @@ main {
         append_uw(skipped)
         void strings.append(cm_dst, " skipped")
         box_left(CMDROW2, cm_dst)
-        sys.wait(200)                            ; linger a little on problems
+        wait_or_key(200)                         ; linger a little on problems
     }
 
     sub ui_banner_delete(uword done @R0) {
@@ -220,7 +240,7 @@ main {
         append_uw(done)
         void strings.append(cm_dst, " file(s)")
         box_left(CMDROW1, cm_dst)
-        sys.wait(120)
+        wait_or_key(120)
     }
 
     sub ui_copy_diag(ubyte failcode @R0, ubyte wstat @R1) {
@@ -327,7 +347,7 @@ main {
         aboutln(2,  "X F M G R")
         aboutln(4,  "An XTree-style file manager")
         aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Beta Version 1.0.192")     ; bump the last number with BUILD_NUM in xfmgr.p8
+        aboutln(7,  "Beta Version 1.0.193")     ; bump the last number with BUILD_NUM in xfmgr.p8
         ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
         txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
         txt.print("Banked RAM: ")

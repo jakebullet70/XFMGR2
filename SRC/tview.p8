@@ -639,11 +639,22 @@ main {
     }
 
     sub view_notify(str m) {
-        ; brief footer message (auto-dismissed by the next footer repaint)
+        ; Brief footer message (auto-dismissed by the next footer repaint), or any key to cut it
+        ; short. Inline rather than a wait_or_key() helper like xfmgr/uiutil have: this is the
+        ; only such site in the viewer and bank 2 has ~127 bytes of headroom, so it pays for the
+        ; loop but not for a sub around it. Drain first - the key that opened this message is
+        ; often still queued (see the note in xfmgr.wait_or_key).
         bar_fill(SCR_BOT)
         txt.plot(0, SCR_BOT)
         txt.print(m)
-        sys.wait(75)
+        while cbm.GETIN2() != 0 {
+        }
+        ubyte n
+        for n in 0 to 74 {
+            sys.waitvsync()
+            if cbm.GETIN2() != 0
+                return
+        }
     }
 
     sub view_jump() {

@@ -89,7 +89,15 @@ main {
             txt.print("\n image load error: ")
             txt.print(bmx.error_message)
             txt.nl()
-            sys.wait(120)
+            ; ~2s, or any key - drain first so the key that opened the image doesn't skip it
+            while cbm.GETIN2() != 0 {
+            }
+            ubyte n
+            for n in 0 to 119 {
+                sys.waitvsync()
+                if cbm.GETIN2() != 0
+                    break
+            }
         }
     }
 }

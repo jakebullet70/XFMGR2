@@ -105,7 +105,16 @@ main {
         clear_msg_row()
         txt.plot(BX0 + 2, BY1 - 4)
         txt.print("History cleared")
-        sys.wait(120)                               ; ~2 seconds at 60 Hz
+        ; ~2s at 60 Hz, or any key to dismiss sooner. Drain first: the 'H' that triggered this
+        ; is often still queued and would blink the message away unread.
+        while cbm.GETIN2() != 0 {
+        }
+        ubyte n
+        for n in 0 to 119 {
+            sys.waitvsync()
+            if cbm.GETIN2() != 0
+                break
+        }
         clear_msg_row()
     }
 
