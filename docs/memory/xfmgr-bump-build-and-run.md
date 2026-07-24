@@ -8,8 +8,13 @@ metadata:
 ---
 
 After making ANY code change to XFMGR, before handing back: **bump the build number by 1** — the
-simplest is `const ubyte BUILD_NUM` in `SRC/xfmgr.p8` (~line 42) — then run `run.bat`. Do NOT stop at
-building; the user tests in the emulator themselves ([[user-tests-in-emulator-themselves]]).
+simplest is `const ubyte BUILD_NUM` in `SRC/xfmgr.p8` (~line 42) — then `build.bat` **then** `run.bat`.
+Do NOT stop at building; the user tests in the emulator themselves ([[user-tests-in-emulator-themselves]]).
+
+**As of 2026-07-24 the bats are split by responsibility (user request):** `build.bat` = compile only
+(it owns the BUILD_NUM sync + memstats), `run.bat` = **stage-and-launch only, it no longer compiles**
+(copies `build\` into `run\`, then starts the emulator; errors out if `build\xfmgr.prg` is missing),
+`release.bat` = build + zip. So the test loop is now two commands: `build.bat` then `run.bat`.
 
 **You no longer hand-edit the number in every file.** `build.bat` calls `syncbuild.ps1` (repo root)
 BEFORE the compile, on full builds only (`SRC==xfmgr.p8`). It reads the build number from all FOUR
@@ -33,8 +38,8 @@ file (not threaded through the uiutil overlay's extsub boundary — the user rej
 FRESH binary, not a stale one (asked for explicitly 2026-07-03). "Largest wins" means a bump in any
 file can't be silently lost to a lower value elsewhere.
 
-**How to apply:** edit BUILD_NUM (+1), then `& ".\run.bat" xfmgr.p8` from the repo root. run.bat is
-non-blocking (START launches the GUI) — report the new build number + what to check, don't drive the
-GUI. Include the memory-stats block ([[always-report-mem-stats]]). syncbuild.ps1 / build.bat / run.bat
+**How to apply:** edit BUILD_NUM (+1), then `& ".\build.bat"` and `& ".\run.bat"` from the repo root
+(build first — run.bat only stages+launches now). run.bat is non-blocking (START launches the GUI) —
+report the new build number + what to check, don't drive the GUI. Include the memory-stats block ([[always-report-mem-stats]]). syncbuild.ps1 / build.bat / run.bat
 are part of the (currently uncommitted) installer WIP as of 2026-07-06. Related:
 [[prog8-build-toolchain]], [[xfmgr-architecture]].

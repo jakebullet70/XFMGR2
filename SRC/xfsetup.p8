@@ -213,9 +213,12 @@ main {
         cx16.set_screen_mode(saved_mode)
         txt.chrout($93)                     ; clear, cursor home (row 0)
         txt.nl()                            ; row 1 (BASIC "READY." overwrites)
-        txt.print("load")                   ; row 2: LOAD"/xfmgr/xfmgr.prg"
+        txt.print("load")                   ; row 2: LOAD"<install>/xfmgr.prg"
         txt.chrout($22)
-        txt.print("/xfmgr/xfmgr.prg")
+        ; install folder from the /xt launcher (themes.path_to), NOT hard-coded "/xfmgr/" - so the
+        ; relaunch finds xfmgr.prg wherever it was installed (e.g. /utils/xfmgr/). cfg_read at start()
+        ; already primed progdir, so this is just a buffer build.
+        txt.print(themes.path_to("xfmgr.prg"))
         txt.chrout($22)
         txt.chrout($91)                     ; cursor UP -> row 1
         txt.chrout($91)                     ; cursor UP -> row 0
