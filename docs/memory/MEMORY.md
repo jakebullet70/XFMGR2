@@ -46,3 +46,10 @@
 - [Viewer syntax coloring](xfmgr-syntax-coloring.md) — DONE build 187: xsyntax in bank 9, called by tview; find prompt moved there too
 - [CAPS LOCK breaks ALT/CTRL](x16-caps-lock-breaks-alt-ctrl.md) — DONE build 189: no API clears caps; shflag $A80C bank 0, verified before poking
 - [@Rn param clobber](prog8-rn-param-clobber.md) — never pass a call as an arg to an @Rn sub; r0 dies before the call, no warning
+- [Viewer ISO/PET toggle (backlog)](xfmgr-viewer-iso-pet-toggle.md) — viewer should render both ISO/ASCII and PETSCII and switch live (per-byte remap, not ISO mode)
+- [Software Caps uppercase input (backlog)](xfmgr-software-caps-uppercase-input.md) — type capitals in prompts via MSEDIT's upper_mode fold-at-insert; KERNAL caps stays off
+- [File text search (backlog)](xfmgr-file-text-search.md) — grep file CONTENTS across the disk; distinct from find-file-by-name and the in-viewer find
+- [Viewer line-number gutter (backlog)](xfmgr-viewer-line-gutter.md) — optional toggle gutter in tview; port MSEDIT ln_on/gutter_w
+- [Restore font after X16 Edit (backlog)](xfmgr-restore-font-after-x16edit.md) — op_edit should re-select the charset after the modal ROM editor returns; 2KB->file only if a custom font is in use
+- [Viewer Find history (backlog)](xfmgr-viewer-find-history.md) — up-arrow history for tview's in-file Find (read_find, bank 9); ring is bank 3 via JSRFAR
+- [BASLOAD syntax review (backlog)](xfmgr-basload-syntax-review.md) — review viewer's BASLOAD coloring vs the real spec; cross-check MSEDIT syntax.p8 / basload.md
