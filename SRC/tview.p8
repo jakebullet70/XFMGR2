@@ -52,7 +52,7 @@ main {
     extsub @bank 9 $A006 = syn_paint(ubyte slen @R0, ubyte mode @R1, ubyte row @R2, ubyte col @R3, uword mrange @R4)
     extsub @bank 9 $A009 = syn_probe() -> ubyte @A
     extsub @bank 9 $A00C = syn_detect_ovl(uword nameptr @R0) -> ubyte @A
-    extsub @bank 9 $A00F = syn_read_find(uword outptr @R0) -> ubyte @A
+    extsub @bank 9 $A00F = syn_read_find(uword outptr @R0, ubyte histcount @R1) -> ubyte @A
     const ubyte SYN_PROBE_MAGIC = $5a   ; must match syntax.PROBE_MAGIC in xsyntax.p8
 
     ; Geometry now lives in shared-const so xsyntax's color pass walks the SAME cells this
@@ -90,6 +90,7 @@ main {
     ubyte view_page                    ; text-mode current page index
     ubyte view_known                   ; text-mode highest page index with a known offset
     ubyte[34] view_find                ; in-file search term (<= 32 chars + NUL); uninit -> BSS
+    ubyte vhist                        ; viewfind history entry count for read_find (255 = history off)
     long view_next                     ; offset to resume "find next" from
     long view_match                    ; offset of the last search hit
     ubyte saved_page                   ; text page stashed across a hex excursion (H toggle)
@@ -127,10 +128,13 @@ main {
         ; do NO UI or system init (the caller/XFMGR owns the screen). Call ONCE after load.
     }
 
-    sub view_file(uword nameptr @R0) {
+    sub view_file(uword nameptr @R0, ubyte histcount @R1) {
         ; real entry ($A003 via the jmptable). Copy the filename FIRST - diskio/strings
-        ; calls clobber cx16.r0-r3, so consume the @R0 pointer before anything else.
+        ; calls clobber cx16.r0-r3, so consume the @Rn params before anything else.
         ; The caller keeps XFMGR in screen mode $01 and repaints after we return.
+        ; histcount = primed viewfind-history entries for the F prompt (255 = history off); main
+        ; loaded the ring before this call and saves it after, so we just carry the count to read_find.
+        vhist = histcount               ; capture @R1 before strings.copy clobbers r0-r3
         void strings.copy(nameptr, namebuf)
         zsm_detect()                    ; set is_zsm + fill zsm_hdr before the view loop
         syn_detect()                    ; pick BASIC/Markdown/off from the file extension
@@ -653,7 +657,7 @@ main {
         view_find[0] = 0
         if not syn_avail
             return false            ; no bank 9 -> no prompt (F silently does nothing)
-        if syn_read_find(syn_line_p) == 0
+        if syn_read_find(syn_line_p, vhist) == 0
             return false
         void strings.copy(syn_line_p, view_find)
         return true
@@ -812,11 +816,8 @@ main {
                 bar_key("C")
                 txt.print("olor  ")
             }
-            bar_key("I")                    ; I cycles the text encoding; label shows the CURRENT one
-            if view_pet
-                txt.print(":PET  ")
-            else
-                txt.print(":ISO  ")
+            bar_key("I")                    ; I toggles text encoding ISO/ASCII <-> PETSCII. No live
+            txt.print("SO  ")               ; mode label (bank 2 is full) - the text readability shows it.
             bar_key("Q")
             txt.print("uit")
             ; Space=find-next hint, shown only while a search term is active (view_find non-empty)

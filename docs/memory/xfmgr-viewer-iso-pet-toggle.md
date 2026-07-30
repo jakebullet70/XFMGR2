@@ -12,9 +12,11 @@ reset per file in view_file); `content_scr(b)` is the whole switch - view_pet fa
 existing `scr_of` (ASCII/ISO), true maps via `txt.petscii2scr` (PETSCII), non-printables in the active
 encoding -> '.'. The text render loop and the hex ASCII sidebar both draw through content_scr on the RAW
 byte; syntax classify still gets the ASCII-clamped byte (a separate `sc` local) so coloring is stable
-across the toggle. Footer shows `I:ISO` / `I:PET`; the `'i'` key flips view_pet. Page boundaries are
-byte-based (CR/LF), so they don't move - the toggle just re-renders the current page. The machine charset
-never changes (XFMGR's UI + Alt/Ctrl keys stay safe). Cost: tview.ovl still fit its bank.
+across the toggle. The `'i'` key flips view_pet. Page boundaries are byte-based (CR/LF), so they don't
+move - the toggle just re-renders the current page. The machine charset never changes (XFMGR's UI +
+Alt/Ctrl keys stay safe). **Footer:** originally showed a live `I:ISO`/`I:PET` mode label, but build 198
+(viewer Find history, [[xfmgr-viewer-find-history]]) needed the bytes - bank 2 was full - so it was cut
+to a fixed `ISO` key hint; the text's own readability shows which mode is active.
 
 **DEFERRED (still backlog):** the five ISO-only glyphs `{ } \ | ~` glyph patch (MSEDIT font_setup/
 font_xfer) - in ASCII/ISO mode those still render as their `scr_of` approximation, and `_`/backtick are

@@ -50,6 +50,6 @@
 - [Software Caps uppercase input](xfmgr-software-caps-uppercase-input.md) — DONE build 196: Caps Lock key toggles upper_mode; folds letters to capitals at insert, normalized to ASCII on ENTER
 - [File text search (backlog)](xfmgr-file-text-search.md) — grep file CONTENTS across the disk; distinct from find-file-by-name and the in-viewer find
 - [Viewer line-number gutter (backlog)](xfmgr-viewer-line-gutter.md) — optional toggle gutter in tview; port MSEDIT ln_on/gutter_w
-- [Restore font after X16 Edit (backlog)](xfmgr-restore-font-after-x16edit.md) — op_edit should re-select the charset after the modal ROM editor returns; 2KB->file only if a custom font is in use
-- [Viewer Find history (backlog)](xfmgr-viewer-find-history.md) — up-arrow history for tview's in-file Find (read_find, bank 9); ring is bank 3 via JSRFAR
+- [Restore font after X16 Edit](xfmgr-restore-font-after-x16edit.md) — DONE build 203: op_edit force-reloads charset 3 (screen_set_charset(3,0)) + clears ISO flag; txt.lowercase()/saved_charset were both wrong
+- [Viewer Find history](xfmgr-viewer-find-history.md) — DONE build 198: up-arrow recalls terms (viewfind ring); main loads/saves around view_file, read_find uses cwd-safe hist_get/store
 - [BASLOAD syntax review (backlog)](xfmgr-basload-syntax-review.md) — review viewer's BASLOAD coloring vs the real spec; cross-check MSEDIT syntax.p8 / basload.md

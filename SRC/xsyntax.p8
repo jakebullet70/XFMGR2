@@ -85,21 +85,47 @@ syntax {
         return PROBE_MAGIC
     }
 
-    sub read_find(uword outptr @R0) -> ubyte {
+    ; shared input-history ring lives in the miscutil overlay (bank 3); bank-to-bank JSRFAR is legal
+    ; (the limit is data visibility, not the call). We use ONLY the two cwd-SAFE ops - hist_get
+    ; (recall) and hist_store (accept). hist_load/hist_save chdir, which would pull the cwd out from
+    ; under the viewer's relative f_open(namebuf), so MAIN runs those around view_file and hands us
+    ; the primed count.
+    extsub @bank 3 $A00C = hist_store(uword sptr @R0) -> ubyte @A
+    extsub @bank 3 $A012 = hist_get(ubyte slot @R0, uword out @R1)
+
+    sub find_recall_hint() {
+        ; UP-arrow = recall hint, right-justified on the Find row. Drawn ONLY when history exists, so
+        ; we never advertise a key that would do nothing. The caller re-plots to the field afterwards.
+        txt.plot(70, shared.VIEW_BOT)
+        txt.print(petscii:"↑ Recent")
+    }
+
+    sub read_find(uword outptr @R0, ubyte histcount @R1) -> ubyte {
         ; entry ($A00F). Read a search term on the viewer's footer row and write it to outptr
         ; (MAIN RAM - tview's own buffers are in bank 2 and invisible here). Returns the length;
         ; 0 means cancelled or empty. Lives in this bank purely to reclaim space in tview's, which
         ; ran out entirely; it is viewer chrome, not syntax coloring.
         ;
+        ; histcount = primed "viewfind" history entries (main called hist_load first), or 255 when
+        ; history is unavailable (bank 3 not loaded) -> UP does nothing and we never call into it.
+        ; Capture BOTH @Rn params up front, before any strings/txt call clobbers r0-r3.
+        ;
         ; Keys are stored RAW, exactly as tview did it. They arrive as PETSCII, while file content
         ; is ASCII - tview's view_fold reconciles the two (PETSCII 'a' $41 +$20 -> $61 = ASCII 'a',
         ; and ASCII $61 is already $61). Folding here would break that.
         uword outp = outptr
+        ubyte hcount = histcount
+        bool hist_on = hcount != 255
+        if not hist_on
+            hcount = 0
+        ubyte hsel = 255                ; recall cursor: 255 = nothing recalled yet
         bar_fill(shared.VIEW_BOT)
         txt.plot(0, shared.VIEW_BOT)
         ; petscii: overrides this module's iso default - the viewer runs in the PETSCII charset,
         ; so an ISO-encoded literal would come out as garbage glyphs through txt.print.
         txt.print(petscii:" Find: ")
+        if hist_on and hcount != 0
+            find_recall_hint()          ; advertise UP=recall when there's something to recall
         ubyte n = 0
         @(outp) = 0
         txt.plot(7, shared.VIEW_BOT)
@@ -107,6 +133,8 @@ syntax {
             ubyte k = wait_key()
             if k == 13 {
                 @(outp + n) = 0
+                if hist_on and n != 0
+                    void hist_store(outp)   ; add to the ring (bank 3, in-memory, cwd-safe); main saves
                 return n
             }
             if k == 27 or k == 3 {
@@ -120,6 +148,30 @@ syntax {
                     txt.plot(7 + n, shared.VIEW_BOT)
                     txt.spc()
                     txt.plot(7 + n, shared.VIEW_BOT)
+                }
+            } else if k == 145 {            ; up-arrow: recall an earlier find term (inline cycle)
+                if hist_on and hcount != 0 {
+                    if hsel == 255
+                        hsel = 0
+                    else {
+                        hsel++
+                        if hsel >= hcount
+                            hsel = 0
+                    }
+                    hist_get(hsel, outp)    ; bank 3: copy ring slot -> outp (cwd-safe memory copy)
+                    n = 0
+                    while @(outp + n) != 0 and n < 32
+                        n++
+                    bar_fill(shared.VIEW_BOT)          ; repaint prompt + recalled term
+                    txt.plot(0, shared.VIEW_BOT)
+                    txt.print(petscii:" Find: ")
+                    find_recall_hint()                 ; still recalling -> history exists, always show
+                    txt.plot(7, shared.VIEW_BOT)
+                    ubyte pi = 0
+                    while pi < n {
+                        txt.chrout(@(outp + pi))
+                        pi++
+                    }
                 }
             } else {
                 if k >= $c1 and k <= $da

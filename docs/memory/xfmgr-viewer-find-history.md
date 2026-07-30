@@ -1,10 +1,24 @@
 ---
 name: xfmgr-viewer-find-history
-description: "Backlog: give the viewer's in-file Find prompt up-arrow input history, like XFMGR's main prompts have"
+description: "DONE build 198: viewer Find prompt gets up-arrow history (viewfind ring); main loads/saves around view_file, read_find recalls via cwd-safe hist_get/hist_store"
 metadata:
   node_type: memory
   type: project
   originSessionId: 50cbdaf9-8664-4cd5-8a51-deebebebd509
+---
+
+**DONE build 198 (2026-07-24).** Up-arrow now recalls earlier terms in the viewer's Find prompt, on its
+OWN "viewfind" ring (str VIEWFIND_CAT in xfmgr.p8). Division forced by the cwd hazard: `hist_load`/
+`hist_save` chdir, which would break the viewer's RELATIVE `f_open(namebuf)`, so **main** runs them
+around `view_file` (load before + `chdir(pathbuf)` to restore; save after) and passes the primed count
+as `view_file(&namebuf, histcount)` (255 = history off). `read_find` (xsyntax, bank 9) uses only the
+cwd-SAFE bank-3 ops it declares itself - `hist_get` (up-arrow inline cycle 0..count-1, wraps) and
+`hist_store` (on ENTER) - never hist_load/save. Count threads main -> view_file (tview `vhist`) ->
+read_find. bank 9 had 5 KB free; bank 2 (tview) was FULL - the find-history threading overflowed it by
+15 B, reclaimed by dropping the encoding footer's live ISO/PET mode label (build 197) to a fixed "ISO"
+key hint. **Build 199:** the Find prompt shows a right-justified `↑ Recent` hint (find_recall_hint in
+xsyntax) whenever history exists, so the key is discoverable. Original design notes below.
+
 ---
 
 **Backlog (added 2026-07-24).** The text viewer's in-file **Find** prompt should get **up-arrow input

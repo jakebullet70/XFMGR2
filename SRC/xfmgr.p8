@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 197          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 203          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -222,6 +222,8 @@ main {
     ; picker geometry) and a one-entry scratch line the picker fills from the overlay via hist_get.
     ubyte hist_count                        ; cached copy of the overlay's ring count (0..10)
     ubyte[50] hist_line                     ; picker's receive buffer for one ring entry (<=49 + NUL)
+    str VIEWFIND_CAT = "viewfind"           ; history category for the viewer's in-file Find prompt -
+                                            ; its OWN ring, separate from Ctrl-F find-file's "find"
 
     ; --- banked file viewer (tview) overlay ---
     ; tview.p8 is compiled as a %output library headerless blob (org $A000) and loaded into
@@ -229,7 +231,7 @@ main {
     ; mapping the bank around it. $A000 = library init (jmp start); $A003 = view_file entry.
     const ubyte VIEW_BANK = 2
     extsub @bank 2 $A000 = tview_init()
-    extsub @bank 2 $A003 = view_file(uword nameptr @R0)
+    extsub @bank 2 $A003 = view_file(uword nameptr @R0, ubyte histcount @R1)
     ; $A006 hands tview the syntax-coloring setup: whether xsyntax.ovl loaded, and the two
     ; MAIN-RAM buffers the two overlays share. They must be main-RAM (not in either bank),
     ; because while bank 9 is mapped tview's own bank-2 RAM is invisible - see SYN_BANK below.
@@ -1045,7 +1047,24 @@ main {
                         txt.lowercase()                 ; CINT/set_screen_mode reset the charset to uppercase
                         txt.color2(shared.CLR_FG, shared.CLR_BG)   ; restore app theme after CINT reset the palette
                     } else if viewer_ok {
-                        view_file(&namebuf)             ; tview reads via its own bank-2 buffer (returns on Q/ESC)
+                        ; Prime the viewer's in-file Find history: load the "viewfind" ring BEFORE the
+                        ; viewer (read_find recalls from it) and save it AFTER (read_find added any
+                        ; accepted term to the in-memory ring). hist_load/hist_save chdir to the install
+                        ; dir, so restore the file's dir each time - the viewer f_opens namebuf
+                        ; RELATIVE to cwd. progdir_cd() hoisted into a local (its result is hist_*'s
+                        ; @R1, and passing the call inline would clobber @R0 first - see input_line).
+                        ubyte vhc = 255                 ; 255 = Find history unavailable (miscutil absent)
+                        if misc_ok {
+                            uword hd = themes.progdir_cd()
+                            vhc = hist_load(VIEWFIND_CAT, hd)
+                            diskio.chdir(pathbuf)
+                        }
+                        view_file(&namebuf, vhc)        ; tview reads via its own bank-2 buffer (returns on Q/ESC)
+                        if misc_ok {
+                            uword hd2 = themes.progdir_cd()
+                            hist_save(VIEWFIND_CAT, hd2)
+                            diskio.chdir(pathbuf)       ; leave cwd where the pre-history code did
+                        }
                         txt.color2(shared.CLR_FG, shared.CLR_BG)   ; viewer left the text color blue; restore app theme
                                                      ; (full_redraw's blanks use the current color)
                     } else {
@@ -2222,6 +2241,27 @@ main {
             mkword(shared.HILITE, shared.HILITE))                        ; header / status: light-blue bar (app accent)
         cx16.rombank(oldrom)
         sys.disable_caseswitch()
+        ; X16 Edit's Ctrl-E ("change font") OVERWRITES the charset glyphs in VRAM and can leave the
+        ; machine in ISO mode - and restores neither on exit. Two independent breakages:
+        ;   1) ISO mode = KERNAL flag $0372 bit $40. With it set, CHROUT reads bytes as ISO/ASCII, so
+        ;      file names (raw ASCII) render fine but XFMGR's PETSCII UI + box chrome garble.
+        ;   2) The PETSCII font copy in VRAM is clobbered by Ctrl-E's glyph upload.
+        ; txt.lowercase() is only CHROUT($0e): it just toggles the KERNAL's selected mode and no-ops when
+        ; that mode is unchanged, so it never re-copies the ROM glyphs and can't repair (2). Only
+        ; screen_set_charset(n,0) FORCE-reloads the ROM font into VRAM (0 ptr = built-in). Recover fully:
+        ; reinit the 80x30 layer, reload charset 3 (PETSCII upper/lower = XFMGR's RUNNING display font,
+        ; the one txt.lowercase() selects at startup - NOT saved_charset, which is the pre-launch charset
+        ; kept only for final exit), then clear the ISO flag, then restore theme colors. Reloading the
+        ; wrong charset (e.g. 2/upper-graphics) renders letters but garbles the box chrome, whose codes
+        ; are laid out for charset 3. Caller's dirty_full repaints over it.
+        cx16.set_screen_mode(SCREEN_MODE)               ; reinit 80x30 layer + charset tile base
+        cx16.screen_set_charset(3, 0)                   ; FORCE-reload PETSCII upper/lower ROM font to VRAM
+        %asm {{
+            lda  $0372
+            and  #$bf                       ; clear bit $40 -> leave ISO mode, back to PETSCII CHROUT
+            sta  $0372
+        }}
+        txt.color2(shared.CLR_FG, shared.CLR_BG)
         diskio.chdir(pathbuf)                   ; X16Edit can change dir; restore ours
     }
 
@@ -2374,7 +2414,7 @@ main {
             return
         }
         void strings.copy(themes.path_to("xfmgr.hlp"), namebuf)
-        view_file(&namebuf)                         ; returns on Q/ESC
+        view_file(&namebuf, 255)                    ; returns on Q/ESC (255 = no Find history for help)
         txt.color2(shared.CLR_FG, shared.CLR_BG)    ; viewer left the color blue; restore app theme
     }
 
