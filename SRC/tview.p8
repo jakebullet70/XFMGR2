@@ -818,13 +818,15 @@ main {
             }
             bar_key("I")                    ; I toggles text encoding ISO/ASCII <-> PETSCII. No live
             txt.print("SO  ")               ; mode label (bank 2 is full) - the text readability shows it.
-            bar_key("Q")
-            txt.print("uit")
-            ; Space=find-next hint, shown only while a search term is active (view_find non-empty)
+            bar_key("Esc")                  ; ESC quits (so does Q); labelled Esc to save room for the
+                                            ; right-justified position indicator when a find is active.
+            ; Space=find-next hint, shown only while a search term is active (view_find non-empty).
+            ; Kept tight (no parens/leading pad) so it butts up against, but never overruns, the
+            ; position indicator that gets right-justified below.
             if view_find[0] != 0 {
-                txt.print("   (")
+                txt.print("  ")
                 bar_key("Space")
-                txt.print(":Next)")
+                txt.print(":Next")
             }
             ; right-justify the position indicator (page/offset [+ END]) against the right edge.
             ; w = width of what we print; start col 79-w ends it at col 78 - never col 79, which
