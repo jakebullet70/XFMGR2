@@ -84,6 +84,8 @@ main {
     long[64] view_pages
     bool view_eof                      ; the last rendered page reached end-of-file
     bool view_hex                      ; viewer showing hex dump (vs text)
+    bool view_pet                      ; text encoding: false = ASCII/ISO (default), true = PETSCII.
+                                       ; A DISPLAY switch only (read-only viewer) - see content_scr.
     long view_off                      ; hex-mode current page top offset
     ubyte view_page                    ; text-mode current page index
     ubyte view_known                   ; text-mode highest page index with a known offset
@@ -255,6 +257,23 @@ main {
         return b - $40                  ; @ ($40->$00), [ \ ] ^ _ ($5B-$5F -> $1B-$1F)
     }
 
+    sub content_scr(ubyte b) -> ubyte {
+        ; Map a file byte to a screen code for the CURRENT text encoding - this one branch IS the
+        ; ISO<->PETSCII display switch. Default (view_pet false) reads the file as ASCII/ISO via
+        ; scr_of; view_pet true reads it as PETSCII via txt.petscii2scr. Codes that aren't printable
+        ; in the active encoding show as '.'. The machine charset NEVER changes (that would garble
+        ; XFMGR's own PETSCII UI + box chrome and break the Alt/Ctrl command keys - see the ISO
+        ; memory note); only how each content byte is interpreted onto the shared PETSCII font.
+        if view_pet {
+            if b < 32 or (b >= 128 and b < 160)
+                return $2e              ; PETSCII control / color codes -> '.' (screencode $2E)
+            return txt.petscii2scr(b)
+        }
+        if b < 32 or b > 126
+            return $2e                  ; non-ASCII-printable -> '.'
+        return scr_of(b)
+    }
+
     ; ---------- text page render ----------
 
     sub view_render(long start_off, bool draw) -> long {
@@ -337,8 +356,6 @@ main {
                         break
                     }
                 } else {
-                    if ch < 32 or ch > 126
-                        ch = '.'
                     if docolor {
                         ; Anchor the line lazily at its FIRST drawn char. Doing it here rather than
                         ; at the CR/LF handler is what makes CR/LF pairs (the LF is swallowed
@@ -348,18 +365,23 @@ main {
                             ln_row = row
                             ln_col = col
                         }
-                        ; Store the CLAMPED byte so column k of the buffer is exactly the glyph in
-                        ; column k on screen. Past the cap we keep drawing; the tail stays default.
+                        ; Store the ASCII-CLAMPED byte so classify (which expects ASCII) sees stable
+                        ; input regardless of the display encoding - the ISO/PETSCII toggle is a glyph
+                        ; flip, not a re-encode - and so column k of the buffer is column k on screen.
                         if ln_len < shared.SYN_LINE_MAX {
-                            @(syn_line_p + ln_len) = ch
+                            ubyte sc = ch
+                            if sc < 32 or sc > 126
+                                sc = '.'
+                            @(syn_line_p + ln_len) = sc
                             ln_len++
                         }
                     }
                     if draw {
-                        ; setchr writes the screen code straight to VRAM - no PETSCII control-code
-                        ; interpretation, so no byte value can scroll the view. setclr paints only
-                        ; the find-highlight cells; the rest keep the blanked content color.
-                        txt.setchr(col, VTOP + row, scr_of(ch))
+                        ; content_scr maps the RAW byte to a screen code for the current encoding
+                        ; (ASCII/ISO or PETSCII). setchr writes it straight to VRAM - no PETSCII
+                        ; control-code interpretation, so no byte value can scroll the view. setclr
+                        ; paints only the find-highlight cells; the rest keep the content color.
+                        txt.setchr(col, VTOP + row, content_scr(ch))
                         if plen != 0 and consumed-1 >= view_match and consumed-1 < mend {
                             txt.setclr(col, VTOP + row, (shared.FIND_BG << 4) | shared.FIND_FG)
                             ; Reuse this 32-bit verdict to note the hit's line-relative columns, so
@@ -465,10 +487,9 @@ main {
             }
             txt.spc()
             for i in 0 to cnt-1 {
-                ubyte ch = viewbuf[i]
-                if ch < 32 or ch > 126
-                    ch = '.'
-                txt.setchr(57 + i, VTOP + row, scr_of(ch))   ; ascii col = 57 (6+2+48+1); setchr, not chrout
+                ; content_scr clamps + maps for the active encoding, so the hex sidebar reads the
+                ; same way (ASCII/ISO or PETSCII) the text page does.
+                txt.setchr(57 + i, VTOP + row, content_scr(viewbuf[i]))   ; ascii col = 57 (6+2+48+1); setchr
             }
             off += cnt
             row++
@@ -751,6 +772,7 @@ main {
         txt.print(" VIEW: ")
         print_trunc(namebuf, 60)
         view_hex = false
+        view_pet = false                   ; every file opens in the default ASCII/ISO reading; I toggles
         view_off = 0
         view_page = 0
         view_known = 0
@@ -790,6 +812,11 @@ main {
                 bar_key("C")
                 txt.print("olor  ")
             }
+            bar_key("I")                    ; I cycles the text encoding; label shows the CURRENT one
+            if view_pet
+                txt.print(":PET  ")
+            else
+                txt.print(":ISO  ")
             bar_key("Q")
             txt.print("uit")
             ; Space=find-next hint, shown only while a search term is active (view_find non-empty)
@@ -930,6 +957,9 @@ main {
                     else
                         syn_mode = syn_auto
                 }
+                'i' -> view_pet = not view_pet  ; I: read the file as ASCII/ISO <-> PETSCII. Page
+                                                ; boundaries are byte-based (CR/LF), so they don't move -
+                                                ; the loop just re-renders this page with the new glyphs.
             }
         }
     }

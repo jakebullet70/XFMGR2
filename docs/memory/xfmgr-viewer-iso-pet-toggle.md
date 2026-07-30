@@ -1,10 +1,26 @@
 ---
 name: xfmgr-viewer-iso-pet-toggle
-description: "Backlog: text viewer should render both ISO/ASCII and PETSCII and let the user switch encodings live"
+description: "DONE build 197: viewer I key toggles ISO/ASCII <-> PETSCII display (content_scr per-byte remap); { } \\ | ~ glyph patch deferred"
 metadata:
   node_type: memory
   type: project
   originSessionId: 50cbdaf9-8664-4cd5-8a51-deebebebd509
+---
+
+**DONE build 197 (2026-07-24) - core shipped.** In tview.p8: `bool view_pet` (false = ASCII/ISO default,
+reset per file in view_file); `content_scr(b)` is the whole switch - view_pet false maps a byte via the
+existing `scr_of` (ASCII/ISO), true maps via `txt.petscii2scr` (PETSCII), non-printables in the active
+encoding -> '.'. The text render loop and the hex ASCII sidebar both draw through content_scr on the RAW
+byte; syntax classify still gets the ASCII-clamped byte (a separate `sc` local) so coloring is stable
+across the toggle. Footer shows `I:ISO` / `I:PET`; the `'i'` key flips view_pet. Page boundaries are
+byte-based (CR/LF), so they don't move - the toggle just re-renders the current page. The machine charset
+never changes (XFMGR's UI + Alt/Ctrl keys stay safe). Cost: tview.ovl still fit its bank.
+
+**DEFERRED (still backlog):** the five ISO-only glyphs `{ } \ | ~` glyph patch (MSEDIT font_setup/
+font_xfer) - in ASCII/ISO mode those still render as their `scr_of` approximation, and `_`/backtick are
+unmapped, same known limit MSEDIT documents. Auto-sniff-on-open (byte histogram) also not done; encoding
+is manual via I. Original design notes with the MSEDIT file:line references kept below.
+
 ---
 
 **Backlog (added 2026-07-24).** The text viewer (tview, [[xfmgr-drop-viewer-ram]]) should support
