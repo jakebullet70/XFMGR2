@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 195          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 196          ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -106,6 +106,10 @@ main {
     const uword KBD_SHFLAG = $a80c      ; KERNAL shflag, in RAM bank 0 (undocumented - verified at runtime)
     const ubyte MOD_CAPS   = $10        ; shflag / kbdbuf_get_modifiers bit 4 = caps lock
     bool caps_was_on                    ; true = caps was on at launch AND we cleared it -> restore on exit
+    bool upper_mode                     ; SOFTWARE Caps Lock for the line editor: fold typed letters to
+                                        ; capitals at INSERT time (display), normalized back to ASCII on
+                                        ; ENTER. Toggled by the Caps Lock key in input_key; the KERNAL
+                                        ; caps toggle stays OFF (it breaks the Alt/Ctrl menus - caps_off).
     ubyte saved_color                   ; pre-launch text color (bg<<4|fg); restored on exit
 
     ; per-keystroke "what changed" flags, so we repaint only the affected regions
@@ -627,12 +631,23 @@ main {
         ; ($10 plus whatever else is held) rather than a likely-coincidental zero. If a future
         ; ROM relocates shflag the two disagree and we leave caps alone - the feature quietly
         ; does nothing instead of corrupting an unrelated KERNAL variable.
+        caps_was_on = caps_clear(mods)          ; guarded shflag write; true iff it actually cleared
+    }
+
+    sub caps_clear(ubyte mods) -> bool {
+        ; Clear the KERNAL Caps bit in shflag and report whether it happened. `mods` MUST be the
+        ; value kbdbuf_get_modifiers() just returned WITH MOD_CAPS set - the same guard caps_off
+        ; documents: write only if the byte at KBD_SHFLAG reads back EXACTLY that (a specific
+        ; non-zero value), so a ROM that relocated shflag leaves the toggle untouched. Shared by
+        ; caps_off (startup) and input_key (the software-caps toggle in the line editor).
+        bool cleared = false
         cx16.push_rambank(0)
         if @(KBD_SHFLAG) == mods {
             @(KBD_SHFLAG) = mods & (255 - MOD_CAPS)
-            caps_was_on = true
+            cleared = true
         }
         cx16.pop_rambank()
+        return cleared
     }
 
     sub caps_restore() {
@@ -2912,6 +2927,40 @@ main {
         txt.print(prompt)
         hilite_row(0, 79, MSGROW, shared.CLR_BOTTOM_PROMPT_BG)     ; full width (0..79)
         prompt_hint(usehist, dirpick)
+        draw_caps_hint()                        ; software-caps (CAPS) indicator, if upper_mode is on
+    }
+
+    sub draw_caps_hint() {
+        ; Software Caps Lock indicator on the LEFT of the prompt's row 2. The key hints are RIGHT-
+        ; justified (prompt_hint), so the two never collide. Light-blue "CAPS" when on, else blanked.
+        txt.plot(BANNER_LEFT, CMDROW2)
+        ubyte c = shared.CLR_BOTTOM_PROMPT_BG
+        if upper_mode {
+            txt.print("CAPS")
+            c = shared.CLR_BOTTOM_PROMPT_KEY
+        } else {
+            txt.print("    ")
+        }
+        for g_ndx in BANNER_LEFT to BANNER_LEFT + 3
+            txt.setclr(g_ndx, CMDROW2, c)
+    }
+
+    sub input_key() -> ubyte {
+        ; wait_key for the line editor, but it also watches the Caps Lock KEY. XFMGR keeps the KERNAL
+        ; Caps toggle OFF (a real caps lock breaks the Alt/Ctrl command menus - see caps_off), so it
+        ; can't be used to type capitals. Instead, pressing Caps Lock here clears the KERNAL bit again
+        ; (guarded, via caps_clear) and flips the SOFTWARE upper_mode the char branch folds with. Flip
+        ; EXACTLY once per press: a successful clear makes the next modifier poll read 0, so no loop.
+        repeat {
+            ubyte k = cbm.GETIN2()
+            if k != 0
+                return k
+            ubyte hold = cx16.kbdbuf_get_modifiers()
+            if (hold & MOD_CAPS) != 0 and caps_clear(hold) {
+                upper_mode = not upper_mode
+                draw_caps_hint()
+            }
+        }
     }
 
     sub input_line(str prompt, str dest, ubyte maxlen, str histname, bool dirpick, bool allow_empty) -> bool {
@@ -2940,9 +2989,17 @@ main {
         dest[0] = 0
         edit_render(dest, n, curpos, fieldcol)
         repeat {
-            g_key = wait_key()
+            g_key = input_key()
             when g_key {
                 13 -> {                      ; Enter -> accept (non-empty, or empty when allow_empty)
+                    ; software-caps captures capitals as their DISPLAY byte ($C1-$DA) so they show
+                    ; uppercase while typing; fold them back to ASCII uppercase ($41-$5A) here so the
+                    ; accepted / stored / history value is byte-identical to before caps existed.
+                    if n != 0 {
+                        for j in 0 to n-1
+                            if dest[j] >= $c1 and dest[j] <= $da
+                                dest[j] -= $80
+                    }
                     dest[n] = 0
                     if n != 0 and usehist {
                         hist_count = hist_store(dest)
@@ -3003,13 +3060,15 @@ main {
                     }
                 }
                 else -> {
-                    ; Filenames are stored/written as ASCII. Fold a shifted letter
-                    ; ($C1..$DA) down to $41..$5A so it's a valid ASCII char; otherwise
-                    ; the raw >127 byte garbles the name on disk. Then accept any
-                    ; printable ASCII ($20..$7E) and insert it at the cursor.
-                    if g_key >= 193 and g_key <= 218
-                        g_key -= $80
-                    if n < maxlen and g_key >= 32 and g_key < 127 {
+                    ; Insert a printable key at the cursor. Case (see input_key + the ENTER handler):
+                    ; a letter is captured as its DISPLAY byte so the field shows the real case while
+                    ; typing - unshifted = lowercase $41-$5A, SHIFT = capital $C1-$DA - and software-caps
+                    ; (upper_mode) folds an unshifted letter UP to its capital. ENTER folds every
+                    ; $C1-$DA back to ASCII uppercase $41-$5A, so nothing downstream (disk open, history)
+                    ; ever sees the >127 byte that would garble a name.
+                    if upper_mode and g_key >= $41 and g_key <= $5a
+                        g_key += $80
+                    if n < maxlen and ((g_key >= 32 and g_key < 127) or (g_key >= 193 and g_key <= 218)) {
                         j = n
                         while j > curpos {
                             dest[j] = dest[j-1]

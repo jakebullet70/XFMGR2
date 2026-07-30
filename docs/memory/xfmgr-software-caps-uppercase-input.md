@@ -1,10 +1,21 @@
 ---
 name: xfmgr-software-caps-uppercase-input
-description: "Backlog: let the user type UPPERCASE in input fields via MSEDIT's software-Caps-Lock trick (fold at insert, KERNAL caps stays off)"
+description: "DONE build 196: software Caps Lock in the line editor - Caps Lock key toggles upper_mode, folds typed letters to capitals at insert, normalized to ASCII on ENTER"
 metadata:
   node_type: memory
   type: project
   originSessionId: 50cbdaf9-8664-4cd5-8a51-deebebebd509
+---
+
+**DONE build 196 (2026-07-24).** Implemented in xfmgr.p8: `bool upper_mode`; `caps_clear(mods)` factored
+out of `caps_off` and shared; `input_key()` (wait_key that polls the Caps Lock key, clears the KERNAL
+bit via caps_clear, flips upper_mode once per press, redraws); `draw_caps_hint()` shows "CAPS" on the
+LEFT of the prompt's row 2; `input_line` uses input_key, the char branch folds an unshifted letter
+$41-$5A UP to $C1-$DA when upper_mode (SHIFT already gives $C1-$DA), and the ENTER handler folds every
+$C1-$DA back to ASCII uppercase $41-$5A. **Net: on-disk/history bytes are byte-identical to before
+(always $41-$5A); only the live DISPLAY case changed, and the user can now lock/show capitals.** The
+original design notes are kept below for reference.
+
 ---
 
 **Backlog (added 2026-07-24).** Let the user type **uppercase characters in XFMGR input fields**
