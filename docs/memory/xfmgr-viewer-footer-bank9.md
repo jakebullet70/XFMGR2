@@ -5,17 +5,29 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 50cbdaf9-8664-4cd5-8a51-deebebebd509
-  modified: 2026-07-31T14:08:31.041Z
+  modified: 2026-07-31T16:00:44.064Z
 ---
 
 **DONE build 219 (2026-07-31).** The tview viewer's footer is now **TWO bars** (rows 28+29; text area
 shrank to `shared.VIEW_ROWS = 27`), and all of it is drawn by **`syntax.draw_footer` in the xsyntax
 overlay, bank 9** - jmptable entry **$A012**. tview only reports state:
 
-    syn_draw_footer(flags @R0, setnum @R1, settot @R2, page @R3, offlo @R4, offhi @R5)
+    syn_draw_footer(flags @R0, setnum @R1, settot @R2, offlo @R3, offhi @R4, blocks @R5)
 
-`flags` packs FF_HEX / FF_EOF / FF_COLOR / FF_SET / FF_ZSM. The 24-bit hex offset is split into a word +
+`flags` packs FF_HEX / FF_EOF / FF_COLOR / FF_SET / FF_ZSM. The 24-bit position is split into a word +
 a byte. tview wraps the call in `paint_footer()`.
+
+**The position indicator (build 227-232).** It started as a page NUMBER and was reported "not moving"
+**twice** - both times the value was computed correctly and was simply the wrong QUANTITY. A page index
+barely moves while reading and is meaningless in a dump; replacing it with the page-top byte offset was
+no better, because stepping matches with N inside ONE page moves the highlight and never the page top.
+It now shows **`Ofs $hhhhhh  nn%`**, and reports the **hit's own offset whenever the highlight is on
+screen**. `blocks` is the directory entry's size (254-byte CBM blocks, 0 = unknown) - the percentage
+needs a file size and measuring it in the viewer would mean reading the whole file on every open.
+**The lesson: when a readout looks frozen, check whether it is answering the reader's question before
+you go hunting for a codegen bug.** The renderer flags visibility at the point it picks the highlight
+color - free, and it cannot disagree with what was painted, unlike bounds-checking in the footer (two
+32-bit compares = 69 bytes, which overflowed the overlay).
 
 **Why bank 9:** tview (bank 2) was completely FULL - I spent four builds shaving bytes (page cache
 64->44->12, dropped labels, dropped a `>` key) before accepting that the footer had to move. It is viewer
