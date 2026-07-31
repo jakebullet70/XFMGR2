@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 212          ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 225         ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -161,6 +161,18 @@ main {
     ubyte move_key                          ; lowercase dispatch key: 'o' (emu) or 'm' (hw)
     ubyte move_char                         ; uppercase display char: 'O' or 'M'
 
+    ; "search file contents" CTRL key (XTree's Ctrl-S). The emulator swallows Ctrl-S too, so under
+    ; the emulator we bind Search to Ctrl-E (sEarch); on real hardware Ctrl-S is the classic key.
+    ubyte srch_key                          ; lowercase dispatch key: 'e' (emu) or 's' (hw)
+    ubyte srch_char                         ; uppercase display char: 'E' or 'S'
+
+    ; "view tagged files in turn" CTRL key (XTree's Ctrl-V). The emulator eats Ctrl-V as its PASTE
+    ; shortcut, so under the emulator we bind it to Ctrl-L (Look). L was picked deliberately: several
+    ; control codes collide with this app's raw navigation keys (Ctrl-B = $02 = PgDn, Ctrl-Q = $11 =
+    ; cursor-down), while Ctrl-L is $0C - no collision, not otherwise used.
+    ubyte view_key                          ; lowercase dispatch key: 'l' (emu) or 'v' (hw)
+    ubyte view_char                         ; uppercase display char: 'L' or 'V'
+
     ; The X16 maps ALT to the Commodore (graphics) key, so ALT+letter returns a
     ; PETSCII graphics code in $A1..$BF (161..191) instead of the letter. This table
     ; maps each of those codes (indexed by code-161) back to its base letter, so the
@@ -170,6 +182,11 @@ main {
         'k','i','t', 0 ,'g', 0 ,'m', 0 , 0 ,'n','q','d','z','s','p',
         'a','e','r','w','h','j','l','y','u','o', 0 ,'f','c','x','v','b' ]
 
+    ; last content-search term (Ctrl-S/Ctrl-E), kept so the tagged-file walk can hand it to the
+    ; viewer and every file opens ON its first hit. Needs its OWN storage, not one of the cold
+    ; modal-buffer slots: it has to survive from the search until a later Ctrl-V, and a copy/move
+    ; or Find in between would clobber any shared slot. Cleared when a search finds nothing to do.
+    str srch_term = "?" * 32
     str namebuf = "?" * 52
     str pathbuf = "?" * 80
     str inputbuf = "?" * 84             ; holds typed text or a picked directory path
@@ -231,7 +248,7 @@ main {
     ; mapping the bank around it. $A000 = library init (jmp start); $A003 = view_file entry.
     const ubyte VIEW_BANK = 2
     extsub @bank 2 $A000 = tview_init()
-    extsub @bank 2 $A003 = view_file(uword nameptr @R0, ubyte histcount @R1)
+    extsub @bank 2 $A003 = view_file(uword nameptr @R0, ubyte histcount @R1, ubyte setmode @R2, uword termptr @R3, ubyte setnum @R4, ubyte settot @R5) -> ubyte @A
     ; $A006 hands tview the syntax-coloring setup: whether xsyntax.ovl loaded, and the two
     ; MAIN-RAM buffers the two overlays share. They must be main-RAM (not in either bank),
     ; because while bank 9 is mapped tview's own bank-2 RAM is invisible - see SYN_BANK below.
@@ -352,7 +369,7 @@ main {
     extsub @bank 4 $A024 = ui_show_about(ubyte high_bank @R0, ubyte max_bank @R1)
     ; the bottom command menu (all its label strings) draws here too; main passes the state it
     ; depends on (menu_mode / focus / del_char / sort_mode) since the overlay can't see globals.
-    extsub @bank 4 $A027 = ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4, ubyte move_char @R5)
+    extsub @bank 4 $A027 = ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4, ubyte move_char @R5, ubyte srch_char @R6, ubyte view_char @R7)
     bool ui_ok                              ; uiutil.ovl loaded OK -> dialogs use the overlay
 
     sub start() {
@@ -373,7 +390,7 @@ main {
         caps_off()                               ; CAPS LOCK off (it breaks the ALT/CTRL menus); restored on exit
         cx16.set_screen_mode(SCREEN_MODE)        ; 80x30
 
-        ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D/Ctrl-F/Ctrl-M)
+        ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D/F/M/S)
         if emudbg.is_emulator() {
             del_key  = 'x'
             del_char = 'X'
@@ -381,6 +398,10 @@ main {
             find_char = 'N'
             move_key  = 'o'
             move_char = 'O'
+            srch_key  = 'e'
+            srch_char = 'E'
+            view_key  = 'l'
+            view_char = 'L'
         } else {
             del_key  = 'd'
             del_char = 'D'
@@ -388,6 +409,10 @@ main {
             find_char = 'F'
             move_key  = 'm'
             move_char = 'M'
+            srch_key  = 's'
+            srch_char = 'S'
+            view_key  = 'v'
+            view_char = 'V'
         }
         txt.lowercase()
         txt.color2(shared.CLR_FG, shared.CLR_BG)               ; white text on a blue field
@@ -759,6 +784,16 @@ main {
             dirty_full = true
             return
         }
+        if letter == srch_key {             ; Ctrl-E (emu) / Ctrl-S (hw): search tagged files' CONTENTS
+            op_search_tagged()              ; (runtime key, so it can't be a constant when-case)
+            dirty_full = true
+            return
+        }
+        if letter == view_key {             ; Ctrl-L (emu) / Ctrl-V (hw): view every tagged file in turn
+            view_tagged()                   ; (runtime key, so it can't be a constant when-case)
+            dirty_full = true
+            return
+        }
         when letter {
             't' -> {                        ; Ctrl-T: tag ALL files
                 xfiles.tag_all(cur_dir)
@@ -774,10 +809,6 @@ main {
                 xfiles.invert_all(cur_dir)
                 dirty_files = true
                 dirty_status = true
-            }
-            'g' -> {                        ; Ctrl-G: ShowAll (global tagged view)
-                show_all()
-                dirty_full = true
             }
             'c' -> {                        ; Ctrl-C: copy this dir's tagged files
                 op_copymove(false, true)
@@ -844,6 +875,7 @@ main {
         ; (scan folders + files) so the file pane has something to show, instead of landing
         ; on an empty column. Mirrors the Enter key's first-time scan. Covers TAB and
         ; cursor-right; switching back to the tree never triggers a scan.
+        bool scanned_now = false
         if newfocus == FOCUS_FILE and xtree.d_flags[cur_dir] & xtree.FL_SCANNED == 0 {
             void xscan.scan_dir(cur_dir)
             if xtree.has_kids(cur_dir)
@@ -851,13 +883,22 @@ main {
             xtree.rebuild_visible()
             set_tree_cursor_to(cur_dir)
             select_dir(cur_dir)
+            scanned_now = true
             dirty_status = true
         }
         focus = newfocus
-        ; both panes' selection indicators flip (bar <-> '>') and the menu changes
-        dirty_tree = true
-        dirty_files = true
-        dirty_cmd = true
+        if scanned_now {
+            dirty_tree = true               ; the scan added tree rows and rebuilt the file list
+            dirty_files = true
+        } else {
+            ; Nothing moved and no content changed - the ONLY visual difference is on the two
+            ; cursor rows, whose selection indicator flips between a bar (focused) and '>'
+            ; (unfocused). Use the light two-row repaints; redrawing both whole panes here made
+            ; every TAB / left-right flash the screen.
+            dirty_tree_cur = true
+            dirty_file_cur = true
+        }
+        dirty_cmd = true                    ; the plain menu is per-pane
     }
 
     sub handle_tree(ubyte key) {
@@ -1063,7 +1104,7 @@ main {
                             vhc = hist_load(VIEWFIND_CAT, hd)
                             diskio.chdir(pathbuf)
                         }
-                        view_file(&namebuf, vhc)        ; tview reads via its own bank-2 buffer (returns on Q/ESC)
+                        void view_file(&namebuf, vhc, 0, 0, 0, 0)  ; single file (setmode 0, no seeded term)
                         if misc_ok {
                             uword hd2 = themes.progdir_cd()
                             hist_save(VIEWFIND_CAT, hd2)
@@ -1442,7 +1483,7 @@ main {
         ; the bottom command menu (rows CMDROW1/CMDROW2) is drawn by the uiutil overlay - all its
         ; label strings live there now. Pass the state it varies on (the overlay can't see globals).
         if ui_ok
-            ui_draw_commands(menu_mode, focus, del_char, xfiles.sort_mode, find_char, move_char)
+            ui_draw_commands(menu_mode, focus, del_char, xfiles.sort_mode, find_char, move_char, srch_char, view_char)
     }
 
     ; ---------- file operations ----------
@@ -1920,7 +1961,7 @@ main {
     sub op_copymove(bool is_move, bool use_tags) {
         ; use_tags=false (plain C/M): act on the single highlighted file, IGNORING tags.
         ; use_tags=true  (CTRL C/O):  act on every tagged file in THIS directory only.
-        ; (cross-directory batch copy/move lives in ShowAll - see op_copymove_global.)
+        ; (cross-directory batch copy/move went out with the GLOBAL browser; it returns with it.)
         if xfiles.ft_count == 0
             return
         if use_tags and xtree.dx_tag(cur_dir) == 0 {
@@ -2053,94 +2094,6 @@ main {
         box_left(CMDROW2, MSG_PRESS_ANY_KEY)
         void wait_key()
         box_close()
-    }
-
-    sub refresh_all_scanned() {
-        ; re-read every logged directory's files (used after a global move)
-        for g_ndx in 0 to xtree.dir_count-1 {
-            if xtree.d_flags[g_ndx] & xtree.FL_SCANNED != 0
-                void xscan.refresh_files(g_ndx)
-        }
-    }
-
-    sub op_copymove_global(bool is_move) {
-        ; ShowAll C/M: copy or move EVERY tagged file (across all logged dirs) to a chosen
-        ; destination. Each file is copied from its own source directory. This is the one
-        ; cross-directory batch; the CTRL menu's Copy/Move act on the current dir only.
-        xfiles.collect_tagged()
-        if xfiles.sa_count == 0 {
-            flash("no tagged files anywhere")
-            return
-        }
-        if is_move {
-            if not input_line("Move tagged to:", inputbuf, 79, "copymove", true, false)   ; shared C/M history
-                return
-        } else {
-            if not input_line("Copy tagged to:", inputbuf, 79, "copymove", true, false)   ; shared C/M history
-                return
-        }
-        ; resolve dest dir (absolute as typed, else relative to the drive root)
-        if inputbuf[0] == '/' {
-            void strings.copy(inputbuf, cm_ddir)
-        } else {
-            void strings.copy(xtree.base_path, cm_ddir)
-            ensure_slash(cm_ddir)
-            void strings.append(cm_ddir, inputbuf)
-        }
-        ensure_slash(cm_ddir)
-        if not ensure_dest_dir(cm_ddir)         ; offer to create a missing destination
-            return
-        diskio.chdir(cm_ddir)                   ; copy with the dest as cwd (hostfs writes there)
-        box_open()                              ; status box during the copy (covers the prompt)
-        if is_move
-            box_left(CMDROW1, "Moving...")
-        else
-            box_left(CMDROW1, "Copying...")
-        uword done = 0
-        uword failed = 0
-        uword skipped = 0
-        cm_fail = 0
-        ow_mode = 0                             ; ask on the first overwrite conflict this batch
-        uword total = xfiles.sa_count
-        uword cur = 0
-        uword i
-        for i in 0 to xfiles.sa_count-1 {
-            cur++
-            box_progress(cur, total)
-            xtree.build_path(xfiles.sa_get_dir(i), cm_sdir)     ; this file's source dir
-            if strings.compare(cm_sdir, cm_ddir) == 0 {
-                failed++                                     ; same dir: skip
-                continue
-            }
-            xfiles.sa_name(i, namebuf)
-            when copy_one(namebuf) {
-                1 -> {
-                    done++
-                    if is_move {
-                        void strings.copy(cm_sdir, cm_src)
-                        void strings.append(cm_src, namebuf)
-                        diskio.delete(cm_src)
-                    }
-                }
-                2 -> skipped++
-                else -> failed++
-            }
-        }
-
-        if is_move {
-            refresh_all_scanned()
-        } else {
-            ubyte dd = find_dir_by_path(cm_ddir)
-            if dd != xtree.NONE and xtree.d_flags[dd] & xtree.FL_SCANNED != 0
-                void xscan.refresh_files(dd)
-        }
-        void xfiles.build_index(cur_dir)
-        clamp_file_cursor()
-
-        if done == 0 and skipped == 0
-            copy_diag()
-        else
-            banner_copymove(is_move, done, failed, skipped)
     }
 
     sub op_sort() {
@@ -2418,7 +2371,7 @@ main {
             return
         }
         void strings.copy(themes.path_to("xfmgr.hlp"), namebuf)
-        view_file(&namebuf, 255)                    ; returns on Q/ESC (255 = no Find history for help)
+        void view_file(&namebuf, 255, 0, 0, 0, 0)   ; single file; returns on Q/ESC (255 = no Find history)
         txt.color2(shared.CLR_FG, shared.CLR_BG)    ; viewer left the color blue; restore app theme
     }
 
@@ -3260,266 +3213,137 @@ main {
     ; ---------- about overlay ----------
 
     ; the About modal (draw_box + version text + banked-RAM line) now lives in the uiutil overlay
-    ; (ui_show_about); show_about() below is just the thin wrapper. show_all stays here - it walks
-    ; xfiles/xtree state the overlay can't reach.
+    ; (ui_show_about); show_about() below is just the thin wrapper.
 
-    sub show_all_frame() {
-        ; chrome for the GLOBAL browser: reverse-blue header bar with the view mode + file count,
-        ; Name/Size column headers, and a footer bar of highlighted command keys. Does NOT clear
-        ; the screen. Two modes: ALL files (tag is just a mark; untag leaves the row) or TAGGED-only
-        ; (the XTree Ctrl-F4 filter), toggled with the T key.
-        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
-        bar_fill(0)                                     ; header bar
-        txt.plot(2, 0)
-        if sa_tagged_only
-            txt.print("GLOBAL - tagged files: ")
-        else
-            txt.print("GLOBAL - all files: ")
-        txt.print_uw(xfiles.sa_count)
-        if sf_partial != 0
-            txt.print("  (partial - 1024 max)")
-        txt.color2(shared.CLR_ACCENT, shared.CONTENT_BG) ; row 1: column headers over the gray body
-        txt.plot(2, 1)
-        txt.print("Name")
-        txt.plot(73, 1)
-        txt.print("Size")
-        bar_fill(SCR_BOT)                               ; footer bar
-        txt.plot(2, SCR_BOT)
-        bar_key("Up/Dn")
-        txt.print(" Move  ")
-        bar_key("Spc")
-        txt.print(" Tag  ")
-        bar_key("T")
-        if sa_tagged_only
-            txt.print(" All  ")
-        else
-            txt.print("agged  ")
-        bar_key(petscii:"←┘")
-        txt.print(" Dir  ")
-        bar_key("C")
-        txt.print("opy  ")
-        bar_key("M")
-        txt.print("ove  ")
-        bar_key("S")
-        txt.print("rch  ")
-        bar_key("Esc")
-    }
+    ; ---------- CTRL-V: sequential view of the tagged files ----------
 
-    sub sa_recollect() {
-        ; (re)gather the GLOBAL list for the current view mode and set the (partial) flag.
-        if sa_tagged_only
-            xfiles.collect_tagged()
-        else
-            xfiles.collect_all()
-        if xfiles.sa_count >= xfiles.GLOBAL_MAX
-            sf_partial = 1
-        else
-            sf_partial = 0
-    }
-
-    sub show_all() {
-        ; GLOBAL browser (XTree Showall/Global): every file across all logged directories in one flat,
-        ; scrollable list. Tag is just a MARK ('*'), so Space toggles it and the row STAYS - unlike a
-        ; consolidation list. T flips between ALL-files and TAGGED-only (XTree Ctrl-F4). Enter goes to
-        ; the file's dir; C/M copy/move all tagged; S content-searches the tagged files; ESC/Q exits.
-        ; Reuses the shared flat-list renderer (draw_sa_page/draw_sa_row over the sf_top window).
-        ; Opens TAGGED-only (like XTree Ctrl-G): the 255-slot list would overflow instantly on a full
-        ; card, so start with the small set and let T reveal ALL files on demand.
-        sa_tagged_only = true
-        sa_recollect()
-        sf_top = 0
-        uword cursor = 0
-        uword oldc
-
-        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
-        txt.clear_screen()
-        show_all_frame()
-        draw_sa_page(cursor)
-
+    sub view_tagged() {
+        ; XTree CTRL-V: view every TAGGED file in THIS directory in turn, starting at the first one.
+        ; In the viewer, + steps to the next tagged file and - back to the previous (so does paging
+        ; past EOF, forwards): setmode 1 makes view_file return 1 = next, 2 = previous, 0 = quit.
+        ; N/Space stay on find-next WITHIN the file, as in native XTree. Every candidate lives in the
+        ; same directory, so we chdir ONCE up front (the viewer f_opens namebuf relative to cwd).
+        ; Find-history is skipped during a walk (histcount 255) to keep this loop small; the plain
+        ; file-pane V still primes it for a single file.
+        if not viewer_ok {
+            flash("viewer overlay missing")
+            return
+        }
+        if xfiles.ft_count == 0
+            return
+        xtree.build_path(cur_dir, pathbuf)
+        diskio.chdir(pathbuf)
+        ; Hand the viewer the last content-search term (if any) so each file opens ON its first hit
+        ; with the find highlight lit. 0 = no term -> files open at the top, unhighlighted.
+        uword seedp = 0
+        if srch_term[0] != 0
+            seedp = &srch_term
+        ; count the set first, so the viewer can show "File N of M" and the walk's progress is
+        ; visible instead of guessed at
+        ubyte total = 0
+        ubyte i
+        for i in 0 to xfiles.ft_count-1
+            if xfiles.is_tagged(i)
+                total++
+        if total == 0 {
+            flash("Tag files first (T), then view tagged")
+            return
+        }
+        ; Walk by INDEX rather than a for-loop, so the viewer can send us backwards as well as
+        ; forwards. `cur` is the ft_ index of the file on screen, `seen` its 1-based position in
+        ; the tagged set (shown as "File n/m"). A step that would fall off either end simply
+        ; re-shows the current file, so the ends of the set are soft stops rather than an exit.
+        ubyte cur = 0
+        while cur < xfiles.ft_count and not xfiles.is_tagged(cur)
+            cur++
+        ubyte seen = 1
+        ubyte j
         repeat {
-            g_key = wait_key()
-            if g_key >= $c1 and g_key <= $da
-                g_key -= $80
-            when g_key {
-                27, 3, 'q' -> return
-                13 -> {                     ; enter: jump to the highlighted file, close the modal
-                    if xfiles.sa_count != 0 {
-                        void strings.copy("*", inputbuf)    ; show all files so the target file is visible
-                        jump_to_result(cursor)
-                    }
-                    return
+            xfiles.get_name(cur, namebuf)
+            file_cursor = cur                           ; leave the pane cursor on the file we stop at
+            ubyte r = view_file(&namebuf, 255, 1, seedp, seen, total)
+            if r == 0
+                break                                   ; Q/ESC ends the walk
+            if r == 1 {
+                j = cur + 1                             ; next tagged file after cur
+                while j < xfiles.ft_count and not xfiles.is_tagged(j)
+                    j++
+                if j < xfiles.ft_count {
+                    cur = j
+                    seen++
                 }
-                17 -> {                     ; down
-                    if cursor + 1 < xfiles.sa_count {
-                        oldc = cursor
-                        cursor++
-                        if cursor >= sf_top + SF_VIS {
-                            sf_top++
-                            draw_sa_page(cursor)
-                        } else {
-                            draw_sa_row(oldc, cursor)
-                            draw_sa_row(cursor, cursor)
-                        }
-                    }
-                }
-                145 -> {                    ; up
-                    if cursor != 0 {
-                        oldc = cursor
-                        cursor--
-                        if cursor < sf_top {
-                            sf_top = cursor
-                            draw_sa_page(cursor)
-                        } else {
-                            draw_sa_row(oldc, cursor)
-                            draw_sa_row(cursor, cursor)
-                        }
-                    }
-                }
-                2 -> {                      ; PgDn
-                    if sf_top + SF_VIS < xfiles.sa_count {
-                        sf_top += SF_VIS
-                        cursor = sf_top
-                        draw_sa_page(cursor)
-                    } else if xfiles.sa_count != 0 and cursor + 1 != xfiles.sa_count {
-                        cursor = xfiles.sa_count - 1     ; sa_count!=0 guard: else 0-1 underflows the uword cursor
-                        draw_sa_page(cursor)
-                    }
-                }
-                130 -> {                    ; PgUp
-                    if sf_top != 0 {
-                        if sf_top >= SF_VIS
-                            sf_top -= SF_VIS
-                        else
-                            sf_top = 0
-                        cursor = sf_top
-                        draw_sa_page(cursor)
-                    } else if cursor != 0 {
-                        cursor = 0
-                        draw_sa_page(cursor)
-                    }
-                }
-                ' ' -> {                    ; Space: toggle the tag on the highlighted file IN PLACE
-                    if xfiles.sa_count != 0 {
-                        void xfiles.sa_toggle_tag(cursor)
-                        if sa_tagged_only {
-                            ; in the tagged-only view an untag removes the row -> re-gather + reframe
-                            sa_recollect()
-                            if xfiles.sa_count == 0
-                                cursor = 0
-                            else if cursor >= xfiles.sa_count
-                                cursor = xfiles.sa_count - 1
-                            if cursor < sf_top
-                                sf_top = cursor
-                            show_all_frame()
-                            draw_sa_page(cursor)
-                        } else {
-                            draw_sa_row(cursor, cursor)     ; all-files view: row stays, just repaint the '*'
-                        }
-                    }
-                }
-                't' -> {                    ; T: flip ALL-files <-> TAGGED-only (XTree Ctrl-F4)
-                    sa_tagged_only = not sa_tagged_only
-                    sa_recollect()
-                    sf_top = 0
-                    cursor = 0
-                    show_all_frame()
-                    draw_sa_page(cursor)
-                }
-                'c' -> {                    ; copy EVERY tagged file (across all dirs) to one dest
-                    if xfiles.sa_count != 0 {
-                        op_copymove_global(false)
-                        sa_recollect()
-                        sf_top = 0
-                        cursor = 0
-                        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
-                        txt.clear_screen()                  ; the copy prompt/banner drew over the modal
-                        show_all_frame()
-                        draw_sa_page(cursor)
-                    }
-                }
-                'm' -> {                    ; move EVERY tagged file (across all dirs) to one dest
-                    if xfiles.sa_count != 0 {
-                        op_copymove_global(true)
-                        sa_recollect()
-                        sf_top = 0
-                        cursor = 0
-                        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
-                        txt.clear_screen()
-                        show_all_frame()
-                        draw_sa_page(cursor)
-                    }
-                }
-                's' -> {                    ; content search: untag every TAGGED file NOT containing a term
-                    if xfiles.sa_count != 0 {
-                        content_search_prune(cursor)
-                        sa_recollect()                      ; misses stay visible (all-files) but lose their '*'
-                        sf_top = 0
-                        cursor = 0
-                        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
-                        txt.clear_screen()                  ; the prompt/counter drew over the modal
-                        show_all_frame()
-                        draw_sa_page(cursor)
+            } else {
+                j = cur                                 ; previous tagged file before cur
+                while j != 0 {
+                    j--
+                    if xfiles.is_tagged(j) {
+                        cur = j
+                        seen--
+                        break
                     }
                 }
             }
         }
+        txt.color2(shared.CLR_FG, shared.CLR_BG)        ; viewer left the text color blue; restore theme
     }
 
-    sub content_search_prune(uword cursor) {
-        ; XTree "Ctrl-S" search: prompt for a text term, then scan the currently-TAGGED files and untag
-        ; every one whose CONTENTS don't contain it, so only the matches stay tagged (press T after to
-        ; view just them). Untagged rows in the list are ignored - tag your candidates first. The per-
-        ; file byte scan lives in the miscutil overlay (content_scan); here we drive it, build each
-        ; file's dir path, and show a live "(Scanning n/N)" counter with any-key abort.
+    sub op_search_tagged() {
+        ; XTree CTRL-S: prompt for a text term, scan the TAGGED files in THIS directory and untag
+        ; every one whose CONTENTS don't contain it - so the tag set collapses to the matches and
+        ; CTRL-V then walks exactly those. Untagged files are never candidates: tag first (T for one,
+        ; CTRL-T for all), then search. The per-file byte scan lives in the miscutil overlay
+        ; (content_scan); here we drive it and show a live "(n of N)" counter with any-key abort.
         if not misc_ok {
             flash("Search needs the misc overlay")
             return
         }
-        uword tagged = 0                                    ; how many candidates (tagged files) to scan
-        uword k
-        for k in 0 to xfiles.sa_count-1
-            if xfiles.sa_is_tagged(k)
+        if xfiles.ft_count == 0
+            return
+        uword tagged = 0                                ; how many candidates (tagged files) to scan
+        ubyte i
+        for i in 0 to xfiles.ft_count-1
+            if xfiles.is_tagged(i)
                 tagged++
         if tagged == 0 {
-            flash("Tag files first (Space), then Search")
+            flash("Tag files first (T), then search")
             return
         }
-        if not input_line("Search tagged for:", inputbuf, 32, "content", false, false)  ; 32 = overlay SCAN_TCAP
+        if not input_line("Search tagged for:", inputbuf, 32, "content", false, false)  ; 32 = SCAN_TCAP
             return
         if inputbuf[0] == 0
             return
-        while cbm.GETIN2() != 0 { }                         ; drain the ENTER/typeahead before scanning
+        void strings.copy(inputbuf, srch_term)          ; remember it for the Ctrl-V walk's highlight
+        while cbm.GETIN2() != 0 { }                     ; drain the ENTER/typeahead before scanning
 
-        ; input_line's box_close() repainted the NORMAL dual-pane frame (divider + DIRECTORY/FILE
-        ; headers) over us; restore the full-screen browser so the scan runs on a CLEAN list rather
-        ; than bleeding that chrome through the long rows.
-        txt.color2(shared.BAR_FG, shared.CONTENT_BG)
-        txt.clear_screen()
-        show_all_frame()
-        draw_sa_page(cursor)
-
-        uword n = 0
-        uword i
-        for i in 0 to xfiles.sa_count-1 {
-            if not xfiles.sa_is_tagged(i)
-                continue                                    ; only tagged files are search candidates
+        xtree.build_path(cur_dir, pathbuf)              ; every candidate shares this directory
+        box_open()
+        box_left(CMDROW1, "Searching...")
+        uword n = 0                                     ; candidates scanned so far
+        for i in 0 to xfiles.ft_count-1 {
+            if not xfiles.is_tagged(i)
+                continue
             n++
-            ; live progress on the footer row (the scan can take a moment on many/large files)
-            txt.color2(shared.BAR_FG, shared.CONTENT_BG)
-            bar_fill(SCR_BOT)
-            txt.plot(2, SCR_BOT)
-            txt.print("Scanning ")
-            txt.print_uw(n)
-            txt.chrout('/')
-            txt.print_uw(tagged)
-            txt.print("   (any key aborts)")
-            if cbm.GETIN2() != 0                            ; abort: leave remaining tags as-is
+            box_progress(n, tagged)
+            ; walk the file pane's highlight bar onto the file being scanned, so you can watch the
+            ; search move down the list instead of just reading a counter. The status box only
+            ; covers the bottom rows, so the pane above stays live; draw_files_cursor is the light
+            ; two-row repaint (it falls back to a full pane draw only when the window scrolls).
+            file_cursor = i
+            draw_files_cursor()
+            if cbm.GETIN2() != 0                        ; any key aborts; remaining tags stay as-is
                 break
-            xtree.build_path(xfiles.sa_get_dir(i), pathbuf)  ; absolute dir of this tagged file
-            xfiles.sa_name(i, namebuf)
-            if content_scan(&pathbuf, &namebuf, &inputbuf) == 0
-                xfiles.sa_untag(i)                          ; miss -> untag (decrements its dir count)
+            xfiles.get_name(i, namebuf)
+            if content_scan(&pathbuf, &namebuf, &inputbuf) == 0 {
+                xfiles.toggle_tag(i, cur_dir)           ; miss -> untag (keeps the dir count in step)
+                draw_status()                           ; live "N Tagged" in the top-right header:
+                                                        ; the count only changes on a miss, so redraw
+                                                        ; here rather than every iteration
+            }
         }
+        ; No closing "Still tagged: n of m" banner - the live counter above already showed the
+        ; progress, and the header's Tagged count plus the '*' markers show the result. One less
+        ; keypress between searching and reading what matched.
+        box_close()
     }
 
     ; ---------- Ctrl-F: whole-disk Find ----------
@@ -3618,16 +3442,15 @@ main {
         show_find_results(partial)
     }
 
-    ; Shared flat-list modal layout, used by BOTH the Find panel (show_find_results) and the global
-    ; SHOWALL panel (show_all): viewer-style reverse-blue header (row 0) + footer (SCR_BOT) bars,
-    ; white-on-gray list body (rows SF_TOP..SF_TOP+SF_VIS-1). The bars are painted ONCE on entry; the
-    ; body redraws a whole page only when it scrolls, otherwise just the two rows the cursor left and
-    ; landed on. Both panels list the sa_* arrays via draw_sa_row/draw_sa_page over the sf_top window.
+    ; Flat-list modal layout for the Find panel (show_find_results): viewer-style reverse-blue header
+    ; (row 0) + footer (SCR_BOT) bars, white-on-gray list body (rows SF_TOP..SF_TOP+SF_VIS-1). The bars
+    ; are painted ONCE on entry; the body redraws a whole page only when it scrolls, otherwise just the
+    ; two rows the cursor left and landed on. Rows come from the sa_* table via draw_sa_row/draw_sa_page
+    ; over the sf_top window. (The GLOBAL browser shared this renderer too - it will again when rebuilt.)
     const ubyte SF_TOP = 2
     const ubyte SF_VIS = 27                 ; list rows 2..28 (row 0 header bar, row 1 col headers, row 29 footer)
     ubyte sf_partial
     uword sf_top                            ; window top index; module-level so draw_sa_row sees it
-    bool sa_tagged_only                     ; GLOBAL browser view mode: false = all files, true = tagged-only (XTree Ctrl-F4)
 
     sub draw_sa_row(uword i, uword cursor) {
         ; paint the absolute-index entry i onto its screen row; caller keeps i within the visible

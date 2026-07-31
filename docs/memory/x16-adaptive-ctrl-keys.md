@@ -5,20 +5,30 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 8083e14b-c2de-429f-bb82-9254f48d6034
+  modified: 2026-07-31T14:09:03.718Z
 ---
 
 The x16emu emulator window GRABS some Ctrl combos before they reach the app, so XFMGR picks
 **environment-specific CTRL keys** at startup via `emudbg.is_emulator()` ([[prog8-build-toolchain]]).
 
-**Three adaptive commands** (emulator key / hardware key):
+**Five adaptive commands** (emulator key / hardware key):
 
 | Command | Emulator | Hardware |
 |---|---|---|
 | Delete tagged | Ctrl-X | Ctrl-D |
 | Find files | Ctrl-N | Ctrl-F |
 | Move tagged | Ctrl-O | Ctrl-M |
+| Search tagged (contents) | Ctrl-E | Ctrl-S |
+| View tagged (sequential) | Ctrl-L | Ctrl-V |
 
-(Ctrl-S is also swallowed, so Tag-by-wildcard is Ctrl-W in BOTH — not adaptive, just avoided.)
+(Tag-by-wildcard is Ctrl-W in BOTH — not adaptive, just avoided, since Ctrl-S is swallowed.)
+
+**Ctrl-V is swallowed too** (the emulator's PASTE) — found 2026-07-31 when Search + the sequential
+viewer were added ([[xfmgr-file-text-search]]). **Choosing an emulator substitute needs care:**
+Ctrl+letter folds to control codes $01-$1A, and several collide with this app's RAW navigation keys —
+**Ctrl-B = $02 = PgDn**, **Ctrl-Q = $11 = cursor-down**. That ruled out the obvious mnemonics (B for
+Browse, Q); **Ctrl-L** ($0C, "Look") and **Ctrl-E** ($05) are clean. The collision is only cosmetic
+(dispatch keys off the held-modifier menu_mode), but there is no reason to court it.
 
 **Pattern (mirror this for any new adaptive key):**
 - TWO globals per key: `x_key` = lowercase **dispatch** char (e.g. 'x'/'d'), `x_char` = uppercase

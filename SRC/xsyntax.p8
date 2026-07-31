@@ -49,8 +49,9 @@ main {
     ; keyword tables are INITIALIZED data, and prog8 emits a block's initialized variables inline
     ; BEFORE its code - which would shove this jump table off $A003 if they shared a block.
     ; Keeping `main` var-free means only `syntax` gets that inline data, safely after the table.
-    ; $A003 = setbufs, $A006 = paint, $A009 = probe, $A00C = detect, $A00F = read_find.
-    %jmptable ( syntax.setbufs, syntax.paint, syntax.probe, syntax.detect, syntax.read_find )
+    ; $A003 = setbufs, $A006 = paint, $A009 = probe, $A00C = detect, $A00F = read_find,
+    ; $A012 = draw_footer.
+    %jmptable ( syntax.setbufs, syntax.paint, syntax.probe, syntax.detect, syntax.read_find, syntax.draw_footer )
 
     sub start() {
         ; library init entrypoint ($A000). The compiler emits the BSS-clear here; this must do
@@ -119,6 +120,10 @@ syntax {
         if not hist_on
             hcount = 0
         ubyte hsel = 255                ; recall cursor: 255 = nothing recalled yet
+        ; Clear BOTH footer bars, not just the prompt row: leaving the key bar above it made the
+        ; prompt look like it had been dropped on top of the footer. The caller (tview) repaints
+        ; the whole footer when we return, so blanking here costs nothing.
+        bar_fill(FOOT1)
         bar_fill(shared.VIEW_BOT)
         txt.plot(0, shared.VIEW_BOT)
         ; petscii: overrides this module's iso default - the viewer runs in the PETSCII charset,
@@ -191,6 +196,145 @@ syntax {
             if k != 0
                 return k
         }
+    }
+
+    ; ---- viewer footer (both bars) --------------------------------------------------------------
+    ; Lives here for the same reason read_find does: it is viewer CHROME, not syntax coloring, and
+    ; tview's bank is completely full. All the label text, the status block and their layout are in
+    ; this bank; tview just reports its state and we paint. Freed ~980 bytes of bank 2.
+    ;
+    ; EVERY literal below needs the `petscii:` prefix: this module is %encoding iso (for the ASCII
+    ; source it colorizes), but the viewer's screen runs the PETSCII charset, where the letter cases
+    ; are swapped relative to ISO. Without it the footer comes out as "pGdN/pGuP  tOP  bOTTOM".
+    ;
+    ; flags bits: 0 = hex mode, 1 = at EOF, 2 = coloring available (advertise C), 3 = walking a
+    ; tagged set (SPACE steps files), 4 = ZSM breakout page.
+    const ubyte FOOT1 = shared.VIEW_FOOT1
+    const ubyte FOOT2 = shared.VIEW_FOOT2
+    const ubyte FF_HEX   = %00000001
+    const ubyte FF_EOF   = %00000010
+    const ubyte FF_COLOR = %00000100
+    const ubyte FF_SET   = %00001000
+    const ubyte FF_ZSM   = %00010000
+
+    sub draw_footer(ubyte flags @R0, ubyte setnum @R1, ubyte settot @R2, uword page @R3,
+                    uword offlo @R4, ubyte offhi @R5) {
+        ; entry ($A012). Capture every @Rn param before the first txt call clobbers r0-r5.
+        ubyte fl = flags
+        ubyte snum = setnum
+        ubyte stot = settot
+        uword pg = page
+        uword olo = offlo
+        ubyte ohi = offhi
+
+        bar_fill(FOOT1)
+        txt.plot(0, FOOT1)
+        txt.spc()
+        bar_key(petscii:"PgDn/PgUp")
+        txt.print(petscii:"  ")
+        bar_key(petscii:"T")
+        txt.print(petscii:"op  ")
+        bar_key(petscii:"B")
+        txt.print(petscii:"ottom  ")
+        bar_key(petscii:"H")                        ; H toggles hex<->text in BOTH directions (T is Top!)
+        if fl & FF_HEX != 0
+            txt.print(petscii:" text  ")
+        else
+            txt.print(petscii:"ex  ")
+        bar_key(petscii:"I")
+        txt.print(petscii:"SO  ")
+        if fl & FF_COLOR != 0 {
+            bar_key(petscii:"C")
+            txt.print(petscii:"olor  ")
+        }
+        bar_key(petscii:"Esc")
+        txt.print(petscii:" Quit")
+
+        bar_fill(FOOT2)
+        txt.plot(0, FOOT2)
+        txt.spc()
+        bar_key(petscii:"F")
+        txt.print(petscii:"ind  ")
+        bar_key(petscii:"N")
+        txt.print(petscii:"/")
+        bar_key(petscii:"Space")
+        txt.print(petscii:" Next match")
+        if fl & FF_SET != 0 {                   ; walking a tagged set: +/- step between FILES
+            txt.print(petscii:"  ")
+            bar_key(petscii:"+/-")
+            txt.print(petscii:" File")
+        }
+
+        ; Status block, RIGHT-JUSTIFIED so it ends at col 77 (never 79 - that would auto-scroll the
+        ; bottom row). Measured properly now that this bank has room: no padding inside the numbers,
+        ; so it reads "File 2/6  Page 85" rather than "File  2/ 6   Page  85".
+        bool zsm = fl & FF_ZSM != 0 and fl & FF_HEX == 0
+        ubyte w = 0
+        if fl & FF_SET != 0
+            w = 7 + uwidth(snum) + uwidth(stot)         ; "File n/m" + the 2 spaces after it
+        if fl & FF_HEX != 0 {
+            w += 7                                      ; "$" + 6 hex digits
+        } else if zsm {
+            w += 5                                      ; "[ZSM]"
+        } else {
+            w += 5 + uwidth(pg)                         ; "Page n"
+        }
+        if fl & FF_EOF != 0 and not zsm
+            w += 6                                      ; " (END)"
+        txt.plot(78 - w, FOOT2)
+        if fl & FF_SET != 0 {
+            txt.print(petscii:"File ")
+            txt.print_uw(snum)
+            txt.chrout('/')
+            txt.print_uw(stot)
+            txt.print(petscii:"  ")
+        }
+        if fl & FF_HEX != 0 {
+            txt.chrout('$')
+            put_hex8(ohi)
+            put_hex8(msb(olo))
+            put_hex8(lsb(olo))
+        } else if zsm {
+            txt.print(petscii:"[ZSM]")
+        } else {
+            txt.print(petscii:"Page ")
+            txt.print_uw(pg)
+        }
+        if fl & FF_EOF != 0 and not zsm
+            txt.print(petscii:" (END)")
+    }
+
+    sub uwidth(uword v) -> ubyte {
+        ; printed decimal width of v, for right-justifying the status block
+        if v >= 10000
+            return 5
+        if v >= 1000
+            return 4
+        if v >= 100
+            return 3
+        if v >= 10
+            return 2
+        return 1
+    }
+
+    sub put_hex8(ubyte b) {
+        txt.chrout(hexdig(b >> 4))
+        txt.chrout(hexdig(b & 15))
+    }
+
+    sub hexdig(ubyte n) -> ubyte {
+        ; petscii: literals - this module defaults to %encoding iso, where 'a' is $61; the viewer's
+        ; screen is the PETSCII charset, in which lowercase 'a' is $41. Digits are $30-$39 in both.
+        if n < 10
+            return petscii:'0' + n
+        return petscii:'a' + n - 10
+    }
+
+    sub bar_key(str s) {
+        ; print a highlighted hotkey (accent on blue), then revert to white-on-blue text
+        txt.color2(shared.BAR_KEY, shared.BAR_BG)
+        txt.print(s)
+        txt.color2(shared.BAR_FG, shared.BAR_BG)
     }
 
     sub bar_fill(ubyte row) {

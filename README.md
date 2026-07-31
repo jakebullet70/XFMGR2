@@ -1,6 +1,6 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:212)*
+*(build:225)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
@@ -21,9 +21,16 @@ switchable **color themes**.
   (`Enter`), keeping startup fast. No blocking whole-disk crawl.
 - **File tagging**, XTree-style tag-and-advance: tag/untag one file, tag/untag/invert
   a whole directory, or tag by wildcard (`Ctrl-W`).
-- **Cross-directory tagging** — tags persist across every logged directory. The
-  **ShowAll** view (`Ctrl-G`) collects every tagged file from all logged dirs into a
-  single scrollable list, and global copy/move/delete act on that whole set.
+- **Search tagged files by content** (`Ctrl-S` / `Ctrl-E`) — the XTree model: type a
+  string and every tagged file that does *not* contain it is untagged, collapsing the
+  tag set down to the hits. Tag broadly, then search to narrow.
+- **Sequential viewer** (`Ctrl-V`) — reads through the tagged files one after another,
+  starting at the first: `+` moves to the next tagged file and `-` back to the previous
+  (paging past the end also moves on), with a `File n/m` counter in the footer. Pairs
+  with the search above — narrow the tags, then read exactly what matched, each file
+  opening on its first hit with the match highlighted. `N`/`Space` walk the hits and
+  roll on into the next file when a file's hits run out, so one key carries you through
+  every occurrence in the whole set.
 - **Find file** (`Ctrl-F`) — a whole-disk crawler that walks the tree from the root,
   logs only the directories that contain a match, and shows every hit in a flat modal
   list you can jump straight into.
@@ -107,7 +114,8 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `Ctrl-U` | Untag all files in this directory |
 | `Ctrl-I` | Invert tags in this directory |
 | `Ctrl-W` | Tag files matching a wildcard |
-| `Ctrl-G` | **ShowAll** — modal list of every tagged file across all logged dirs |
+| `Ctrl-V` / `Ctrl-L` | **View tagged** — read every tagged file in turn from the first; `+`/`-` step between files (`L` in emulator, `V` on hardware) |
+| `Ctrl-S` / `Ctrl-E` | **Search tagged** for text — untags every tagged file that does *not* contain it (`E` in emulator, `S` on hardware) |
 | `Ctrl-F` / `Ctrl-N` | **Find** files across the whole disk (`N` in emulator, `F` on hardware) |
 | `Ctrl-C` | Copy all tagged files (from all dirs) to one destination |
 | `Ctrl-O` / `Ctrl-M` | Move all tagged files (from all dirs) to one destination (`O` in emulator, `M` on hardware) |
@@ -138,12 +146,16 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `←` / `→` / `Home` | Move the cursor in the field |
 | `Enter` / `Esc` | Accept (saved to history) / cancel |
 
-In the **ShowAll**, **Find** and **directory-picker** modals: `↑`/`↓` move, `Enter`
+In the **Find** and **directory-picker** modals: `↑`/`↓` move, `Enter`
 selects/jumps, `Esc`/`Q` cancels; in the picker, `→` expands (logging on demand) and
-`←` collapses; in ShowAll, `U` untags the highlighted entry in place.
+`←` collapses.
 
 In the **text/hex viewer** (`V`): `PgDn`/`PgUp` page, `T`/`Home` jump to top, `H`
-toggles hex/text, `F` finds a string and `N` repeats the search, `Q`/`Esc` exits. In
+toggles hex/text, `F` finds a string and `N`/`Space` repeat the search, `Q`/`Esc`
+exits. The two-line footer shows the keys plus a `File n/m` and `Page n` status.
+During a tagged-file walk (`Ctrl-V`), `+`/`-` step between tagged files — and if a
+`Ctrl-S` search ran first, every file opens on its first hit with the match
+highlighted. In
 the **BMX image viewer**, any key returns to the file list. During **music playback**
 (`P`), `Space` pauses/resumes and `Q`/`Esc` stops.
 
@@ -288,15 +300,18 @@ ROMs because it depends on R49+ behavior — notably the X16 Edit ROM API used b
 `E` (edit) command. It also detects the emulator at startup (`emudbg.is_emulator()`)
 to choose the environment-specific CTRL keys the emulator would otherwise swallow:
 **delete-tagged** is `Ctrl-X` in the emulator / `Ctrl-D` on hardware, **Find** is
-`Ctrl-N` in the emulator / `Ctrl-F` on hardware, and **move-tagged** is `Ctrl-O` in the
-emulator / `Ctrl-M` on hardware.
+`Ctrl-N` in the emulator / `Ctrl-F` on hardware, **move-tagged** is `Ctrl-O` in the
+emulator / `Ctrl-M` on hardware, **search-tagged** is `Ctrl-E` in the emulator /
+`Ctrl-S` on hardware, and **view-tagged** is `Ctrl-L` in the emulator / `Ctrl-V` on
+hardware (the emulator takes `Ctrl-V` for paste).
 
 
 
 ## Status & known limitations
 
 **v1.0.184 — working.** Dual-pane navigation, on-demand logging, tagging (including
-cross-directory) and ShowAll, whole-disk Find, sorting, the full file-operation set
+cross-directory), tagged-file content search and sequential viewing, whole-disk Find,
+sorting, the full file-operation set
 (copy / move / rename / delete / mkdir / prune), the banked text/hex viewer, the BMX
 image viewer, `.zsm`/`.wav` music playback, edit via X16 Edit, execute-and-return,
 switchable color themes, root-anchored startup and persistent input history are all
@@ -310,7 +325,10 @@ Remaining limitations:
 - **Append-only arena.** Individual file records are never freed; dead space from
   refreshes/renames accumulates and is only reclaimed on a full reset/reload.
 - **Fixed capacity caps:** `DIR_MAX = 254` directories, 255 files per displayed
-  directory, 255 files collected for ShowAll / Find (excess → "(partial)"), and a
+  directory, 1024 files collected for Find (excess → "(partial)"), and a
   bounded directory-name slab.
+- **The cross-directory GLOBAL browser is out for rebuild.** Tagging still spans every
+  logged directory, but the flat all-files list (and the batch copy/move that ran from
+  it) is being reworked; content search and sequential view now run per-directory.
 - **Single drive.** All operations are relative to one mounted drive; there is no
   multi-volume or `.d64` image support.

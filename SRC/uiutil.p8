@@ -347,7 +347,7 @@ main {
         aboutln(2,  "X F M G R")
         aboutln(4,  "An XTree-style file manager")
         aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Beta Version 1.0.212")     ; bump the last number with BUILD_NUM in xfmgr.p8
+        aboutln(7,  "Beta Version 1.0.225")     ; bump the last number with BUILD_NUM in xfmgr.p8
         ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
         txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
         txt.print("Banked RAM: ")
@@ -384,10 +384,10 @@ main {
     ; menu_mode 0/1/2 = MENU/CTRL/ALT, focus 0 = tree pane, del_char = env-specific Del key char,
     ; sort_mode 0/1/2 = name/ext/size.
 
-    sub ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4, ubyte move_char @R5) {
-        do_draw_commands(menu_mode, focus, del_char, sort_mode, find_char, move_char)
+    sub ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4, ubyte move_char @R5, ubyte srch_char @R6, ubyte view_char @R7) {
+        do_draw_commands(menu_mode, focus, del_char, sort_mode, find_char, move_char, srch_char, view_char)
     }
-    sub do_draw_commands(ubyte menu_mode, ubyte focus, ubyte del_char, ubyte sort_mode, ubyte find_char, ubyte move_char) {
+    sub do_draw_commands(ubyte menu_mode, ubyte focus, ubyte del_char, ubyte sort_mode, ubyte find_char, ubyte move_char, ubyte srch_char, ubyte view_char) {
         blank_span(1, 78, CMDROW1)
         txt.plot(TREE_TEXT, CMDROW1)
         txt.color(shared.CLR_ACCENT)
@@ -395,7 +395,7 @@ main {
             1 -> {
                 txt.print("CTRL: ")
                 txt.color(shared.CLR_FG)
-                menu_ctrl_items(focus, del_char, find_char, move_char)
+                menu_ctrl_items(focus, del_char, find_char, move_char, srch_char, view_char)
             }
             2 -> {
                 txt.print("ALT:  ")
@@ -439,18 +439,46 @@ main {
         }
     }
 
-    sub menu_ctrl_items(ubyte focus, ubyte del_char, ubyte find_char, ubyte move_char) {
+    sub menu_ctrl_items(ubyte focus, ubyte del_char, ubyte find_char, ubyte move_char, ubyte srch_char, ubyte view_char) {
         if focus == FOCUS_TREE {
             txt.print(petscii:"\x9eT\x05ag  \x9eU\x05ntag  ")
             find_label(find_char)
             return
         }
-        txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eI\x05nvert \x9eG\x05lobal ")
+        txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eI\x05nvert ")
+        view_label(view_char)
+        txt.chrout(' ')
+        srch_label(srch_char)
+        txt.chrout(' ')
         find_label(find_char)
         txt.print(petscii:" \x9eC\x05opy ")
         move_label(move_char)
-        txt.print(petscii:" \x9eW\x05ildcard ")
+        txt.print(petscii:" \x9eW\x05ild ")
         del_label(del_char)
+    }
+
+    sub view_label(ubyte view_char) {
+        ; the view-tagged hotkey varies by environment (Ctrl-V on hw - the classic XTree key - and
+        ; Ctrl-L under the emulator, which eats Ctrl-V as its paste shortcut). Show the active key:
+        ; "View" with V picked out on hw, "L-View" on emu. Mirrors del/find/move/srch_label.
+        if view_char == 'V' {
+            txt.print(petscii:"\x9eV\x05iew")
+        } else {
+            draw_hkey(view_char)
+            txt.print("-View")
+        }
+    }
+
+    sub srch_label(ubyte srch_char) {
+        ; the content-search hotkey varies by environment (Ctrl-S on hw - the classic XTree key - and
+        ; Ctrl-E under the emulator, which swallows Ctrl-S). Show the active key: "Srch" with S picked
+        ; out on hw, "E-Srch" on emu. Mirrors del/find/move_label.
+        if srch_char == 'S' {
+            txt.print(petscii:"\x9eS\x05rch")
+        } else {
+            draw_hkey(srch_char)
+            txt.print("-Srch")
+        }
     }
 
     sub move_label(ubyte move_char) {

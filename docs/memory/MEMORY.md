@@ -16,7 +16,7 @@
 - [Run own utils and return](xfmgr-run-utils-and-return.md) — banked overlay vs swap-and-relaunch patterns
 - [Prune command](xfmgr-prune-command.md) — DIR-col P deletes a subtree; miscutil per-dir iterator + live (Dir: N) counter
 - [Always report mem stats](always-report-mem-stats.md) — include build memory-stats block in replies
-- [Revisit ShowAll](xfmgr-showall-revisit.md) — DONE build 208-212: Ctrl-G is the all-files GLOBAL browser (tag-as-mark, T tagged-only, 1024 cap); node pool banked to fund it
+- [Revisit ShowAll](xfmgr-showall-revisit.md) — GLOBAL browser PULLED at build 214 for rebuild; Ctrl-G is free, sa_/collect foundation kept
 - [ZIP/ARC support (V2)](xfmgr-zip-arc-v2.md) — backlog: browse/extract archives in V2; DEFLATE/ARC decompress is the hard part
 - [Embedded PETSCII color codes](x16-embedded-petscii-color-codes.md) — inline \x9e/\x05/\x9a in one txt.print string saves bytes vs txt.color() calls
 - [User tests in emulator themselves](user-tests-in-emulator-themselves.md) — build & launch, then report; don't drive the GUI to verify
@@ -48,7 +48,8 @@
 - [@Rn param clobber](prog8-rn-param-clobber.md) — never pass a call as an arg to an @Rn sub; r0 dies before the call, no warning
 - [Viewer ISO/PET toggle](xfmgr-viewer-iso-pet-toggle.md) — DONE build 197: I key toggles ISO/ASCII<->PETSCII (content_scr remap); { } \ | ~ glyph patch deferred
 - [Software Caps uppercase input](xfmgr-software-caps-uppercase-input.md) — DONE build 196: Caps Lock key toggles upper_mode; folds letters to capitals at insert, normalized to ASCII on ENTER
-- [File text search](xfmgr-file-text-search.md) — DONE build 205-212: S in GLOBAL browser content-searches TAGGED files, untagging non-matches (XTree Ctrl-S prune-the-tags); content_scan in miscutil overlay
+- [File text search](xfmgr-file-text-search.md) — DONE 214-225: Ctrl-S/E prunes tags by content in the CURRENT dir; Ctrl-V/L then reads the survivors in sequence
+- [Viewer footer in bank 9](xfmgr-viewer-footer-bank9.md) — DONE 219: 2-line footer drawn by xsyntax $A012; petscii: prefixes required, long→@Rn is a codegen error
 - [Viewer line-number gutter (backlog)](xfmgr-viewer-line-gutter.md) — optional toggle gutter in tview; port MSEDIT ln_on/gutter_w
 - [Restore font after X16 Edit](xfmgr-restore-font-after-x16edit.md) — DONE build 203: op_edit force-reloads charset 3 (screen_set_charset(3,0)) + clears ISO flag; txt.lowercase()/saved_charset were both wrong
 - [Viewer Find history](xfmgr-viewer-find-history.md) — DONE build 198: up-arrow recalls terms (viewfind ring); main loads/saves around view_file, read_find uses cwd-safe hist_get/store

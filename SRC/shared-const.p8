@@ -54,9 +54,12 @@ shared {
     ; Shared because xsyntax paints the color pass itself (it walks the same cells with the same
     ; wrap rule tview drew them with), so the two MUST agree on the layout byte for byte.
     const ubyte VIEW_TOP   = 1          ; first text row (row 0 = header bar)
-    const ubyte VIEW_ROWS  = 28         ; text rows 1..28
+    const ubyte VIEW_ROWS  = 27         ; text rows 1..27 (rows 28-29 are the viewer's 2-line footer)
     const ubyte VIEW_WIDTH = 79         ; wrap column (keep off col 79 to avoid auto-scroll)
     const ubyte VIEW_BOT   = 29         ; footer/status row (the find prompt draws here)
+    ; the viewer's footer is TWO bars: keys on VIEW_FOOT1, search/set keys + status on VIEW_FOOT2
+    const ubyte VIEW_FOOT1 = 28
+    const ubyte VIEW_FOOT2 = 29
 
     ; Longest logical line the viewer colors. Both main-RAM host buffers (xfmgr's cm_src/cm_dst,
     ; 133 B each) must hold this plus slack; a longer line still DRAWS in full, its tail just stays
