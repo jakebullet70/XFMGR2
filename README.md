@@ -1,6 +1,6 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:225)*
+*(build:232)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
@@ -152,10 +152,15 @@ selects/jumps, `Esc`/`Q` cancels; in the picker, `→` expands (logging on deman
 
 In the **text/hex viewer** (`V`): `PgDn`/`PgUp` page, `T`/`Home` jump to top, `H`
 toggles hex/text, `F` finds a string and `N`/`Space` repeat the search, `Q`/`Esc`
-exits. The two-line footer shows the keys plus a `File n/m` and `Page n` status.
-During a tagged-file walk (`Ctrl-V`), `+`/`-` step between tagged files — and if a
-`Ctrl-S` search ran first, every file opens on its first hit with the match
-highlighted. In
+exits. The two-line footer shows the keys plus a `File n/m` and `Ofs $xxxxxx  nn%`
+status — the byte offset of what you are looking at, and how far into the file that
+is. When a find hit is on screen the offset is the **hit's**, not the page top's, so
+it moves with every `N`. Running out of matches says so (`All done`) rather than
+silently wrapping back to the first one.
+During a tagged-file walk (`Ctrl-V`), `+`/`-` step between tagged files, and the find
+term travels with you: `N`/`Space` runs off the end of one file straight into the
+next, still highlighting. If a `Ctrl-S` search ran first, every file opens on its
+first hit already highlighted. In
 the **BMX image viewer**, any key returns to the file list. During **music playback**
 (`P`), `Space` pauses/resumes and `Q`/`Esc` stops.
 

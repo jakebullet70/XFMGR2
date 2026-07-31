@@ -39,7 +39,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 225         ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 232       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -248,7 +248,7 @@ main {
     ; mapping the bank around it. $A000 = library init (jmp start); $A003 = view_file entry.
     const ubyte VIEW_BANK = 2
     extsub @bank 2 $A000 = tview_init()
-    extsub @bank 2 $A003 = view_file(uword nameptr @R0, ubyte histcount @R1, ubyte setmode @R2, uword termptr @R3, ubyte setnum @R4, ubyte settot @R5) -> ubyte @A
+    extsub @bank 2 $A003 = view_file(uword nameptr @R0, ubyte histcount @R1, ubyte setmode @R2, uword termptr @R3, ubyte setnum @R4, ubyte settot @R5, uword blocks @R6) -> ubyte @A
     ; $A006 hands tview the syntax-coloring setup: whether xsyntax.ovl loaded, and the two
     ; MAIN-RAM buffers the two overlays share. They must be main-RAM (not in either bank),
     ; because while bank 9 is mapped tview's own bank-2 RAM is invisible - see SYN_BANK below.
@@ -1104,7 +1104,10 @@ main {
                             vhc = hist_load(VIEWFIND_CAT, hd)
                             diskio.chdir(pathbuf)
                         }
-                        void view_file(&namebuf, vhc, 0, 0, 0, 0)  ; single file (setmode 0, no seeded term)
+                        ; blocks: the directory entry's size, for the viewer's "n%" position. Hoisted
+                        ; into a local - passing the call inline would clobber r0 before we set it.
+                        uword vblk = xfiles.get_blocks(file_cursor)
+                        void view_file(&namebuf, vhc, 0, 0, 0, 0, vblk)  ; single file (setmode 0, no seeded term)
                         if misc_ok {
                             uword hd2 = themes.progdir_cd()
                             hist_save(VIEWFIND_CAT, hd2)
@@ -2371,7 +2374,8 @@ main {
             return
         }
         void strings.copy(themes.path_to("xfmgr.hlp"), namebuf)
-        void view_file(&namebuf, 255, 0, 0, 0, 0)   ; single file; returns on Q/ESC (255 = no Find history)
+        void view_file(&namebuf, 255, 0, 0, 0, 0, 0)   ; single file; returns on Q/ESC (255 = no Find
+                                                       ; history, 0 blocks = size unknown -> no "n%")
         txt.color2(shared.CLR_FG, shared.CLR_BG)    ; viewer left the color blue; restore app theme
     }
 
@@ -3261,7 +3265,9 @@ main {
         repeat {
             xfiles.get_name(cur, namebuf)
             file_cursor = cur                           ; leave the pane cursor on the file we stop at
-            ubyte r = view_file(&namebuf, 255, 1, seedp, seen, total)
+            uword wblk = xfiles.get_blocks(cur)         ; size for the footer's "n%"; own local, since
+                                                        ; a call in the arg list would clobber r0 first
+            ubyte r = view_file(&namebuf, 255, 1, seedp, seen, total, wblk)
             if r == 0
                 break                                   ; Q/ESC ends the walk
             if r == 1 {

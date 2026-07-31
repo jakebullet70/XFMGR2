@@ -217,15 +217,21 @@ syntax {
     const ubyte FF_SET   = %00001000
     const ubyte FF_ZSM   = %00010000
 
-    sub draw_footer(ubyte flags @R0, ubyte setnum @R1, ubyte settot @R2, uword page @R3,
-                    uword offlo @R4, ubyte offhi @R5) {
+    sub draw_footer(ubyte flags @R0, ubyte setnum @R1, ubyte settot @R2,
+                    uword offlo @R3, ubyte offhi @R4, uword blocks @R5) {
         ; entry ($A012). Capture every @Rn param before the first txt call clobbers r0-r5.
+        ; The position is a BYTE OFFSET (top of the current page, or the hex cursor) - not a page
+        ; number. A page index is meaningless in a binary dump and barely moves while reading, and
+        ; tracking a true page number across the viewer's sliding page cache needed a whole extra
+        ; counter; an offset is exact, self-evident and free. `blocks` (the directory entry's size,
+        ; 0 = unknown) turns it into a percentage as well, which is what you actually read while
+        ; paging - a bare hex offset gives no sense of how far in you are or when you are at the end.
         ubyte fl = flags
         ubyte snum = setnum
         ubyte stot = settot
-        uword pg = page
         uword olo = offlo
         ubyte ohi = offhi
+        uword blks = blocks
 
         bar_fill(FOOT1)
         txt.plot(0, FOOT1)
@@ -266,18 +272,20 @@ syntax {
         }
 
         ; Status block, RIGHT-JUSTIFIED so it ends at col 77 (never 79 - that would auto-scroll the
-        ; bottom row). Measured properly now that this bank has room: no padding inside the numbers,
-        ; so it reads "File 2/6  Page 85" rather than "File  2/ 6   Page  85".
+        ; bottom row). Reads "File 2/6  Ofs $01a2f0" - no padding inside the numbers.
         bool zsm = fl & FF_ZSM != 0 and fl & FF_HEX == 0
+        ubyte pct = 255                                 ; 255 = no size known -> print no percentage
+        if not zsm and blks != 0
+            pct = percent_of(olo, ohi, blks)
         ubyte w = 0
         if fl & FF_SET != 0
-            w = 7 + uwidth(snum) + uwidth(stot)         ; "File n/m" + the 2 spaces after it
-        if fl & FF_HEX != 0 {
-            w += 7                                      ; "$" + 6 hex digits
-        } else if zsm {
-            w += 5                                      ; "[ZSM]"
+            w = 8 + uwidth(snum) + uwidth(stot)         ; "File " 5 + '/' 1 + the 2 spaces after it
+        if zsm {
+            w += 5                                      ; "[ZSM]" - the breakout is one static page
         } else {
-            w += 5 + uwidth(pg)                         ; "Page n"
+            w += 11                                     ; "Ofs $" + 6 hex digits
+            if pct != 255
+                w += 3 + uwidth(pct)                    ; "  nn%"
         }
         if fl & FF_EOF != 0 and not zsm
             w += 6                                      ; " (END)"
@@ -289,19 +297,44 @@ syntax {
             txt.print_uw(stot)
             txt.print(petscii:"  ")
         }
-        if fl & FF_HEX != 0 {
-            txt.chrout('$')
-            put_hex8(ohi)
-            put_hex8(msb(olo))
-            put_hex8(lsb(olo))
-        } else if zsm {
+        if zsm {
             txt.print(petscii:"[ZSM]")
         } else {
-            txt.print(petscii:"Page ")
-            txt.print_uw(pg)
+            txt.print(petscii:"Ofs $")
+            put_hex8(ohi)                   ; 24-bit offset: enough for any X16 file (< 16 MB)
+            put_hex8(msb(olo))
+            put_hex8(lsb(olo))
+            if pct != 255 {
+                txt.print(petscii:"  ")
+                txt.print_uw(pct)
+                txt.chrout(petscii:'%')
+            }
         }
         if fl & FF_EOF != 0 and not zsm
             txt.print(petscii:" (END)")
+    }
+
+    sub percent_of(uword olo, ubyte ohi, uword blks) -> ubyte {
+        ; How far into the file the given 24-bit byte offset is, 0..100.
+        ;
+        ; Everything is done in 256-BYTE units so it fits uword math: the offset's top two bytes ARE
+        ; that value, for free. `blks` is CBM blocks of 254 bytes, so the file is blks*254/256 units
+        ; = blks - blks/128. Then both sides are halved until the numerator can take a *100 without
+        ; overflowing a uword (any file over ~166 KB), which costs at most a percent of resolution -
+        ; invisible in a two-digit readout.
+        uword pos = mkword(ohi, msb(olo))
+        uword tot = blks - (blks >> 7)
+        if tot == 0
+            return 0
+        if pos >= tot
+            return 100                  ; block count is only an estimate - never print 137%
+        while tot > 650 {
+            tot >>= 1
+            pos >>= 1
+        }
+        if tot == 0
+            return 100
+        return lsb(pos * 100 / tot)
     }
 
     sub uwidth(uword v) -> ubyte {

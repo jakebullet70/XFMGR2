@@ -57,7 +57,7 @@ main {
     extsub @bank 9 $A009 = syn_probe() -> ubyte @A
     extsub @bank 9 $A00C = syn_detect_ovl(uword nameptr @R0) -> ubyte @A
     extsub @bank 9 $A00F = syn_read_find(uword outptr @R0, ubyte histcount @R1) -> ubyte @A
-    extsub @bank 9 $A012 = syn_draw_footer(ubyte flags @R0, ubyte setnum @R1, ubyte settot @R2, uword page @R3, uword offlo @R4, ubyte offhi @R5)
+    extsub @bank 9 $A012 = syn_draw_footer(ubyte flags @R0, ubyte setnum @R1, ubyte settot @R2, uword offlo @R3, ubyte offhi @R4, uword blocks @R5)
     ; flag bits for syn_draw_footer - keep in step with xsyntax's FF_* constants
     const ubyte FF_HEX   = %00000001
     const ubyte FF_EOF   = %00000010
@@ -102,6 +102,8 @@ main {
     ; pages_push restarts the window rather than stopping, which is what makes a search hit deep in
     ; a big file reachable (and highlightable). Hex mode uses a single long -> no cap.
     const ubyte VPAGES = 64            ; page-top cache depth; MUST match view_pages' length
+    const long NO_MATCH = $7f000000    ; "no hit in this file": past any real file, and far enough
+                                       ; below the 32-bit ceiling that view_match+termlen can't wrap
     long[64] view_pages
     bool view_eof                      ; the last rendered page reached end-of-file
     bool view_hex                      ; viewer showing hex dump (vs text)
@@ -117,10 +119,23 @@ main {
                                        ; tagged-file walk so every file opens ON its first hit, highlighted.
     ubyte view_setnum                  ; "File N of M" during a set walk: our 1-based position ...
     ubyte view_settot                  ; ... and the size of the tagged set. Display only.
-    uword view_pagebase                ; page number of view_pages[0] - nonzero once the cache window
-                                       ; has slid (see pages_push). Displayed page = base + index + 1.
+    uword view_blocks                  ; file size in CBM blocks (254 bytes each), taken from the
+                                       ; caller's directory entry - 0 = unknown. Feeds the footer's
+                                       ; "n%" only: measuring it here would mean reading the whole
+                                       ; file on every open, which is exactly what we page to avoid.
     long view_next                     ; offset to resume "find next" from
     long view_match                    ; offset of the last search hit
+    long view_pgend                    ; one past the last byte of the page on screen, from the last
+                                       ; render. Lets view_jump skip the page-chain rebuild when the
+                                       ; new hit is already on this page - the common case when you
+                                       ; step matches with N, and the one that was doing the most
+                                       ; needless work.
+    bool view_hit_vis                  ; the page on screen actually PAINTED the find highlight. The
+                                       ; renderer knows this for free (it is the same test that sets
+                                       ; the highlight color), which beats having the footer compare
+                                       ; view_match against the page bounds - two 32-bit compares
+                                       ; cost 69 bytes this overlay does not have, and a flag set by
+                                       ; the draw itself cannot disagree with what is on screen.
     ubyte saved_page                   ; text page stashed across a hex excursion (H toggle)
     long hex_entry_off                 ; view_off on entering hex; unchanged on return -> restore saved_page
 
@@ -157,7 +172,7 @@ main {
     }
 
     sub view_file(uword nameptr @R0, ubyte histcount @R1, ubyte setmode @R2, uword termptr @R3,
-                  ubyte setnum @R4, ubyte settot @R5) -> ubyte {
+                  ubyte setnum @R4, ubyte settot @R5, uword blocks @R6) -> ubyte {
         ; real entry ($A003 via the jmptable). Copy the filename FIRST - diskio/strings
         ; calls clobber cx16.r0-r3, so consume the @Rn params before anything else.
         ; The caller keeps XFMGR in screen mode $01 and repaints after we return.
@@ -167,11 +182,12 @@ main {
         ; paging past EOF advances to the next one.
         ; Returns: 0 = quit (Q/ESC), 1 = step to the NEXT file, 2 = step to the PREVIOUS file
         ; (1 and 2 only ever happen when setmode is set).
-        vhist = histcount               ; capture @R1..@R5 before strings.copy clobbers r0-r3
+        vhist = histcount               ; capture @R1..@R6 before strings.copy clobbers r0-r3
         view_inset = setmode
         view_seed = termptr
         view_setnum = setnum
         view_settot = settot
+        view_blocks = blocks
         void strings.copy(nameptr, namebuf)
         zsm_detect()                    ; set is_zsm + fill zsm_hdr before the view loop
         syn_detect()                    ; pick BASIC/Markdown/off from the file extension
@@ -323,6 +339,7 @@ main {
         ; When draw is false this only MEASURES the page (no screen output) - used to rebuild
         ; the page chain when jumping to a search hit, so PgUp still works afterwards.
         view_eof = false
+        view_hit_vis = false            ; set below iff this page actually paints the find highlight
         ubyte br
         if draw {
             txt.color2(shared.BAR_FG, shared.CONTENT_BG)  ; content: white on gray
@@ -338,19 +355,21 @@ main {
             view_eof = true
             return start_off
         }
-        ; skip to start_off by reading and discarding; remember the last skipped byte so a CR/LF
-        ; line ending straddling the page boundary is handled (see the prev_cr priming below)
-        long toskip = start_off
+        ; Jump to start_off with a real SEEK. This used to read-and-discard from byte 0 on every
+        ; render, which made one page cost O(start_off) of disk I/O - a page 120 KB into a file
+        ; re-read all 120 KB on EVERY keypress, and view_seek_page (which renders each page from the
+        ; top of the file in turn) made that quadratic. f_open already opens the channel with the
+        ; Channel,x,Channel SETLFS form precisely so f_seek works; nothing here ever used it.
+        ;
+        ; We seek to start_off-1 and read that ONE byte rather than seeking to start_off, because the
+        ; byte before the page still matters: it primes prev_cr so a CR/LF pair split across the page
+        ; boundary is swallowed instead of drawing a blank first line.
         ubyte lastskip = 0
-        while toskip != 0 {
-            uword want = 250
-            if toskip < 250
-                want = toskip as uword
-            uword got = diskio.f_read(&viewbuf, want)
-            if got == 0
-                break
-            lastskip = viewbuf[lsb(got) - 1]
-            toskip -= got
+        if start_off != 0 {
+            if diskio.f_seek(start_off - 1) {
+                if diskio.f_read(&viewbuf, 1) == 1
+                    lastskip = viewbuf[0]
+            }
         }
 
         long consumed = start_off
@@ -425,6 +444,8 @@ main {
                         txt.setchr(col, VTOP + row, content_scr(ch))
                         if plen != 0 and consumed-1 >= view_match and consumed-1 < mend {
                             txt.setclr(col, VTOP + row, (shared.FIND_BG << 4) | shared.FIND_FG)
+                            view_hit_vis = true     ; the hit is ON SCREEN -> the footer reports the
+                                                    ; hit's offset, not this page's top
                             ; Reuse this 32-bit verdict to note the hit's line-relative columns, so
                             ; the syntax pass can leave those cells alone without repeating the math.
                             ; ln_len was already bumped for this byte, so its index is ln_len-1.
@@ -496,16 +517,8 @@ main {
             view_eof = true
             return start_off
         }
-        long toskip = start_off
-        while toskip != 0 {
-            uword want = 250
-            if toskip < 250
-                want = toskip as uword
-            uword got = diskio.f_read(&viewbuf, want)
-            if got == 0
-                break
-            toskip -= got
-        }
+        if start_off != 0
+            void diskio.f_seek(start_off)       ; see the note in view_render - this was an O(n) skip
         long off = start_off
         ubyte row = 0
         repeat {
@@ -637,21 +650,11 @@ main {
         if plen == 0
             return false
         ; scanning the whole file can take a moment on big files - show progress
-        bar_fill(SCR_BOT)
-        txt.plot(0, SCR_BOT)
-        txt.print(" Working...")
+        working_note()
         if not diskio.f_open(namebuf)
             return false
-        long toskip = from
-        while toskip != 0 {
-            uword want = 250
-            if toskip < 250
-                want = toskip as uword
-            uword got = diskio.f_read(&viewbuf, want)
-            if got == 0
-                break
-            toskip -= got
-        }
+        if from != 0
+            void diskio.f_seek(from)            ; see the note in view_render - this was an O(n) skip
         long pos = from
         ubyte mi = 0
         bool found = false
@@ -702,6 +705,17 @@ main {
         return true
     }
 
+    sub working_note() {
+        ; "Working..." over the footer while a whole-file scan runs (search, jump-to-bottom) so the
+        ; viewer doesn't look hung. Clears BOTH bars: blanking only the bottom one left the key bar
+        ; stranded above the message, which read as a half-drawn footer. paint_footer() (called at
+        ; the top of every main-loop pass) puts it back.
+        bar_fill(FOOT1)
+        bar_fill(FOOT2)
+        txt.plot(0, FOOT2)
+        txt.print(" Working...")
+    }
+
     sub paint_footer() {
         ; Both footer bars, drawn by the xsyntax bank (see syntax.draw_footer). ALL the label text
         ; and the status layout live there - bank 2 is completely full, and this is viewer chrome,
@@ -722,13 +736,31 @@ main {
             fflags |= FF_SET
         if is_zsm
             fflags |= FF_ZSM
+        ; Position shown is a BYTE OFFSET: normally the top of what is on screen (the hex cursor, or
+        ; the current text page's first byte).
+        ;
+        ; EXCEPT when the find highlight is on screen - then we report the HIT's offset instead. The
+        ; page top is the honest answer to "where does this screen start", but it is the wrong answer
+        ; to the question the reader is actually asking, and it made the indicator look broken:
+        ; stepping N/Space through several matches inside ONE page moved the highlight every time and
+        ; never moved the number. view_hit_vis comes from the renderer, so it is true exactly when a
+        ; highlight was painted - not when we merely have a stale hit somewhere off screen.
+        ; (Hex mode needs none of this: view_jump aligns view_off to the hit's own 16-byte row, so
+        ; the page top already moves with every match.)
+        ;
         ; hoist every argument into a local first: narrowing a `long` straight into an @Rn parameter
         ; is a codegen error ("invalid register for lsw"), and computing in the call risks
         ; clobbering r0-r5 mid-setup
-        uword fpage = view_pagebase + view_page + 1
-        uword folo = (view_off & $0000ffff) as uword
-        ubyte fohi = ((view_off >> 16) & 255) as ubyte
-        syn_draw_footer(fflags, view_setnum, view_settot, fpage, folo, fohi)
+        long fpos = view_off
+        if not view_hex {
+            fpos = view_pages[view_page]
+            if view_hit_vis
+                fpos = view_match
+        }
+        uword folo = (fpos & $0000ffff) as uword
+        ubyte fohi = ((fpos >> 16) & 255) as ubyte
+        uword fblk = view_blocks
+        syn_draw_footer(fflags, view_setnum, view_settot, folo, fohi, fblk)
     }
 
     sub view_notify(str m) {
@@ -738,8 +770,9 @@ main {
         ; It overwrites the SECOND footer bar, so it restores the footer itself on the way out
         ; rather than leaving one bar showing until the next page render (which re-reads the file,
         ; so the half-drawn footer was on screen long enough to look like a glitch).
-        bar_fill(SCR_BOT)
-        txt.plot(0, SCR_BOT)
+        bar_fill(FOOT1)                 ; both bars, so the message never sits under a stray key bar
+        bar_fill(FOOT2)
+        txt.plot(0, FOOT2)
         txt.print(m)
         while cbm.GETIN2() != 0 {
         }
@@ -762,19 +795,31 @@ main {
         ; In a walk with NO search term there is nothing to chase, so "Next" plainly means the next
         ; FILE. Without this, N/Space scanned for an empty term, failed, and put a " not found"
         ; message over the footer on every press.
-        if view_inset != 0 and view_find[0] == 0
-            return 1
+        ;
+        ; EVERY dead end says so. Silently wrapping to the first match, or silently re-opening the
+        ; last file of a set, is indistinguishable from the viewer ignoring the key - which is
+        ; exactly how it got reported ("seems to get stuck on the last item").
+        if view_inset != 0 and view_find[0] == 0 {
+            if view_setnum < view_settot
+                return 1
+            view_notify(" All done - last file of the set")
+            return 0
+        }
         if view_find_at(view_next) {
             view_jump()
             return 0
         }
-        if view_inset != 0
-            return 1                    ; hits exhausted here -> next file of the set
+        ; Hits exhausted here. In a set walk that means continue in the next file - but on the LAST
+        ; file of the set there is no next one, so fall through to the wrap below and announce it,
+        ; rather than returning 1 and letting the caller silently re-open this same file.
+        if view_inset != 0 and view_setnum < view_settot
+            return 1
         if view_find_at(0) {
-            view_jump()                 ; wrapped (no notice - the jump back to the top shows it)
+            view_notify(" All done - back to the first match")
+            view_jump()                 ; wrapped: the notice above is what makes that readable
         } else {
             view_find[0] = 0            ; miss -> drop the term so no stale highlight is painted
-            view_notify(" not found")
+            view_notify(" Not found")
         }
         return 0
     }
@@ -784,7 +829,10 @@ main {
         view_next = view_match + 1
         if view_hex {
             view_off = view_match - (view_match & 15)   ; align down to the 16-byte hex row
-        } else {
+        } else if view_match < view_pages[view_page] or view_match >= view_pgend {
+            ; Only rebuild the page chain when the hit is NOT already on screen. Stepping matches
+            ; inside one page is the common case, and view_seek_page re-renders every page from the
+            ; top of the file to get here - by far the most expensive thing the viewer does.
             view_seek_page(view_match)
         }
     }
@@ -794,19 +842,18 @@ main {
         ;
         ; The cache cap used to be a HARD STOP: on a file longer than the cache, view_seek_page
         ; could not reach a search hit past it and silently parked on the last cached page, so the
-        ; hit was never on screen and never highlighted (that is the "Pg:44 with VPAGES=44, no
-        ; highlight" symptom). Now a full cache RESTARTS its window at the current page instead of
-        ; refusing to advance, with view_pagebase carrying the pages dropped so the displayed page
-        ; number stays true. Sliding the window one slot would preserve more PgUp history, but a
-        ; 176-byte overlapping move costs far more code than this overlay has left; restarting is a
-        ; few assignments. Cost: past the cap, PgUp dead-ends at the restart point.
+        ; hit was never on screen and never highlighted (the "Pg:44 with VPAGES=44, no highlight"
+        ; symptom). Now a full cache RESTARTS its window at the current page instead of refusing to
+        ; advance. Sliding the window one slot would preserve more PgUp history, but a 256-byte
+        ; overlapping move costs far more code than this overlay has left; restarting is a few
+        ; assignments. Cost: past the cap, PgUp dead-ends at the restart point. The footer shows a
+        ; byte OFFSET, not a page number, so nothing has to track pages across a restart.
         if view_page + 1 < VPAGES {
             view_pages[view_page+1] = nxt
             view_known = view_page + 1
             view_page++
             return
         }
-        view_pagebase += view_page + 1
         view_pages[0] = nxt
         view_page = 0
         view_known = 0
@@ -819,7 +866,6 @@ main {
         view_pages[0] = 0
         view_page = 0
         view_known = 0
-        view_pagebase = 0
         repeat {
             long nxt = view_render(view_pages[view_page], false)
             if view_eof
@@ -849,11 +895,9 @@ main {
         ; jump to the last page. Text: walk the page chain (measuring, no draw) until EOF and
         ; stop on the last page that holds content. Hex: align view_off to the final page.
         ; This re-reads the whole file, so on a big file it takes a moment - show a "Working"
-        ; note on the footer so the viewer doesn't look hung. It stays up through the scan and
-        ; the final page render, then the main loop's footer repaint clears it.
-        bar_fill(SCR_BOT)
-        txt.plot(0, SCR_BOT)
-        txt.print(" Working...")
+        ; note so the viewer doesn't look hung. It stays up through the scan and the final page
+        ; render, then the main loop's footer repaint clears it.
+        working_note()
         if view_hex {
             long sz = file_len()
             view_off = 0
@@ -863,8 +907,7 @@ main {
             view_pages[0] = 0
             view_page = 0
             view_known = 0
-            view_pagebase = 0
-            long nxt
+                long nxt
             repeat {
                 nxt = view_render(view_pages[view_page], false)
                 if view_eof {
@@ -895,24 +938,37 @@ main {
         view_off = 0
         view_page = 0
         view_known = 0
-        view_pagebase = 0
         view_next = 0
         view_match = 0                     ; stale hit offsets must not survive into a new file
-        view_find[0] = 0
         view_pages[0] = 0
-        ; Pre-seeded term (tagged-file walk after a content search): adopt it as THIS file's find
-        ; term and jump straight to the first hit, so the file opens on the match with the normal
-        ; find highlight already painted. N/Space then step through the rest of the hits as usual.
-        ; Done after the resets above - they clear view_find, so seeding has to come last.
-        if view_seed != 0 {
-            if @(view_seed) != 0 {
-                void strings.copy(view_seed, view_find)
-                if view_find_at(0)
-                    view_jump()
-                else
-                    view_find[0] = 0        ; not in THIS file - drop it, or the renderer would
-                                            ; highlight at a stale view_match (see the F key)
-            }
+        view_pgend = 0                     ; nothing rendered for THIS file yet. Must be cleared: the
+                                           ; seed jump below runs before any render, and view_jump
+                                           ; tests the hit against it - the previous file's value
+                                           ; would make it skip the seek and leave us on page 0.
+        ; THE FIND TERM TRAVELS WITH YOU through a tagged-set walk. Only a plain single-file view
+        ; (or the first file of a walk) starts clean and takes the seeded term; after that whatever
+        ; is in view_find carries forward, so a term typed with F in file 1 still highlights in
+        ; file 2. Wiping it on every entry meant Space rolled into the next file with nothing to
+        ; chase - the file opened at offset 0 with no highlight, which is how it was reported.
+        ; view_seed is XFMGR's content-search term and is 0 when the walk began with a plain Tag,
+        ; so it cannot be the only way a term gets in here.
+        if view_inset == 0 or view_setnum <= 1 {
+            view_find[0] = 0
+            if view_seed != 0
+                void strings.copy(view_seed, view_find)   ; empty seed -> still empty, handled below
+        }
+        ; Open ON the first hit, highlighted, so the page and the footer offset agree with what the
+        ; eye lands on. N/Space then step through the rest as usual.
+        if view_find[0] != 0 {
+            if view_find_at(0)
+                view_jump()
+            else
+                view_match = NO_MATCH   ; not in THIS file: KEEP the term for the next file of the
+                                        ; walk, but park the hit offset out past any real file so
+                                        ; the renderer highlights nothing. Clearing view_find here
+                                        ; instead would lose the term at the first file that
+                                        ; happens not to contain it; leaving view_match at 0 would
+                                        ; paint a bogus highlight over the first bytes of the file.
         }
         repeat {
             long nxt
@@ -922,6 +978,7 @@ main {
                 nxt = view_render_zsm()         ; ZSM file: parsed header breakout (static page)
             else
                 nxt = view_render(view_pages[view_page], true)
+            view_pgend = nxt            ; what is on screen now - view_jump tests hits against it
             paint_footer()
             g_key = wait_key()
             if g_key >= $c1 and g_key <= $da
@@ -960,8 +1017,7 @@ main {
                         view_pages[0] = 0
                         view_page = 0
                         view_known = 0
-                        view_pagebase = 0
-                    }
+                                    }
                 }
                 'b' -> {                        ; B: jump to the last page
                     if not (is_zsm and not view_hex)    ; the ZSM breakout is a single static page
@@ -997,7 +1053,7 @@ main {
                             ; at whatever the LAST hit was - so keeping the term would paint a
                             ; bogus highlight over unrelated text.
                             view_find[0] = 0
-                            view_notify(" not found")
+                            view_notify(" Not found")
                         }
                     }
                 }
