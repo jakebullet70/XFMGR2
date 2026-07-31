@@ -11,8 +11,10 @@ XFMGR is main-RAM constrained; the lever for headroom is moving cold code into H
 overlays (%output library blobs, org $A000, loaded via diskio.loadlib, called via `extsub @bank`).
 
 **Bank map** (see [[x16-banked-ram-min-config]], xarena.FIRST_BANK): 0=Kernal, 1=xtree dir-extras
-+ xfiles sa index ($b000), 2=tview (viewer), 3=miscutil (wildcard/prune/history + stream_copy
-byte-pump + whole-disk Find crawler), 4=uiutil (bottom dialogs + About/modal-box drawing),
+(the 14-byte DX per-node record at $a000 - now also holds name_off/depth/parent, see below)
++ xfiles sa index at $b000 (1024 * 4-byte recs, uword-indexed), 2=tview (viewer), 3=miscutil
+(wildcard/prune/history + stream_copy byte-pump + whole-disk Find crawler + content_scan),
+4=uiutil (bottom dialogs + About/modal-box drawing),
 5=ximgview (BMX image viewer, see [[xfmgr-bmx-image-viewer]]), 6=zsmkit v2 engine blob (ZSM
 playback, see [[xfmgr-music-player]]), 7=xmusic (WAV/PCM streamer), **8=xtree dir-NAME slab**
 (NAME_BANK, a DATA bank not an overlay - see below). Arena = banks **9**..max_bank (FIRST_BANK is
@@ -47,8 +49,20 @@ far-READS the name into a shared `name_stage` (str "?"*63) and returns THAT**, s
 its plain `str` API unchanged (draw_tree/build_path/compares). INVARIANT: never hold a name_ptr result
 across another name_ptr call - one staging buffer, each caller consumes it immediately (verified). This
 was the "Tier B" name-slab move from [[xfmgr-architecture]]; hot draw_tree tolerates the per-row
-far-read fine. The d_* node pool stays in main RAM (still movable, higher effort). See also
-[[xfmgr-ram-savings-menu]].
+far-read fine. See also [[xfmgr-ram-savings-menu]].
+
+**BIG WIN DONE (2026-07-31): part of the d_* node pool -> the DX record.** The GLOBAL browser's
+1024-file cap needed `uword` sa_ indices ([[xfmgr-showall-revisit]]), which cost ~830 B main RAM. Funded
+by moving three of the redraw-hot `d_*` node-pool arrays into the existing per-node BANKED record (bank 1,
+DX_BASE=$a000): DX_REC grew **7 -> 14 bytes**, adding name_off(+7)/depth(+9)/parent(+10), reached via new
+`dx_noff`/`dx_depth`/`dx_parent` accessors (replaced `d_name_off`/`d_depth`/`d_parent` at all ~97 sites;
+`name_ptr` and `build_path` now go through them). 254*14 = 3556 B ($a000..$ade4), clear of sa at $b000.
+`d_first_child`/`d_next_sibling`/`d_flags` stay MAIN-RAM arrays: 44 hot sites (d_flags) net near-zero and
+would slow traversal. Moving name_off+depth+parent netted ~540 B (BSS -748 offset by +~210 accessor code).
+**Trap (found by adversarial review, not manual test):** growing the record made `dx_clear` (full-record
+zero) wipe the moved fields, so `unlog()` (Alt-R Release on a LIVE node) corrupted its name/depth/parent
+-> added `dx_clear_files` (clears only the cold +0..+6 file fields); `new_node`'s full `dx_clear` is fine
+because it re-sets the fields after. Remaining movable: the rest of d_* (higher effort, hot).
 
 **Backlog / still movable:** the easy wins are done (copy, dialogs, About, command menu).
 input_line/hist_popup (~2 KB) are BLOCKED - input_line calls pick_dir (deep xtree), which the

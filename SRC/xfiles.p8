@@ -23,7 +23,8 @@ xfiles {
 
     const ubyte FILE_VIS_MAX = 255      ; max files indexed for one displayed dir
     const ubyte NAME_CAP     = 249      ; longest filename we store (keeps reclen<256)
-    const ubyte GLOBAL_MAX   = 255      ; max files collected for ShowAll / Find (hit cap -> "(partial)")
+    const uword GLOBAL_MAX   = 1024     ; max files collected for ShowAll / Global / Find (hit cap -> "(partial)")
+                                        ; 1024 * 4-byte recs = the full $b000..$bfff of SA_BANK
 
     ; bits in a record's flags byte (record offset +4)
     const ubyte REC_TAGGED = %00000001
@@ -60,19 +61,20 @@ xfiles {
     ; case-insensitive matching. "*" means "show everything".
     str spec_lc = "?" * 32
 
-    ; ShowAll / Find: files gathered from every logged directory. The index lives in BANKED RAM to
-    ; keep ~1 KB of this cold data (only touched during a ShowAll/Find + its result browser) out of
-    ; main RAM. It shares bank 1 with xtree's dir-extras: those sit at $a000..~$a6f2, so this table
-    ; is parked at $b000, well clear. Per-entry 4-byte record:  +0 bank(ubyte) +1 off(uword) +3 dir(ubyte).
+    ; ShowAll / Global / Find: files gathered from every logged directory. The index lives in BANKED
+    ; RAM to keep this cold data (only touched during a ShowAll/Global/Find + its result browser) out
+    ; of main RAM. It shares bank 1 with xtree's dir-extras: those sit at $a000..~$a6f2, so this table
+    ; is parked at $b000..$bfff (4 KB = up to GLOBAL_MAX=1024 entries), well clear. Per-entry 4-byte
+    ; record:  +0 bank(ubyte) +1 off(uword) +3 dir(ubyte). Indices are uword (the 1024 cap needs it).
     const ubyte SA_BANK = 1
     const uword SA_BASE = $b000
     const ubyte SA_REC  = 4
-    ubyte sa_count
+    uword sa_count
 
-    sub sa_rec(ubyte i) -> uword {
-        return SA_BASE + (i as uword) * SA_REC
+    sub sa_rec(uword i) -> uword {
+        return SA_BASE + i * SA_REC
     }
-    sub sa_set(ubyte i, ubyte bank, uword off, ubyte dir) {
+    sub sa_set(uword i, ubyte bank, uword off, ubyte dir) {
         cx16.push_rambank(SA_BANK)
         uword p = sa_rec(i)
         @(p)     = bank
@@ -80,19 +82,19 @@ xfiles {
         @(p + 3) = dir
         cx16.pop_rambank()
     }
-    sub sa_get_bank(ubyte i) -> ubyte {
+    sub sa_get_bank(uword i) -> ubyte {
         cx16.push_rambank(SA_BANK)
         ubyte v = @(sa_rec(i))
         cx16.pop_rambank()
         return v
     }
-    sub sa_get_off(ubyte i) -> uword {
+    sub sa_get_off(uword i) -> uword {
         cx16.push_rambank(SA_BANK)
         uword v = peekw(sa_rec(i) + 1)
         cx16.pop_rambank()
         return v
     }
-    sub sa_get_dir(ubyte i) -> ubyte {
+    sub sa_get_dir(uword i) -> ubyte {
         cx16.push_rambank(SA_BANK)
         ubyte v = @(sa_rec(i) + 3)
         cx16.pop_rambank()
@@ -350,41 +352,16 @@ xfiles {
         xtree.dx_set_tag(dir_idx, 0)
     }
 
-    sub collect_tagged() {
-        ; gather every tagged (non-hidden) file across all LOGGED directories into
-        ; the sa_* arrays. Walks each dir's record run exactly like build_index.
+    ; ---- one shared arena walker for all three flat-list gathers (ShowAll / Global / Find) ----
+    ; The three collectors differ only in the per-record test, so they share this walker to keep code
+    ; size down (main RAM is scarce). It walks every LOGGED directory's record run (bridging bank
+    ; sentinels like build_index) and fills the sa_* table, capped at GLOBAL_MAX.
+    ;   mode 0 = tagged only            (ShowAll consolidation)
+    ;   mode 1 = NAME matches `pat`     (Find-file results)
+    ;   mode 2 = all files passing the FileSpec `pat` (GLOBAL browser; '*' short-circuits the match)
+    sub collect(ubyte mode, str pat) {
         sa_count = 0
-        ubyte d
-        for d in 0 to xtree.dir_count-1 {
-            if xtree.d_flags[d] & xtree.FL_SCANNED == 0
-                continue
-            uword remaining = xtree.dx_fcount(d)
-            ubyte bank = xtree.dx_fbank(d)
-            uword off  = xtree.dx_foff(d)
-            while remaining != 0 and sa_count < GLOBAL_MAX {
-                ubyte rl = xarena.far_peek(bank, off)
-                if rl == 0 {
-                    bank++
-                    off = xarena.WIN_START
-                    continue
-                }
-                ubyte fl = xarena.far_peek(bank, off + 4)
-                if fl & REC_TAGGED != 0 and fl & REC_HIDDEN == 0 {
-                    sa_set(sa_count, bank, off, d)
-                    sa_count++
-                }
-                off += rl
-                remaining--
-            }
-        }
-    }
-
-    sub collect_matching(str lc_pattern) {
-        ; Find-file result gather: like collect_tagged, but selects records whose NAME matches the
-        ; (lowercased) wildcard instead of the tagged flag. Walks every logged directory's record
-        ; run and fills the sa_* arrays; caps at GLOBAL_MAX (main reads sa_count==GLOBAL_MAX as the
-        ; "results capped" signal). Reuses cmpa as name scratch.
-        sa_count = 0
+        bool takeall = mode == 2 and spec_all()
         ubyte d
         for d in 0 to xtree.dir_count-1 {
             if xtree.d_flags[d] & xtree.FL_SCANNED == 0
@@ -401,8 +378,16 @@ xfiles {
                 }
                 ubyte fl = xarena.far_peek(bank, off + 4)
                 if fl & REC_HIDDEN == 0 {
-                    xarena.read_str(bank, off + 5, cmpa, NAME_RD_CAP)
-                    if strings.pattern_match_nocase(cmpa, lc_pattern, false) {
+                    bool take = false
+                    if mode == 0 {
+                        take = fl & REC_TAGGED != 0
+                    } else if takeall {
+                        take = true
+                    } else {
+                        xarena.read_str(bank, off + 5, cmpa, NAME_RD_CAP)
+                        take = strings.pattern_match_nocase(cmpa, pat, false)
+                    }
+                    if take {
                         sa_set(sa_count, bank, off, d)
                         sa_count++
                     }
@@ -413,11 +398,38 @@ xfiles {
         }
     }
 
-    sub sa_name(ubyte i, str dest) {
+    sub collect_tagged()               { collect(0, spec_lc) }              ; tagged-only (pat unused)
+    sub collect_matching(str lc_pat)   { collect(1, lc_pat)  }              ; Find: NAME matches lc_pat
+    sub collect_all()                  { collect(2, spec_lc) }             ; GLOBAL: all files vs FileSpec
+
+    sub sa_is_tagged(uword i) -> bool {
+        ; tag state of a gathered row (for the GLOBAL browser's per-row marker)
+        return xarena.far_peek(sa_get_bank(i), sa_get_off(i) + 4) & REC_TAGGED != 0
+    }
+
+    sub sa_toggle_tag(uword i) -> bool {
+        ; flip the tag on a gathered row IN PLACE (row stays visible) and keep the owning dir's
+        ; tagged count in step, so tree markers and batch ops stay correct. Returns the new state.
+        ubyte bank = sa_get_bank(i)
+        uword off  = sa_get_off(i)
+        ubyte fl = xarena.far_peek(bank, off + 4)
+        if fl & REC_TAGGED != 0 {
+            fl &= %11111110
+            xarena.far_poke(bank, off + 4, fl)
+            xtree.dx_dec_tag(sa_get_dir(i))
+            return false
+        }
+        fl |= REC_TAGGED
+        xarena.far_poke(bank, off + 4, fl)
+        xtree.dx_inc_tag(sa_get_dir(i))
+        return true
+    }
+
+    sub sa_name(uword i, str dest) {
         xarena.read_str(sa_get_bank(i), sa_get_off(i) + 5, dest, NAME_RD_CAP)
     }
 
-    sub sa_blocks(ubyte i) -> uword {
+    sub sa_blocks(uword i) -> uword {
         ubyte bank = sa_get_bank(i)
         uword off  = sa_get_off(i)
         cx16.push_rambank(bank)
@@ -426,7 +438,7 @@ xfiles {
         return b
     }
 
-    sub sa_untag(ubyte i) {
+    sub sa_untag(uword i) {
         ; untag a ShowAll entry and decrement its owning directory's tagged count
         ubyte bank = sa_get_bank(i)
         uword off  = sa_get_off(i)

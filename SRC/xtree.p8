@@ -32,35 +32,50 @@ xtree {
     ; "cold" per-directory fields (file location + tagged count) are touched only on
     ; scan / file-load / tagging ops - never in the per-row redraw loop - so they live
     ; in BANKED RAM (see the dir-extras block below) to reclaim ~1.3 KB of main RAM.
-    ubyte[DIR_MAX] d_parent             ; node id, NONE for root
+     ; d_parent (+10) moved to the DX_BANK record; see dx_parent
     ubyte[DIR_MAX] d_first_child        ; node id
     ubyte[DIR_MAX] d_next_sibling       ; node id
-    uword[DIR_MAX] d_name_off           ; offset into dname_buf
     ubyte[DIR_MAX] d_flags
-    ubyte[DIR_MAX] d_depth
+    ; d_name_off (+7) and d_depth (+9) moved to the DX_BANK record; see dx_noff/dx_depth
 
     ubyte dir_count
 
-    ; --- per-directory "cold" extras, kept in BANKED RAM to save main RAM ---
-    ; A fixed 7-byte record per node id, packed into bank DX_BANK at DX_BASE + id*DX_REC:
+    ; --- per-directory extras, kept in BANKED RAM to save main RAM ---
+    ; A fixed 14-byte record per node id, packed into bank DX_BANK at DX_BASE + id*DX_REC:
     ;   +0 file_count (uword)  +2 file_off (uword)  +4 file_bank (ubyte)  +5 tagged (uword)
+    ;   +7 name_off (uword)  +9 depth (ubyte)  +10 parent  +11 first_child  +12 next_sibling  +13 flags
+    ; The +7.. fields were formerly the d_* main-RAM node-pool arrays; they moved here to reclaim
+    ; ~1.7 KB of main RAM (the 1024-entry ShowAll snapshot needed uword indices, which cost it).
     ; DX_BANK is the LOWEST arena bank (always present, even on a 512 KB machine); the
     ; file arena starts one bank higher (xarena.FIRST_BANK = DX_BANK + 1), so the bump
-    ; allocator and its reset() never disturb this table. 254 nodes * 7 = 1778 B, well
-    ; inside one 8 KB bank.
+    ; allocator and its reset() never disturb this table. 254 nodes * 14 = 3556 B ($a000..$ade4),
+    ; clear of the sa index at $b000, both inside this 8 KB bank.
     const ubyte DX_BANK = 1
     const uword DX_BASE = $a000
-    const ubyte DX_REC  = 7
+    const ubyte DX_REC  = 14
 
     sub dx_off(ubyte idx) -> uword {
         return DX_BASE + (idx as uword) * DX_REC
     }
 
     sub dx_clear(ubyte idx) {
+        ; zero the WHOLE record - for a FRESH node only (new_node re-sets name_off/depth/parent after)
         uword o = dx_off(idx)
         cx16.push_rambank(DX_BANK)
         ubyte i
         for i in 0 to DX_REC - 1
+            @(o + i) = 0
+        cx16.pop_rambank()
+    }
+
+    sub dx_clear_files(ubyte idx) {
+        ; zero ONLY the cold file fields (+0..+6: file_count/off/bank/tagged), leaving the structural
+        ; name_off(+7)/depth(+9)/parent(+10) intact - for unlog(), which resets a STILL-LIVE node's
+        ; scan state without detaching it from the tree.
+        uword o = dx_off(idx)
+        cx16.push_rambank(DX_BANK)
+        ubyte i
+        for i in 0 to 6
             @(o + i) = 0
         cx16.pop_rambank()
     }
@@ -124,10 +139,49 @@ xtree {
             dx_set_tag(idx, t - 1)
     }
 
+    ; +7 name_off: byte offset of this node's name in the NAME_BANK arena (was d_name_off[])
+    sub dx_noff(ubyte idx) -> uword {
+        cx16.push_rambank(DX_BANK)
+        uword v = peekw(dx_off(idx) + 7)
+        cx16.pop_rambank()
+        return v
+    }
+    sub dx_set_noff(ubyte idx, uword v) {
+        cx16.push_rambank(DX_BANK)
+        pokew(dx_off(idx) + 7, v)
+        cx16.pop_rambank()
+    }
+
+    ; +9 depth: tree indentation level, 0 at root (was d_depth[])
+    sub dx_depth(ubyte idx) -> ubyte {
+        cx16.push_rambank(DX_BANK)
+        ubyte v = @(dx_off(idx) + 9)
+        cx16.pop_rambank()
+        return v
+    }
+    sub dx_set_depth(ubyte idx, ubyte v) {
+        cx16.push_rambank(DX_BANK)
+        @(dx_off(idx) + 9) = v
+        cx16.pop_rambank()
+    }
+
+    ; +10 parent: node id of this node's parent, NONE at root (was d_parent[])
+    sub dx_parent(ubyte idx) -> ubyte {
+        cx16.push_rambank(DX_BANK)
+        ubyte v = @(dx_off(idx) + 10)
+        cx16.pop_rambank()
+        return v
+    }
+    sub dx_set_parent(ubyte idx, ubyte v) {
+        cx16.push_rambank(DX_BANK)
+        @(dx_off(idx) + 10) = v
+        cx16.pop_rambank()
+    }
+
     ; --- directory-name bump arena (BANKED: reserved bank 8, NAME_BANK) ---
     ; Names live in NAME_BANK at NAME_BASE+offset, NOT main RAM - this reclaimed the 3072-byte
-    ; main-RAM slab. d_name_off[idx] is still a byte offset into the arena; the name's far address
-    ; is NAME_BASE + d_name_off[idx]. name_ptr() far-reads the requested name into name_stage (main
+    ; main-RAM slab. dx_noff(idx) is still a byte offset into the arena; the name's far address
+    ; is NAME_BASE + dx_noff(idx). name_ptr() far-reads the requested name into name_stage (main
     ; RAM) and returns that pointer, so every reader keeps its plain str API unchanged. ONE staging
     ; buffer is safe: no code holds a name_ptr result across another name_ptr call (draw_tree /
     ; build_path / the name compares all consume it immediately, one node at a time).
@@ -170,7 +224,7 @@ xtree {
 
     sub name_ptr(ubyte idx) -> str {
         ; far-read the banked name into the shared staging buffer; valid until the NEXT call
-        xarena.read_str(NAME_BANK, NAME_BASE + d_name_off[idx], name_stage, 63)
+        xarena.read_str(NAME_BANK, NAME_BASE + dx_noff(idx), name_stage, 63)
         return name_stage
     }
 
@@ -179,11 +233,11 @@ xtree {
         ; longer -> append a fresh copy to the name arena (the old bytes leak, like unlink()).
         if strings.length(newname) <= strings.length(name_ptr(idx)) {
             ; fits the old slot: overwrite in place (far-write into the name bank)
-            xarena.far_write_str(NAME_BANK, NAME_BASE + d_name_off[idx], newname)
+            xarena.far_write_str(NAME_BANK, NAME_BASE + dx_noff(idx), newname)
         } else {
             uword noff = dname_store(newname)               ; longer: append (old bytes leak)
             if noff != $ffff
-                d_name_off[idx] = noff
+                dx_set_noff(idx, noff)
         }
     }
 
@@ -195,16 +249,16 @@ xtree {
             return NONE                     ; name_ptr would dereference dname_buf+$ffff
         ubyte idx = dir_count
         dir_count++
-        d_name_off[idx]      = noff
-        d_parent[idx]        = parent
+        dx_clear(idx)                       ; zero the WHOLE banked record FIRST (it now holds name_off too)
+        dx_set_noff(idx, noff)              ; ...then write the banked fields
+        dx_set_parent(idx, parent)
         d_first_child[idx]   = NONE
         d_next_sibling[idx]  = NONE
-        dx_clear(idx)                       ; file_count/off/bank + tagged (banked extras)
         d_flags[idx]         = 0
         if parent == NONE
-            d_depth[idx] = 0
+            dx_set_depth(idx, 0)
         else
-            d_depth[idx] = d_depth[parent] + 1
+            dx_set_depth(idx, dx_depth(parent) + 1)
         return idx
     }
 
@@ -229,7 +283,7 @@ xtree {
         ; detach idx from its parent's child chain (used after a directory is pruned on
         ; disk). The node slot itself is NOT reclaimed - the pool is append-only, so it
         ; just leaks until the next full reset(); its now-unreachable subtree leaks too.
-        ubyte parent = d_parent[idx]
+        ubyte parent = dx_parent(idx)
         if parent == NONE
             return                          ; root has no parent; never unlinked
         if d_first_child[parent] == idx {
@@ -255,7 +309,8 @@ xtree {
         ; pointed at are likewise abandoned as dead space (see xarena; reset() reclaims).
         d_first_child[idx] = NONE
         d_flags[idx] &= ~(FL_SCANNED | FL_EXPANDED | FL_HASKIDS | FL_DENIED)
-        dx_clear(idx)                       ; file_count / off / bank + tagged -> 0
+        dx_clear_files(idx)                 ; reset file_count/off/bank/tagged ONLY - the node stays
+                                            ; live, so its banked name_off/depth/parent MUST survive
         rebuild_visible()
     }
 
@@ -286,7 +341,7 @@ xtree {
             } else {
                 ; next sibling, or climb until a sibling exists
                 while node != NONE and d_next_sibling[node] == NONE
-                    node = d_parent[node]
+                    node = dx_parent(node)
                 if node != NONE
                     node = d_next_sibling[node]
             }
@@ -303,7 +358,7 @@ xtree {
                 stack[sp] = n
                 sp++
             }
-            n = d_parent[n]
+            n = dx_parent(n)
         }
         void strings.copy(base_path, dest)
         ; ensure a trailing slash on the base

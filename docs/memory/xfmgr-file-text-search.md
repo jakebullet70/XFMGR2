@@ -1,10 +1,29 @@
 ---
 name: xfmgr-file-text-search
-description: "Backlog: search for TEXT CONTENT inside files (grep-style), distinct from the existing find-file-by-name crawler"
+description: "DONE build 205-212: S in the GLOBAL browser content-searches TAGGED files, untagging non-matches (XTree Ctrl-S 'search prunes the tag set')"
 metadata:
   node_type: memory
   type: project
   originSessionId: 50cbdaf9-8664-4cd5-8a51-deebebebd509
+---
+
+**DONE build 205-212 (2026-07-31).** Built on the **XTree Ctrl-S model**: search does NOT make its own
+results list - it **prunes the tag set**. In the GLOBAL browser ([[xfmgr-showall-revisit]]) press **S**;
+it scans the currently-TAGGED files and UNTAGS every one whose CONTENTS don't contain the term, so only
+matches stay tagged (press T to view just them). Untagged rows are ignored - tag candidates first
+(`Ctrl-T`/`Ctrl-W`/`Space`), which also bounds the cost.
+
+The per-file byte scan is `content_scan(dir,name,term)` in the **miscutil overlay** (bank 3, jmptable
+entry $A021; main declares the matching `extsub @bank 3 $A021`). It opens the file with the overlay's own
+diskio, streams 255-byte chunks through `cpbuf`, and matches with the same naive persistent-`mi` matcher
+tview's `view_find_at` uses (mi carries across chunk boundaries, so a hit spanning a read boundary is not
+missed) - but with an **encoding-agnostic fold** (`fold_byte`) mapping ASCII A-Z, PETSCII a-z ($41-5A
+both), PETSCII A-Z ($c1-da) and ASCII a-z all to one lowercase, so a PETSCII-typed term matches ASCII or
+PETSCII bytes ([[prog8-ascii-file-byte-match]]). `content_search_prune` drives it (build_path+sa_name per
+file, live "Scanning n/N (any key aborts)" counter). Term capped at 32 (SCAN_TCAP == input_line maxlen).
+The one search bug an adversarial review found: `input_line`'s `box_close()` repaints the normal frame
+over the modal, so `content_search_prune` now repaints the browser before scanning. Original notes below.
+
 ---
 
 **Backlog (added 2026-07-24).** Add **file text (content) search** to XFMGR - find files whose CONTENTS

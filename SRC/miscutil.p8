@@ -29,12 +29,12 @@ main {
     ; `jmp start` at $A000, so: $A000 = start (library init), $A003 = wildcard_expand,
     ; $A006 = prune_dir, $A009 = hist_load, $A00C = hist_store, $A00F = hist_save,
     ; $A012 = hist_get, $A015 = stream_copy, $A018 = crawl_begin, $A01B = crawl_next_hit,
-    ; $A01E = crawl_trunc.
+    ; $A01E = crawl_trunc, $A021 = content_scan.
     ; KEEP THIS BLOCK FREE OF INITIALIZED VARIABLES - prog8 emits a block's initialized vars
     ; inline BEFORE its code/jumptable, which would shove the table off $A003 (same gotcha as
     ; tview.p8). All module vars below (pr_*, hist_buf, cpbuf, cr_*, ...) are UNINITIALIZED
     ; (-> BSS tail) and all other locals live inside subs.
-    %jmptable ( main.wildcard_expand, main.prune_dir, main.hist_load, main.hist_store, main.hist_save, main.hist_get, main.stream_copy, main.crawl_begin, main.crawl_next_hit, main.crawl_trunc )
+    %jmptable ( main.wildcard_expand, main.prune_dir, main.hist_load, main.hist_store, main.hist_save, main.hist_get, main.stream_copy, main.crawl_begin, main.crawl_next_hit, main.crawl_trunc, main.content_scan )
 
     sub start() {
         ; library init entrypoint ($A000): the compiler emits the BSS-clear here. Do NO UI or
@@ -179,7 +179,9 @@ main {
     ubyte[41]  pr_leaf                      ; segment to rmdir / next subdir while descending
     ubyte[41]  pr_file                      ; last filename deleted in a leaf's file sweep (loop guard)
     ubyte[81]  pr_path                      ; filename scratch for delete_all_files
-    ubyte[255] cpbuf                        ; in-bank stream-copy chunk buffer (was viewbuf in main RAM)
+    ubyte[255] cpbuf                        ; in-bank stream-copy / content-scan chunk buffer (was viewbuf in main RAM)
+    const ubyte SCAN_TCAP = 32              ; longest content-search term we fold+hold
+    ubyte[SCAN_TCAP] sc_term                ; the search term, pre-folded to ASCII lowercase
 
     sub prune_step(str parent_path, str name) -> ubyte {
         ; Remove ONE directory of the <parent_path><name>/ subtree per call: descend from the
@@ -586,5 +588,78 @@ main {
         }
         diskio.lf_end_list()
         return found
+    }
+
+    ; ==== content search: does a file contain a text term? (diskio + strings only) ====
+    ; The XTree "Ctrl-S search" primitive: the caller walks its tagged set and untags every file
+    ; for which this returns 0, so the tag set collapses to the matches. One file per call, so the
+    ; caller can show live progress and abort between files.
+
+    sub content_scan(uword dirptr @R0, uword nameptr @R1, uword termptr @R2) -> ubyte {
+        ; entry ($A021). Open <dir>/<name> and scan its bytes for <term> (case-insensitive, ASCII
+        ; AND PETSCII). Returns 1 = term found, 0 = not found / empty term / file wouldn't open
+        ; (unopenable is treated as no-match so the caller untags it). As with the other entries the
+        ; three pointers are copied into do_content_scan's params before its body runs, so the
+        ; diskio/strings clobber of cx16.r0-r3 inside is harmless.
+        return do_content_scan(dirptr, nameptr, termptr)
+    }
+
+    sub do_content_scan(uword dir, uword name, uword term) -> ubyte {
+        ubyte tlen = lsb(strings.length(term))
+        if tlen == 0
+            return 0
+        if tlen > SCAN_TCAP
+            tlen = SCAN_TCAP
+        ubyte i
+        for i in 0 to tlen-1
+            sc_term[i] = fold_byte(@(term + i))
+        diskio.chdir(dir)                       ; overlay's own diskio; own cwd, never collides with main's
+        if not diskio.f_open(name)
+            return 0                            ; can't open -> no match (caller untags)
+        ubyte mi = 0                            ; chars of sc_term matched so far; PERSISTS across chunks,
+        bool found = false                      ; so a hit spanning a 255-byte boundary is not missed
+        repeat {
+            uword got = diskio.f_read(&cpbuf, 255)
+            if got == 0
+                break
+            ubyte j
+            for j in 0 to lsb(got)-1 {
+                ubyte b = fold_byte(cpbuf[j])
+                if b == sc_term[mi] {
+                    mi++
+                    if mi == tlen {
+                        found = true
+                        break
+                    }
+                } else {
+                    ; naive restart (same matcher tview's view_find_at uses): fine for short terms,
+                    ; can miss an overlap like "aab" in "aaab" - accepted for parity + code size.
+                    mi = 0
+                    if b == sc_term[0]
+                        mi = 1
+                }
+            }
+            if found
+                break
+        }
+        diskio.f_close()
+        if found
+            return 1
+        return 0
+    }
+
+    sub fold_byte(ubyte b) -> ubyte {
+        ; Canonicalise a letter to ASCII lowercase across every encoding the term/file might use, so
+        ; either case in either encoding compares equal (mirrors xsyntax name_fold):
+        ;   ascii a-z ($61-$7a)                        -> already canonical
+        ;   ascii A-Z / petscii a-z (both $41-$5a)     -> +$20
+        ;   petscii A-Z ($c1-$da)                      -> -$60
+        if b >= $61 and b <= $7a
+            return b
+        if b >= $41 and b <= $5a
+            return b + $20
+        if b >= $c1 and b <= $da
+            return b - $60
+        return b
     }
 }

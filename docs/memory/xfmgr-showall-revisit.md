@@ -1,10 +1,34 @@
 ---
 name: xfmgr-showall-revisit
-description: "Backlog — revisit/expand ShowAll; today it is tagged-only across logged dirs, not a whole-disk flat browser"
+description: "DONE build 208-212: Ctrl-G is now the all-files GLOBAL browser (tag-as-mark, T tagged-only toggle, 1024 cap); node pool banked to fund it"
 metadata: 
   node_type: memory
   type: project
   originSessionId: ecce6089-1862-45c8-b4ec-b0098baae389
+---
+
+**DONE build 208-212 (2026-07-31).** Ctrl-G's `show_all()` is now the true XTree **GLOBAL browser**:
+every file across all LOGGED dirs in one flat list (via new `xfiles.collect_all`, respecting the
+FileSpec), **tag is just a MARK** (`*`, drawn by `draw_sa_row`) so **Space toggles it and the row STAYS**
+(`sa_toggle_tag`, unlike the old consolidation list). **T** flips ALL-files <-> TAGGED-only (XTree
+Ctrl-F4); it **opens tagged-only** (per user: the 255... now 1024-slot list would overflow instantly on
+a full card, so start small and reveal all on demand). **S** = content search over the TAGGED files
+([[xfmgr-file-text-search]]). The three arena walkers (tagged / name-match / all-vs-spec) were unified
+into one `xfiles.collect(mode,pat)` + thin wrappers.
+
+**Cap raised 255 -> 1024:** the sa_ snapshot lives in bank 1 at $b000 (4 KB = 1024*4-byte recs), so the
+only limit was the `ubyte sa_count`; widened `sa_count`/cursor/`sf_top`/all `sa_*` accessors to `uword`
+(`GLOBAL_MAX=1024`). That cost ~830 B of MAIN RAM, **funded** by moving the redraw-hot `d_*` node-pool
+arrays into the banked DX record ([[xfmgr-overlay-ram-strategy]]): DX_REC grew 7->14, with
+`d_name_off`(+7)/`d_depth`(+9)/`d_parent`(+10) now `dx_noff`/`dx_depth`/`dx_parent` (d_first_child/
+next_sibling/flags stay main-RAM). Net ~449 B free at build 212.
+
+**Regressions caught by an adversarial review pass (not manual testing):** (1) `unlog()` (Alt-R Release)
+still called `dx_clear` which after the DX_REC grow wiped a LIVE node's banked name_off/depth/parent ->
+added `dx_clear_files` (clears only +0..+6); (2) content-search's `input_line` calls `box_close()` ->
+`draw_frame()`, bleeding the normal dual-pane chrome over the full-screen browser -> `content_search_prune`
+now repaints the browser before the scan loop ([[xfmgr-file-text-search]]). Original backlog notes below.
+
 ---
 
 **Feature note (revisit ShowAll).** The user wants to reconsider the ShowAll
