@@ -39,10 +39,9 @@
                disk to EVERY logged disk. XFMGR drives one volume, so
                there is nothing further to widen to and G does exactly
                what S does. It is here so the menu matches XTree's.
-   P           Prune - recursively delete the folder and all its contents
-               (type 'prune' to confirm)
-   F3          Re-log sub-folders (picks up folders made since logging)
    A           About box (version, banked-RAM usage, credits)
+
+   (Prune and Re-log are ALT commands - Alt-P and Alt-F3 - see the ALT menu.)
 
 ------------------------------------------------------------------------------
  FILE pane (plain keys)
@@ -147,6 +146,8 @@
    Alt-X       Execute - quit XFMGR and chain-run the selected program
    Alt-Q       Quit, leaving the shell in the CURRENTLY SELECTED directory
    Alt-F3      Re-log the current context (sub-folders in DIR, files in FILE)
+   Alt-P       Prune - recursively delete the selected folder and everything
+               under it (DIR pane; type 'prune' to confirm)
    Alt-F10     Open the color-theme setup (quits to XFSETUP.PRG)
 
 ------------------------------------------------------------------------------
@@ -261,7 +262,7 @@
                holds, but only logs the folders that CONTAIN a match. If one
                search's matches are spread across more than 254 folders,
                logging stops there and the results are marked "(partial)".
-   Find/ShowAll At most 255 matching files are collected; beyond that the list
+   Find/ShowAll At most 2048 matching files are collected; beyond that the list
                is marked "(partial)". Very deep folder paths may be skipped
                (also shown as "(partial)").
 
