@@ -58,12 +58,14 @@ main {
     extsub @bank 9 $A00C = syn_detect_ovl(uword nameptr @R0) -> ubyte @A
     extsub @bank 9 $A00F = syn_read_find(uword outptr @R0, ubyte histcount @R1) -> ubyte @A
     extsub @bank 9 $A012 = syn_draw_footer(ubyte flags @R0, ubyte setnum @R1, ubyte settot @R2, uword offlo @R3, ubyte offhi @R4, uword blocks @R5)
+    extsub @bank 9 $A015 = syn_draw_zsm(uword hdrptr @R0)
     ; flag bits for syn_draw_footer - keep in step with xsyntax's FF_* constants
     const ubyte FF_HEX   = %00000001
     const ubyte FF_EOF   = %00000010
     const ubyte FF_COLOR = %00000100
     const ubyte FF_SET   = %00001000
     const ubyte FF_ZSM   = %00010000
+    const ubyte FF_WRAP  = %01100000    ; wrap mode in bits 5-6, not a flag - see xsyntax's FF_WRAP
     const ubyte SYN_PROBE_MAGIC = $5a   ; must match syntax.PROBE_MAGIC in xsyntax.p8
 
     ; Geometry now lives in shared-const so xsyntax's color pass walks the SAME cells this
@@ -108,11 +110,24 @@ main {
     ; and scr_of below maps each character onto its slot. See main.patch_font for how the slots
     ; were chosen. If that patch ever fails the characters simply revert to the old wrong glyphs -
     ; a display fault, never a crash, since these are only ever screen codes.
-    ; TAB renders as ONE space (content_scr), not a column stop. True stops need the emit path to
-    ; run N times for one byte, and bank 2 has no room for it - it was 66 bytes over $C000. Nesting
-    ; still reads correctly (1 tab = 1 space, 2 = 2), but tab/space-mixed alignment will not line up.
-    ; Upgrade to real stops when the custom-font work reclaims space in this bank.
+    ; TAB stop width. The text renderer advances to the next multiple of this, so tab-indented
+    ; source (BASLOAD, prog8) lines up the way its author saw it. Must be a POWER OF TWO - the
+    ; column math uses a mask, not a divide.
     const ubyte TAB_W = 4
+
+    ; How a logical line longer than the screen is laid out. ONE setting, not two toggles: "wrap at
+    ; a word boundary" and "do not wrap at all" are answers to the same question, and cycling one
+    ; key through them costs a third of the code two independent flags would.
+    ;   WRAP_CHAR  break anywhere - every byte is on screen, words get split (the original)
+    ;   WRAP_WORD  break at spaces, so prose reads properly
+    ;   WRAP_OFF   one logical line = one screen row, truncated; left/right pan across it. This is
+    ;              the mode for long lines: minified JSON, one-line CSV, generated source.
+    const ubyte WRAP_CHAR = 0
+    const ubyte WRAP_WORD = 1
+    const ubyte WRAP_OFF  = 2
+    ubyte view_wrap                    ; one of WRAP_*; reset per file in view_file
+    ubyte view_hscroll                 ; WRAP_OFF only: how many columns we are panned right
+    const ubyte HSCROLL_STEP = 16
     const long NO_MATCH = $7f000000    ; "no hit in this file": past any real file, and far enough
                                        ; below the 32-bit ceiling that view_match+termlen can't wrap
     long[64] view_pages
@@ -242,8 +257,14 @@ main {
         ; Hand the logical line we just drew to xsyntax, which classifies AND paints it. The
         ; find-highlight columns were recorded by the draw loop as it went (see syn_m0/syn_m1),
         ; so there is nothing to compute here.
-        if ln_len != 0
-            syn_paint(ln_len, syn_mode, ln_row, ln_col, mkword(syn_m0, syn_m1))
+        ; Skipped while PANNED RIGHT: syn_paint colors buffer index i at screen column ln_col+i, and
+        ; a panned row's first visible character is not buffer index 0 - the colors would land on the
+        ; wrong columns. Leaving the row plain is the honest answer; scrolling back to column 0
+        ; brings the coloring back.
+        ; The wrap mode rides the high nibble: syn_paint retraces the cells we drew, so it needs the
+        ; same wrap rule we used or the colors land on the wrong columns.
+        if ln_len != 0 and view_hscroll == 0
+            syn_paint(ln_len, syn_mode | (view_wrap << 4), ln_row, ln_col, mkword(syn_m0, syn_m1))
         ln_len = 0
         syn_m0 = 0
         syn_m1 = 0
@@ -340,11 +361,9 @@ main {
         ; in the active encoding show as '.'. The machine charset NEVER changes (that would garble
         ; XFMGR's own PETSCII UI + box chrome and break the Alt/Ctrl command keys - see the ISO
         ; memory note); only how each content byte is interpreted onto the shared PETSCII font.
-        if b == 9
-            return $20                  ; TAB -> a space, in BOTH encodings. Source files (BASLOAD,
-                                        ; prog8) indent with tabs and every one used to draw as the
-                                        ; '.' unprintable marker, which made them unreadable. This
-                                        ; is ONE space per tab, not a column stop - see TAB_W.
+        ; No TAB case here on purpose: the TEXT renderer expands tabs to spaces before it calls us
+        ; (see TAB_W), so a tab only ever reaches this point from the HEX sidebar - where '.' is
+        ; the right answer, and the byte column already shows the authoritative 09.
         if view_pet {
             if b < 32 or (b >= 128 and b < 160)
                 return $2e              ; PETSCII control / color codes -> '.' (screencode $2E)
@@ -403,6 +422,8 @@ main {
         ; prev_cr so it is swallowed instead of drawing a blank first content line
         bool prev_cr = lastskip == 13
         bool full = false
+        bool prev_blank = true          ; WRAP_WORD: was the previous char whitespace? true at a page
+                                        ; start so the first word is never mistaken for mid-word
         ; found-text highlight: bytes [view_match, view_match+plen) get the find color via setclr
         ubyte plen = lsb(strings.length(view_find))
         long mend = view_match + plen
@@ -440,6 +461,42 @@ main {
                         break
                     }
                 } else {
+                    ; A TAB is ONE byte occupying SEVERAL columns. Rather than a branch of its own,
+                    ; it runs the emit path below N times - so the anchor / wrap / highlight logic
+                    ; is written once. Duplicating it instead cost 170 bytes, which bank 2 did not
+                    ; have until the ZSM page moved to bank 9.
+                    ubyte outch = ch
+                    ubyte reps = 1
+                    if ch == 9 {
+                        outch = ' '
+                        reps = TAB_W - (col & (TAB_W - 1))      ; advance to the next stop
+                    }
+                    ; WORD WRAP: break BEFORE a word that would not fit, instead of mid-word. Only
+                    ; at the first character of a word, and only when there is something on this row
+                    ; already (a word longer than the whole row must still be split, or we would
+                    ; loop forever on it).
+                    ;
+                    ; The lookahead reads viewbuf directly, which is why this needs no line buffer:
+                    ; the bytes after j are already in the chunk we read. A word running past the
+                    ; end of the chunk is simply treated as fitting - it falls back to a character
+                    ; break for that one word, which is rare and harmless.
+                    if view_wrap == WRAP_WORD and col != 0 and outch > ' ' and prev_blank {
+                        ubyte wlen = 0
+                        while j + wlen < cnt and viewbuf[j + wlen] > ' '
+                            wlen++
+                        if col + wlen > VWIDTH and wlen <= VWIDTH {
+                            if docolor
+                                syn_flush()     ; this screen row is finished - color it now
+                            row++
+                            col = 0
+                            if row >= VROWS {
+                                full = true
+                                break
+                            }
+                        }
+                    }
+                    prev_blank = outch <= ' '
+                    repeat reps {
                     if docolor {
                         ; Anchor the line lazily at its FIRST drawn char. Doing it here rather than
                         ; at the CR/LF handler is what makes CR/LF pairs (the LF is swallowed
@@ -453,7 +510,7 @@ main {
                         ; input regardless of the display encoding - the ISO/PETSCII toggle is a glyph
                         ; flip, not a re-encode - and so column k of the buffer is column k on screen.
                         if ln_len < shared.SYN_LINE_MAX {
-                            ubyte sc = ch
+                            ubyte sc = outch
                             if sc < 32 or sc > 126
                                 sc = ' '        ; was '.': this buffer feeds the CLASSIFIER, never
                                                 ; the screen, and a TAB (or any stray control byte)
@@ -462,14 +519,24 @@ main {
                             ln_len++
                         }
                     }
-                    if draw {
+                    ; Screen column. Only WRAP_OFF ever differs from the line column: there the row
+                    ; is a window onto a longer line, panned right by view_hscroll, and everything
+                    ; left of the window is consumed but not drawn.
+                    ubyte scol = col
+                    bool onscreen = true
+                    if view_wrap == WRAP_OFF {
+                        onscreen = col >= view_hscroll and col - view_hscroll < VWIDTH
+                        if onscreen
+                            scol = col - view_hscroll
+                    }
+                    if draw and onscreen {
                         ; content_scr maps the RAW byte to a screen code for the current encoding
                         ; (ASCII/ISO or PETSCII). setchr writes it straight to VRAM - no PETSCII
                         ; control-code interpretation, so no byte value can scroll the view. setclr
                         ; paints only the find-highlight cells; the rest keep the content color.
-                        txt.setchr(col, VTOP + row, content_scr(ch))
+                        txt.setchr(scol, VTOP + row, content_scr(outch))
                         if plen != 0 and consumed-1 >= view_match and consumed-1 < mend {
-                            txt.setclr(col, VTOP + row, (shared.FIND_BG << 4) | shared.FIND_FG)
+                            txt.setclr(scol, VTOP + row, (shared.FIND_BG << 4) | shared.FIND_FG)
                             view_hit_vis = true     ; the hit is ON SCREEN -> the footer reports the
                                                     ; hit's offset, not this page's top
                             ; Reuse this 32-bit verdict to note the hit's line-relative columns, so
@@ -483,14 +550,19 @@ main {
                         }
                     }
                     col++
-                    if col >= VWIDTH {
+                    ; WRAP_OFF never breaks a line: the row ends only at the newline, so the rest
+                    ; of a long line is consumed off-screen and reachable by panning.
+                    if col >= VWIDTH and view_wrap != WRAP_OFF {
                         row++
                         col = 0
                         if row >= VROWS {
                             full = true
-                            break
+                            break       ; leaves the tab repeat; the check below leaves the page
                         }
                     }
+                    }
+                    if full
+                        break
                 }
             }
             if full
@@ -595,68 +667,25 @@ main {
     }
 
     sub view_render_zsm() -> long {
-        ; Draw a single-screen "header breakout" of the parsed 16-byte ZSM header already captured
-        ; in zsm_hdr[]. A static page: set view_eof so the paging keys are no-ops (PgDn is guarded
-        ; by 'if not view_eof'; PgUp/Top land back here). The return value is unused.
+        ; The ZSM header page is DRAWN BY THE XSYNTAX BANK (syn_draw_zsm). It moved there for the
+        ; same reason the footer and the Find prompt did: bank 2 is full to the byte, and this is
+        ; ~370 bytes of pure chrome that reads only 16 bytes of input. Bank 9 had room to spare.
+        ;
+        ; It could move BECAUSE its input is tiny. zsm_hdr lives in THIS bank, which is unmapped
+        ; while bank 9 runs, so the bytes are staged in syn_line_p - the main-RAM line buffer both
+        ; banks already share for syntax coloring (main RAM stays mapped below $A000 regardless of
+        ; bank). It is only ever used one line at a time during a render, and no render is in
+        ; flight here, so borrowing it costs nothing.
+        ;
+        ; A static page: set view_eof so the paging keys are no-ops (PgDn is guarded by
+        ; 'if not view_eof'; PgUp/Top land back here). The return value is unused.
         view_eof = true
-        ubyte br
-        txt.color2(shared.BAR_FG, shared.CONTENT_BG)     ; content: white on gray (matches the other renderers)
-        for br in VTOP to VTOP + VROWS - 1
-            blank_span(0, 78, br)
-
-        txt.plot(2, VTOP + 0)
-        txt.print("ZSM music file - parsed header")
-
-        txt.plot(2, VTOP + 2)
-        txt.print("Version .......... ")
-        txt.print_ub(zsm_hdr[2])
-
-        txt.plot(2, VTOP + 3)
-        txt.print("Tick rate ........ ")
-        txt.print_uw(mkword(zsm_hdr[13], zsm_hdr[12]))   ; LE 16-bit at 0x0c..0d
-        txt.print(" Hz")
-
-        txt.plot(2, VTOP + 4)
-        txt.print("Loop point ....... ")
-        if zsm_hdr[3] == 0 and zsm_hdr[4] == 0 and zsm_hdr[5] == 0 {
-            txt.print("none")
-        } else {
-            txt.print("yes  ($")
-            put_hex8(zsm_hdr[5])                          ; high->low so the hex reads big-endian
-            put_hex8(zsm_hdr[4])
-            put_hex8(zsm_hdr[3])
-            txt.chrout(')')
-        }
-
-        txt.plot(2, VTOP + 5)
-        txt.print("PCM data ......... ")
-        if zsm_hdr[6] == 0 and zsm_hdr[7] == 0 and zsm_hdr[8] == 0 {
-            txt.print("none")
-        } else {
-            txt.print("yes  ($")
-            put_hex8(zsm_hdr[8])
-            put_hex8(zsm_hdr[7])
-            put_hex8(zsm_hdr[6])
-            txt.chrout(')')
-        }
-
-        txt.plot(2, VTOP + 6)
-        txt.print("FM voices (YM) ... ")
-        txt.print_ub(popcount(zsm_hdr[9]))
-        txt.print("  (mask $")
-        put_hex8(zsm_hdr[9])
-        txt.chrout(')')
-
-        txt.plot(2, VTOP + 7)
-        txt.print("PSG voices (VERA)  ")
-        txt.print_ub(popcount(zsm_hdr[10]) + popcount(zsm_hdr[11]))
-        txt.print("  (mask $")
-        put_hex8(zsm_hdr[11])                             ; high byte first
-        put_hex8(zsm_hdr[10])
-        txt.chrout(')')
-
-        txt.plot(2, VTOP + 9)
-        txt.print("Press H for raw hex bytes.")
+        if not syn_avail or syn_line_p == 0
+            return 0                    ; no overlay -> no page, the same degradation F already has
+        ubyte hi
+        for hi in 0 to 15
+            @(syn_line_p + hi) = zsm_hdr[hi]
+        syn_draw_zsm(syn_line_p)
         return 0
     }
 
@@ -762,6 +791,7 @@ main {
             fflags |= FF_SET
         if is_zsm
             fflags |= FF_ZSM
+        fflags |= view_wrap << 5        ; wrap mode rides bits 5-6 (see FF_WRAP)
         ; Position shown is a BYTE OFFSET: normally the top of what is on screen (the hex cursor, or
         ; the current text page's first byte).
         ;
@@ -961,6 +991,15 @@ main {
         print_trunc(namebuf, 60)
         view_hex = false
         view_pet = false                   ; every file opens in the default ASCII/ISO reading; I toggles
+        ; Wrap is a per-file setting, not a sticky mode: in a tagged-set walk a leftover pan would
+        ; open the next file scrolled sideways for no visible reason.
+        ;
+        ; WRAP_OFF is the DEFAULT because it is the one mode that never lies about the file. Wrapping
+        ; invents line breaks that are not in the bytes, and on source or data the eye reads those as
+        ; real - a wrapped line looks like two. Off, one file line is one screen row; anything past
+        ; column 78 is reached by panning, which is at least honest about being hidden.
+        view_wrap = WRAP_OFF
+        view_hscroll = 0
         view_off = 0
         view_page = 0
         view_known = 0
@@ -1120,6 +1159,35 @@ main {
                 'i' -> view_pet = not view_pet  ; I: read the file as ASCII/ISO <-> PETSCII. Page
                                                 ; boundaries are byte-based (CR/LF), so they don't move -
                                                 ; the loop just re-renders this page with the new glyphs.
+                'w' -> {                        ; W: cycle wrap - char -> word -> off
+                    ; Unlike I, this DOES move page boundaries: how many screen rows a logical line
+                    ; takes is exactly what decides where a page ends, so every cached page offset
+                    ; below this point is now wrong and the chain has to be dropped.
+                    ;
+                    ; But it is re-anchored HERE, not at byte 0. Restarting the chain at the top of
+                    ; the file re-read from the beginning and threw away your place - on a long file
+                    ; that is both a visible pause and a lost position. The current page's top offset
+                    ; is a perfectly good page start under any wrap rule (a page may begin mid-line
+                    ; already), so it becomes the new page 0 and the re-render reads from there.
+                    ; Cost: PgUp dead-ends at this point, the same as the cache-restart in pages_push.
+                    view_wrap++
+                    if view_wrap > WRAP_OFF
+                        view_wrap = WRAP_CHAR
+                    view_hscroll = 0            ; panning is meaningless once the text wraps again
+                    view_pages[0] = view_pages[view_page]
+                    view_page = 0
+                    view_known = 0
+                }
+                29 -> {                         ; cursor-right: pan right (WRAP_OFF only)
+                    if view_wrap == WRAP_OFF and view_hscroll < 240
+                        view_hscroll += HSCROLL_STEP
+                }
+                157 -> {                        ; cursor-left: pan back toward column 0
+                    if view_hscroll >= HSCROLL_STEP
+                        view_hscroll -= HSCROLL_STEP
+                    else
+                        view_hscroll = 0
+                }
             }
         }
     }

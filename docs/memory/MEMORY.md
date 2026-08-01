@@ -54,8 +54,9 @@
 - [Software Caps uppercase input](xfmgr-software-caps-uppercase-input.md) — DONE build 196: Caps Lock key toggles upper_mode; folds letters to capitals at insert, normalized to ASCII on ENTER
 - [File text search](xfmgr-file-text-search.md) — DONE 214-225: Ctrl-S/E prunes tags by content in the CURRENT dir; Ctrl-V/L then reads the survivors in sequence
 - [Viewer footer in bank 9](xfmgr-viewer-footer-bank9.md) — DONE 219: 2-line footer drawn by xsyntax $A012; petscii: prefixes required, long→@Rn is a codegen error
-- [Viewer line-number gutter (backlog)](xfmgr-viewer-line-gutter.md) — optional toggle gutter in tview; port MSEDIT ln_on/gutter_w
+- [Viewer line-number gutter (DROPPED)](xfmgr-viewer-line-gutter.md) — rejected 2026-08-01: XTree has no gutter; don't re-propose
 - [Restore font after X16 Edit](xfmgr-restore-font-after-x16edit.md) — DONE build 203: op_edit force-reloads charset 3 (screen_set_charset(3,0)) + clears ISO flag; txt.lowercase()/saved_charset were both wrong
 - [Viewer Find history](xfmgr-viewer-find-history.md) — DONE build 198: up-arrow recalls terms (viewfind ring); main loads/saves around view_file, read_find uses cwd-safe hist_get/store
-- [BASLOAD syntax review (backlog)](xfmgr-basload-syntax-review.md) — review viewer's BASLOAD coloring vs the real spec; cross-check MSEDIT syntax.p8 / basload.md
+- [BASLOAD syntax review](xfmgr-basload-syntax-review.md) — reviewed: `##` IS a real BASLOAD comment, rules are exclusive; directives/labels still uncolored
+- [Viewer wrap modes](xfmgr-viewer-wrap-modes.md) — W cycles char/word/off (default OFF); syn_paint re-derives positions, mirror any layout change there
 - [input_line repaints main frame](xfmgr-input_line-repaints-main-frame.md) — gotcha: input_line's box_close→draw_frame bleeds dual-pane chrome into full-screen modals; repaint after prompting

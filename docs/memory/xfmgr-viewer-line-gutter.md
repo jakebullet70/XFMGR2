@@ -1,32 +1,32 @@
 ---
 name: xfmgr-viewer-line-gutter
-description: "Backlog: optional line-number gutter in the text viewer (toggle on/off), portable from MSEDIT's ln_on/gutter_w"
-metadata:
+description: DROPPED 2026-08-01 - a line-number gutter in the text viewer was rejected because real XTree has none; kept as the record of that decision
+metadata: 
   node_type: memory
   type: project
   originSessionId: 50cbdaf9-8664-4cd5-8a51-deebebebd509
+  modified: 2026-08-01T05:49:02.527Z
 ---
 
-**Backlog (added 2026-07-24).** Give the text viewer (tview, [[xfmgr-drop-viewer-ram]]) an **optional
-line-number gutter** - a left column showing each line's number, toggled on/off with a viewer key
-(footer entry, like the color toggle already there).
+**DROPPED 2026-08-01, by the user: "skip the gutter, there is not one in xtree."**
 
-**Port from MSEDIT - it already has this.** Repo `C:\dev\CmdrX16\dos_tools\x16-MSEDIT`, file:line in
-SRC/edit.p8:
-- `bool ln_on` (~203) - gutter on/off, default OFF, menu toggle.
-- `ubyte gutter_w` (~204) - current gutter width in columns (0 = off); **text rendering starts at
-  gutter_w**, so the whole render path offsets by it.
-- the number-draw loop (~1000-1004): `put_uw_at` / per-digit `petscii2scr('0' + n%10)` right-aligned in
-  the gutter, drawn with `txt.setchr` (direct VRAM, no scroll).
+An optional line-number gutter for the text viewer sat on the backlog from 2026-07-24, ported from
+MSEDIT's `ln_on` / `gutter_w`. It is NOT being built. Do not re-propose it.
 
-**XFMGR specifics:**
-- The viewer already tracks page start positions (`view_pages[]`, see the tview PgDn logic), so it knows
-  the first line number on a page; increment per rendered line for the gutter labels.
-- Width is dynamic: size gutter_w to the digit count of the largest visible line number so it doesn't
-  waste columns on short files. Shrinks the text area by gutter_w columns - recompute the wrap/column math.
-- Toggle should re-render the current page (same as the color toggle). Persisting the preference could
-  ride xfmgr.cfg like the theme ([[xfmgr-color-theme-setup]], [[xfmgr-cfg-read-exists-guard]]) - optional.
-- Watch viewer overlay space ([[xfmgr-syntax-coloring]], [[xfmgr-overlay-ram-strategy]]); the digit
-  rendering is cheap but every added viewer feature competes for the same tight bank.
+**The reason is the project's standing tiebreaker**: XFMGR is an XTree clone, and where a feature has
+no XTree counterpart it needs a separate justification to exist. XTree's file viewer has no line
+numbers, so the gutter fails that test on its own. This is the same principle that PULLED the
+standalone global browser at build 214 and rebuilt Showall/Branch as a scope flag instead
+([[xfmgr-showall-revisit]]) - "is this how XTree does it" beats "is this a nice feature".
 
-Pairs naturally with [[xfmgr-viewer-iso-pet-toggle]] (both are viewer render-path toggles). Scope: small.
+**Contrast with what DID ship** the same day (build 249): wrap modes - `W` cycles char / word / off,
+with left-right panning in off mode. Those earn their place because a file whose lines run past 78
+columns is otherwise UNREADABLE, not merely less convenient. That is the bar.
+
+Worth knowing if this ever comes back: the plumbing is the expensive half, not the digits. Line
+numbers have to survive paging, which means caching the line number at each page top alongside
+`view_pages[]` and threading it through `pages_push`, `view_seek_page` and `view_jump`. The render
+side (offset the text by `gutter_w`, print the number on a logical line's FIRST row only) is the easy
+part - which is why this looked smaller than it was.
+
+Related: [[xfmgr-viewer-iso-pet-toggle]], [[xfmgr-syntax-coloring]], [[xfmgr-showall-revisit]].

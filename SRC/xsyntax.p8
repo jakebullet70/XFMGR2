@@ -50,8 +50,9 @@ main {
     ; BEFORE its code - which would shove this jump table off $A003 if they shared a block.
     ; Keeping `main` var-free means only `syntax` gets that inline data, safely after the table.
     ; $A003 = setbufs, $A006 = paint, $A009 = probe, $A00C = detect, $A00F = read_find,
-    ; $A012 = draw_footer.
-    %jmptable ( syntax.setbufs, syntax.paint, syntax.probe, syntax.detect, syntax.read_find, syntax.draw_footer )
+    ; $A012 = draw_footer, $A015 = draw_zsm.
+    ; (Appending is safe - a new entry goes on the END, so no existing offset moves.)
+    %jmptable ( syntax.setbufs, syntax.paint, syntax.probe, syntax.detect, syntax.read_find, syntax.draw_footer, syntax.draw_zsm )
 
     sub start() {
         ; library init entrypoint ($A000). The compiler emits the BSS-clear here; this must do
@@ -216,6 +217,9 @@ syntax {
     const ubyte FF_COLOR = %00000100
     const ubyte FF_SET   = %00001000
     const ubyte FF_ZSM   = %00010000
+    const ubyte FF_WRAP  = %01100000    ; 2-bit wrap mode in bits 5-6 (0 char, 1 word, 2 off), NOT a
+                                        ; flag - it rides the spare bits of this byte so the entry
+                                        ; keeps its parameter list and its jmptable slot unchanged
 
     sub draw_footer(ubyte flags @R0, ubyte setnum @R1, ubyte settot @R2,
                     uword offlo @R3, ubyte offhi @R4, uword blocks @R5) {
@@ -249,6 +253,16 @@ syntax {
             txt.print(petscii:"ex  ")
         bar_key(petscii:"I")
         txt.print(petscii:"SO  ")
+        ; Wrap only means something on the TEXT page - the hex dump and the ZSM header are fixed
+        ; layouts - so the key is advertised only where it does something.
+        if fl & (FF_HEX | FF_ZSM) == 0 {
+            bar_key(petscii:"W")
+            when (fl & FF_WRAP) >> 5 {
+                1 -> txt.print(petscii:"rap word  ")
+                2 -> txt.print(petscii:"rap off  ")
+                else -> txt.print(petscii:"rap char  ")
+            }
+        }
         if fl & FF_COLOR != 0 {
             bar_key(petscii:"C")
             txt.print(petscii:"olor  ")
@@ -348,6 +362,97 @@ syntax {
         if v >= 10
             return 2
         return 1
+    }
+
+    sub draw_zsm(uword hdrptr @R0) {
+        ; A one-screen breakout of a ZSM file's parsed 16-byte header. It lives HERE and not in
+        ; tview because bank 2 is full to the byte; this bank had ~3.5 KB spare. It is a pure
+        ; drawing routine over 16 bytes of input, which is what makes it movable at all - the
+        ; other fat routines in tview (hex render, the find scanner) all read tview's viewbuf,
+        ; and that bank's RAM is NOT visible while this one is mapped.
+        ;
+        ; So the 16 header bytes arrive via a MAIN-RAM pointer: tview stages them in the shared
+        ; line buffer it already hands us for syntax coloring. Main RAM stays mapped below $A000
+        ; whatever bank is active - the same reason setbufs takes pointers rather than copying.
+        ;
+        ; Every literal below needs the petscii: prefix. This module is %encoding iso so its
+        ; strings are ASCII for the classifier's keyword tables; txt.print wants PETSCII, and
+        ; without the prefix the text comes out case-swapped.
+        ubyte br
+        txt.color2(shared.BAR_FG, shared.CONTENT_BG)     ; content: white on gray, as tview draws it
+        for br in shared.VIEW_TOP to shared.VIEW_TOP + shared.VIEW_ROWS - 1
+            blank_row(br)
+
+        txt.plot(2, shared.VIEW_TOP + 0)
+        txt.print(petscii:"ZSM music file - parsed header")
+
+        txt.plot(2, shared.VIEW_TOP + 2)
+        txt.print(petscii:"Version .......... ")
+        txt.print_ub(@(hdrptr + 2))
+
+        txt.plot(2, shared.VIEW_TOP + 3)
+        txt.print(petscii:"Tick rate ........ ")
+        txt.print_uw(mkword(@(hdrptr + 13), @(hdrptr + 12)))     ; LE 16-bit at 0x0c..0d
+        txt.print(petscii:" Hz")
+
+        txt.plot(2, shared.VIEW_TOP + 4)
+        txt.print(petscii:"Loop point ....... ")
+        zsm_addr(hdrptr + 3)
+
+        txt.plot(2, shared.VIEW_TOP + 5)
+        txt.print(petscii:"PCM data ......... ")
+        zsm_addr(hdrptr + 6)
+
+        txt.plot(2, shared.VIEW_TOP + 6)
+        txt.print(petscii:"FM voices (YM) ... ")
+        txt.print_ub(popcount(@(hdrptr + 9)))
+        txt.print(petscii:"  (mask $")
+        put_hex8(@(hdrptr + 9))
+        txt.chrout(')')
+
+        txt.plot(2, shared.VIEW_TOP + 7)
+        txt.print(petscii:"PSG voices (VERA)  ")
+        txt.print_ub(popcount(@(hdrptr + 10)) + popcount(@(hdrptr + 11)))
+        txt.print(petscii:"  (mask $")
+        put_hex8(@(hdrptr + 11))                                 ; high byte first
+        put_hex8(@(hdrptr + 10))
+        txt.chrout(')')
+
+        txt.plot(2, shared.VIEW_TOP + 9)
+        txt.print(petscii:"Press H for raw hex bytes.")
+    }
+
+    sub zsm_addr(uword p) {
+        ; "none", or the 24-bit little-endian address at p printed big-endian so it reads normally.
+        ; Loop point and PCM offset are the same shape, so they share this.
+        if @(p) == 0 and @(p + 1) == 0 and @(p + 2) == 0 {
+            txt.print(petscii:"none")
+            return
+        }
+        txt.print(petscii:"yes  ($")
+        put_hex8(@(p + 2))
+        put_hex8(@(p + 1))
+        put_hex8(@(p))
+        txt.chrout(')')
+    }
+
+    sub blank_row(ubyte row) {
+        ; clear cols 0..78 in the CURRENT color (bar_fill above forces the status-bar colors, which
+        ; is wrong for the content area). Col 79 is left alone so chrout can't auto-scroll.
+        txt.plot(0, row)
+        ubyte c
+        for c in 0 to 78
+            txt.spc()
+    }
+
+    sub popcount(ubyte v) -> ubyte {
+        ; count the 1-bits in v (the FM/PSG "N voices" come from the channel masks)
+        ubyte n = 0
+        while v != 0 {
+            n += v & 1
+            v >>= 1
+        }
+        return n
     }
 
     sub put_hex8(ubyte b) {
@@ -514,7 +619,17 @@ syntax {
         ubyte m1 = lsb(mrange)
         if nchars == 0
             return
-        if mode == 2
+        ; `mode` carries the syntax mode in the low nibble and tview's WRAP_* in the high one. The
+        ; wrap rule matters here because this walk has to retrace EXACTLY the cells tview drew - it
+        ; re-derives each character's screen position rather than being told, so a different rule
+        ; here paints the right colors onto the wrong cells.
+        ubyte wrapmode = mode >> 4
+        ; Word wrap breaks at spaces, and only tview knows where - it decided using a lookahead over
+        ; the raw file bytes, which are gone by now. A line that never reached the right edge did not
+        ; wrap at all, so it is safe; a longer one is left uncolored rather than colored wrongly.
+        if wrapmode == 1 and nchars > shared.VIEW_WIDTH
+            return
+        if mode & 15 == 2
             md_line(src_p, nchars, col_p)
         else
             basic_line(src_p, nchars, col_p)
@@ -531,6 +646,8 @@ syntax {
                 txt.setclr(c, shared.VIEW_TOP + r, a)
             c++
             if c >= shared.VIEW_WIDTH {
+                if wrapmode == 2
+                    break                   ; WRAP_OFF: one row per line, the rest is off-screen
                 c = 0
                 r++
             }
