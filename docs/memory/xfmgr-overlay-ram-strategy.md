@@ -5,23 +5,23 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 34a3aff3-3870-4671-a1b8-ab8c9f46ea15
-  modified: 2026-08-01T02:46:26.314Z
+  modified: 2026-08-01T04:11:31.625Z
 ---
 
 XFMGR is main-RAM constrained; the lever for headroom is moving cold code into HIRAM bank
 overlays (%output library blobs, org $A000, loaded via diskio.loadlib, called via `extsub @bank`).
 
 **Bank map** (see [[x16-banked-ram-min-config]], xarena.FIRST_BANK): 0=Kernal, 1=xtree dir-extras
-(the 14-byte DX per-node record at $a000 - now also holds name_off/depth/parent, see below)
-+ **xfiles' one FILE INDEX at $b000** (1024 * 4-byte rows, uword-indexed - since build 236 this is
-THE index for directory listings, scoped views AND Find, not a ShowAll-only side table; see
-[[xfmgr-showall-revisit]]), 2=tview (viewer), 3=miscutil
+(the 14-byte DX per-node record at $a000 - now also holds name_off/depth/parent, see below),
+2=tview (viewer), 3=miscutil
 (wildcard/prune/history + stream_copy byte-pump + whole-disk Find crawler + content_scan),
-4=uiutil (bottom dialogs + About/modal-box drawing),
+4=uiutil (bottom dialogs + About/modal-box drawing + the history picker),
 5=ximgview (BMX image viewer, see [[xfmgr-bmx-image-viewer]]), 6=zsmkit v2 engine blob (ZSM
 playback, see [[xfmgr-music-player]]), 7=xmusic (WAV/PCM streamer), **8=xtree dir-NAME slab**
-(NAME_BANK, a DATA bank not an overlay - see below). Arena = banks **9**..max_bank (FIRST_BANK is
-now 9). Each overlay keeps a fixed `%jmptable` at $A003+
+(NAME_BANK, a DATA bank not an overlay - see below), 9=xsyntax (viewer syntax coloring + footer,
+see [[xfmgr-syntax-coloring]]), **10-11 = xfiles' one FILE INDEX** (2048 * 8-byte rows, uword-indexed
+- THE index for directory listings, scoped views AND Find alike; see [[xfmgr-showall-revisit]]).
+Arena = banks **12**..max_bank (FIRST_BANK is now 12). Each overlay keeps a fixed `%jmptable` at $A003+
 (KEEP module vars UNINITIALIZED or they shove the table — see [[prog8-jmptable-init-vars-gotcha]]).
 
 **As of 2026-07-03: 6.5 KB free to $9F00** (was ~2.2 KB before this push). Won by: copy byte-pump

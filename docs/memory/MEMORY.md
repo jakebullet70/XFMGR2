@@ -18,7 +18,7 @@
 - [Always report mem stats](always-report-mem-stats.md) — include build memory-stats block in replies
 - [Readable variable names](readable-variable-names.md) — no one/two-letter locals in new code; name them for what they hold
 - [Never rewrite source via PowerShell](prog8-never-rewrite-source-via-powershell.md) — Set-Content mangles the PETSCII/box glyphs; use sed -i for line deletes
-- [Showall / file scopes](xfmgr-showall-revisit.md) — rebuilt at 233-234 as a scope flag; costed plan past 255 rows + approved dedicated index bank
+- [Showall / file scopes](xfmgr-showall-revisit.md) — DONE 233-243: scope flag + one 2048-row index in dedicated banks 10-11 with an inline sort key
 - [ZIP/ARC support (V2)](xfmgr-zip-arc-v2.md) — backlog: browse/extract archives in V2; DEFLATE/ARC decompress is the hard part
 - [Embedded PETSCII color codes](x16-embedded-petscii-color-codes.md) — inline \x9e/\x05/\x9a in one txt.print string saves bytes vs txt.color() calls
 - [User tests in emulator themselves](user-tests-in-emulator-themselves.md) — build & launch, then report; don't drive the GUI to verify

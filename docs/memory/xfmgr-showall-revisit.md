@@ -1,11 +1,11 @@
 ---
 name: xfmgr-showall-revisit
-description: "Showall/Branch are a scope flag on the normal file pane; ONE shell-sorted 1024-row file index in banked RAM (builds 233-237). Dedicated index bank still approved and pending."
+description: "Showall/Branch are a scope flag on the normal file pane; ONE shell-sorted 2048-row file index in dedicated banks 10-11 with an inline 4-char sort key (builds 233-243). DONE."
 metadata:
   node_type: memory
   type: project
   originSessionId: 50cbdaf9-8664-4cd5-8a51-deebebebd509
-  modified: 2026-08-01T02:46:23.604Z
+  modified: 2026-08-01T04:12:01.140Z
 ---
 
 **History:** the standalone GLOBAL browser was PULLED at build 214 because it "is not like the real
@@ -56,13 +56,30 @@ cur_dir follows the tree cursor and a drifting branch would change what the next
 `leave_scope()` first - Find renumbers every tree node, and unlog frees records a scoped index still
 points into. `op_relog` was already safe via `rebuild_view()`.
 
-**STILL TO BUILD:** phase 3 `\` jump-to-directory (XTree Treespec) + Alt-Tag scope choice. And the
-**USER-APPROVED dedicated bank** ("when ready, give it its own bank", 2026-07-31): move the index out
-of its $b000 corner into a **dedicated 8 KB bank**, row widened 4 -> 8 bytes with a **4-char uppercase
-sort key inline**, so a comparison reads the key in the bank window and only far-reads the full name on
-a tie (~20x sort) and rows go past 1024. Costs ~400 files of arena capacity out of ~22,000 (arena =
-banks 9..63 at ~400 records/bank). Only matters past 1024 files. Shifts `xarena.FIRST_BANK` and every
-bank-map comment - see [[xfmgr-overlay-ram-strategy]].
+**BUILDS 238-240 - Alt-J jump-to-directory** (XTree Treespec; logs every level on the way down, which
+is how you widen what Showall can see), **Alt-T tag-branch**, **Alt-U untag-the-whole-disk**.
+
+**BUILD 242 - THE DEDICATED INDEX BANK (done 2026-08-01).** `INDEX_BANK` = **banks 10 and 11**,
+`INDEX_MAX` = 2048, 8-byte rows: `+0 bank  +1 off  +3 dir  +4..+7 sort key`. 1024 rows/bank is
+deliberate - it keeps row addressing a shift and a mask (`i >> 10`, `(i & 1023) * 8`); a non-power-of-2
+row would need a real multiply on every access. `xarena.FIRST_BANK` 10 -> **12**.
+
+The key is the first 4 filename chars folded through **`strings.lowerchar`** - the SAME fold
+`compare_nocase` uses internally. Folding to UPPERCASE (the obvious choice, and what the plan above
+said) would be WRONG and would corrupt the order silently: `'_'` = $5F sorts after a lowercase-folded
+letter and before an uppercase-folded one, so key order and tie-break order would disagree.
+`make_key` reads chars one at a time stopping at NUL - reading 4 blind runs into the next record.
+`sort_index` decides most comparisons from `fr_key_hi`/`fr_key_lo` and far-reads both full names only
+on a genuine tie; size mode no longer reads names at all. Costs **691 B of main RAM** (the code, not
+the bank space - the banks are half empty). Dropping the key to 2 chars would give ~150-200 B back but
+ties explode on real name sets (every file in SRC/ starts with `x`) - **decided: keep 4**.
+Verified nothing else can reach banks 10/11: X16 Edit and the zsmkit song loader both take
+`xarena.high_bank + 1`, which is >= 13.
+
+**BUILD 243 - Alt-S defers the sort.** Alt-S SELECTS an order (advancing `sort_mode` + repainting the
+ALT menu label, highlighted while `sort_pending`); the re-sort fires ONCE when ALT is released. It is
+committed from **`wait_command`**, not the main loop's dirty-flag repaint - releasing a modifier is not
+a keypress, so that repaint never runs, which is why `apply_sort` draws the pane itself.
 
 Related: [[xfmgr-file-text-search]], [[xfmgr-overlay-ram-strategy]], [[xfmgr-architecture]],
 [[readable-variable-names]].
