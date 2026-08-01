@@ -51,6 +51,10 @@ switchable **color themes**.
 - **View** (`V`) — a `.bmx` bitmap opens full-screen in the BMX **image viewer**; any
   other file opens in the full-screen **text/hex viewer** with in-file search. If the
   viewer overlays are missing, `V` falls back to X16 Edit.
+- **Long lines and wrapping** (`W` in the viewer) — cycles *wrap off* → *char* → *word*.
+  Off is the default: one file line is one screen row, cut at the right edge, with
+  `←`/`→` panning across it — the only mode that doesn't invent line breaks the file
+  doesn't have. Tabs expand to real 4-column stops, so tab-indented source lines up.
 - **Play music** (`P`) — `.zsm` chiptunes play through the **zsmkit** engine (FM + PSG +
   PCM); `.wav` plays uncompressed PCM (8/16-bit, mono/stereo, up to ~48 kHz). `Space`
   pauses/resumes, `Q`/`Esc` stops. Needs `zsmkit.bin` and `xmusic.ovl` beside the program.
