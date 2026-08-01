@@ -46,10 +46,10 @@ xtree {
     ;   +7 name_off (uword)  +9 depth (ubyte)  +10 parent  +11 first_child  +12 next_sibling  +13 flags
     ; The +7.. fields were formerly the d_* main-RAM node-pool arrays; they moved here to reclaim
     ; ~1.7 KB of main RAM (the 1024-entry ShowAll snapshot needed uword indices, which cost it).
-    ; DX_BANK is the LOWEST arena bank (always present, even on a 512 KB machine); the
-    ; file arena starts one bank higher (xarena.FIRST_BANK = DX_BANK + 1), so the bump
-    ; allocator and its reset() never disturb this table. 254 nodes * 14 = 3556 B ($a000..$ade4),
-    ; clear of the sa index at $b000, both inside this 8 KB bank.
+    ; DX_BANK is a LOW reserved bank (always present, even on a 512 KB machine) well below
+    ; xarena.FIRST_BANK, so the bump allocator and its reset() never disturb this table.
+    ; 254 nodes * 14 = 3556 B ($a000..$ade4). The rest of this bank is now spare - the file
+    ; index used to share it at $b000 and has moved to its own banks (xfiles.INDEX_BANK).
     const ubyte DX_BANK = 1
     const uword DX_BASE = $a000
     const ubyte DX_REC  = 14

@@ -460,7 +460,7 @@ main {
         aboutln(2,  "X F M G R")
         aboutln(4,  "An XTree-style file manager")
         aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Beta Version 1.0.241")     ; bump the last number with BUILD_NUM in xfmgr.p8
+        aboutln(7,  "Beta Version 1.0.243")     ; bump the last number with BUILD_NUM in xfmgr.p8
         ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
         txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
         txt.print("Banked RAM: ")
@@ -638,7 +638,12 @@ main {
             txt.print(petscii:"\x9eF10\x05 Config")
         } else {
             txt.print(petscii:"e\x9eX\x05ecute  \x9eS\x05ort: ")
-            when sort_mode {
+            ; bit 7 = main's sort_pending: Alt-S has SELECTED this order but ALT is still held, so
+            ; it hasn't been applied. Highlighting it makes tapping S through the orders visible.
+            ; The trailing string's own \x9e..\x05 puts the color back, so no restore call here.
+            if sort_mode >= $80
+                txt.color(shared.CLR_ACCENT)
+            when sort_mode & $7f {
                 1 -> txt.print("ext")
                 2 -> txt.print("size")
                 else -> txt.print("name")

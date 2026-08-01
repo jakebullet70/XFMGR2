@@ -40,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 241       ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 243       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -140,6 +140,11 @@ main {
     ; 0 = MENU (no modifier), 1 = CTRL, 2 = ALT.  Keys are dispatched by this mode, so
     ; ALT works exactly like CTRL (hold the modifier, then press the command letter).
     ubyte menu_mode
+    ; Alt-S picks a sort order but does NOT apply it: each press advances sort_mode and repaints
+    ; the ALT menu's "Sort: name/ext/size" label, so you can tap through the orders and watch the
+    ; label scroll. The re-sort itself (which costs a full index rebuild) fires ONCE, when ALT is
+    ; released - see wait_command. Without this, three taps meant three rebuilds of a 1000-row list.
+    bool sort_pending
     ; one shared keystroke scratch reused by every modal/dispatch loop (each read-and-
     ; dispatches its key immediately, so they never need their own copy). Saves a byte
     ; per routine since prog8 allocates each local statically.
@@ -1644,8 +1649,14 @@ main {
     sub draw_commands() {
         ; the bottom command menu (rows CMDROW1/CMDROW2) is drawn by the uiutil overlay - all its
         ; label strings live there now. Pass the state it varies on (the overlay can't see globals).
-        if ui_ok
-            ui_draw_commands(menu_mode, focus, del_char, xfiles.sort_mode, find_char, move_char, srch_char, view_char)
+        if ui_ok {
+            ; bit 7 of the sort byte = "selected by Alt-S but not applied yet": the overlay draws
+            ; the order name highlighted, so tapping S through name/ext/size reads as picking one.
+            ubyte smode = xfiles.sort_mode
+            if sort_pending
+                smode |= $80
+            ui_draw_commands(menu_mode, focus, del_char, smode, find_char, move_char, srch_char, view_char)
+        }
     }
 
     ; ---------- file operations ----------
@@ -2333,24 +2344,29 @@ main {
     }
 
     sub op_sort() {
-        ; Alt-S: cycle the file sort order (name -> ext -> size) and re-sort the pane
+        ; Alt-S: SELECT the next sort order (name -> ext -> size) without applying it. Only the
+        ; menu label changes here; apply_sort() commits it when ALT comes back up. Tapping S with
+        ; ALT held therefore scrolls the label at keyboard speed instead of rebuilding the index
+        ; once per tap.
         xfiles.sort_mode++
         if xfiles.sort_mode > 2
             xfiles.sort_mode = 0
-        void rebuild_view()
+        sort_pending = true
+        dirty_cmd = true            ; the ALT menu shows the selected sort mode (highlighted
+                                    ; while pending, see uiutil.menu_alt_items)
+    }
+
+    sub apply_sort() {
+        ; Commit the order Alt-S selected. Called from wait_command the moment ALT is released,
+        ; NOT from the main loop's dirty-flag repaint - that only runs after a key is dispatched,
+        ; and releasing a modifier is not a keypress. So this draws the pane itself.
+        sort_pending = false
+        void rebuild_view()         ; re-sorts; the row COUNT can't change, only the order
         clamp_file_cursor()
-        ; brief 4-row white box so the new order is obvious even with 0/1 files
-        box_open()
-        box_left(CMDROW1, "Sort order:")
-        when xfiles.sort_mode {
-            1 -> box_left(CMDROW2, "extension")
-            2 -> box_left(CMDROW2, "size")
-            else -> box_left(CMDROW2, "name")
-        }
-        wait_or_key(45)             ; ~0.75s, or any key; then the menu repaints over it
-        box_close()
-        dirty_files = true
-        dirty_cmd = true            ; the ALT menu shows the active sort mode
+        if xfiles.file_scope != xfiles.SCOPE_DIR
+            draw_status()           ; scoped: the header names the HIGHLIGHTED file's directory,
+                                    ; and re-sorting put a different file under the bar
+        draw_files()
     }
 
     sub op_relog() {
@@ -3450,6 +3466,10 @@ main {
                 want = 2
             if want != menu_mode {
                 menu_mode = want
+                ; ALT released: commit the order the S taps selected - once, not once per tap.
+                ; Releasing a modifier isn't a keypress, so nothing else would repaint the pane.
+                if sort_pending and want != 2
+                    apply_sort()
                 draw_commands()
             }
         }

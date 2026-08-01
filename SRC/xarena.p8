@@ -17,13 +17,17 @@
 xarena {
     %option ignore_unused
 
-    const ubyte FIRST_BANK = 10         ; bank 0 = Kernal; bank 1 = xtree dir-extras;
+    const ubyte FIRST_BANK = 12         ; bank 0 = Kernal; bank 1 = xtree dir-extras;
                                         ; bank 2 = tview; bank 3 = miscutil; bank 4 = uiutil;
                                         ; bank 5 = ximgview; bank 6 = zsmkit engine;
                                         ; bank 7 = xmusic wav player (ZSM/MUS_BANK in xfmgr);
                                         ; bank 8 = xtree dir-NAME slab (NAME_BANK in xtree);
                                         ; bank 9 = xsyntax (SYN_BANK in xfmgr, called BY tview);
-                                        ; arena = 10..max_bank
+                                        ; banks 10-11 = the file index (xfiles.INDEX_BANK, 2048
+                                        ;   8-byte rows). Two banks cost ~700 file records of
+                                        ;   arena capacity out of ~19,000 - cheap for a list that
+                                        ;   sorts from an inline key instead of re-reading names;
+                                        ; arena = 12..max_bank
     const uword WIN_START  = $a000
     const uword WIN_END    = $bf00      ; reserve $bf00-$bfff as scratch / guard
 

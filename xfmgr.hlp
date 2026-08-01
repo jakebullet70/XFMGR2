@@ -1,5 +1,5 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 241)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 243)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
@@ -79,8 +79,8 @@
  Only files in LOGGED directories appear - log more of the tree (Enter on
  a folder) to widen what Showall can see. The FileSpec (F) still applies,
  so "F *.prg" then S lists every program on the disk. The list holds up to
- 1024 files; past that the title shows (partial) and the count reads
- "1024 of N".
+ 2048 files; past that the title shows (partial) and the count reads
+ "2048 of N".
 
  Esc (or TAB back to the tree) returns to the normal two-pane view.
 
@@ -135,7 +135,9 @@
                at, and this is how you start clean. Ignores the FileSpec
                and the 1024-row list cap on purpose - a tag you cannot
                see is still a tag.
-   Alt-S       Cycle sort order: name -> extension -> size
+   Alt-S       Pick sort order: name -> extension -> size. Each tap moves
+               the highlighted order in the ALT menu; the list is re-sorted
+               once, when you let ALT back up.
    Alt-X       Execute - quit XFMGR and chain-run the selected program
    Alt-Q       Quit, leaving the shell in the CURRENTLY SELECTED directory
    Alt-F3      Re-log the current context (sub-folders in DIR, files in FILE)

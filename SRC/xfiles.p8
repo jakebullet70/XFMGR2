@@ -23,8 +23,8 @@ xfiles {
     %option ignore_unused
 
     const ubyte NAME_CAP     = 249      ; longest filename we store (keeps reclen<256)
-    const uword INDEX_MAX    = 1024     ; max rows the file index holds (past it -> "(partial)")
-                                        ; 1024 * 4-byte rows = the full $b000..$bfff of INDEX_BANK
+    const uword INDEX_MAX    = 2048     ; max rows the file index holds (past it -> "(partial)")
+                                        ; 2 dedicated 8 KB banks * 1024 8-byte rows each
 
     ; bits in a record's flags byte (record offset +4)
     const ubyte REC_TAGGED = %00000001
@@ -74,53 +74,119 @@ xfiles {
     ; ---- THE FILE INDEX ----
     ;
     ; One index serves every file list: a single directory, a scoped view (Showall/Branch), and the
-    ; Find results browser. It lives in BANKED RAM, not main RAM. That is what lets it hold 1024 rows
-    ; instead of 255 - three main-RAM arrays of 1024 rows would be 4 KB, which this program does not
-    ; have, and truncating a Showall to 255 rows produced an ARBITRARY 255 (whatever the directory
-    ; walk reached first, sorted among themselves), not the first 255 alphabetically.
+    ; Find results browser. It lives in BANKED RAM, not main RAM. That is what lets it hold 2048 rows
+    ; instead of 255 - 2048 rows is 16 KB, which main RAM does not have any version of, and truncating
+    ; a Showall to 255 rows produced an ARBITRARY 255 (whatever the directory walk reached first,
+    ; sorted among themselves), not the first 255 alphabetically.
     ;
-    ; It shares bank 1 with xtree's dir-extras: those sit at $a000..~$a6f2, so the index is parked at
-    ; $b000..$bfff (4 KB = INDEX_MAX rows), well clear. Per-row 4-byte record:
-    ;     +0 bank(ubyte)  +1 off(uword)  +3 dir(ubyte)
+    ; It owns TWO dedicated 8 KB banks (it used to squat in the spare half of xtree's bank 1). Per-row
+    ; 8-byte record, 1024 rows per bank:
+    ;     +0 bank(ubyte)  +1 off(uword)  +3 dir(ubyte)  +4..+7 sort key
     ; `dir` is the directory that row came from. A single-directory listing sets it to the same value
     ; on every row, so scoped and normal views are one code path, not two.
     ;
-    ; Rows are read through row_load(), which fills fr_bank/fr_off/fr_dir in ONE bank switch - every
-    ; caller wants at least two of the three. INVARIANT: fr_* is a single staging buffer, so a caller
+    ; THE SORT KEY is why the record grew. Every comparison used to far-read a whole filename out of
+    ; the arena; now it compares four bytes that are already in the index window, and only pays for
+    ; the full name when those four tie. The key is the first KEY_LEN characters of the name folded
+    ; through strings.lowerchar - the SAME primitive strings.compare_nocase uses. Fold it any other
+    ; way (upper vs lower) and the keys order differently from the tie-break that follows them, which
+    ; silently corrupts the sort rather than just slowing it down.
+    ;
+    ; Rows are read through row_load(), which fills fr_bank/fr_off/fr_dir + the key in ONE switch -
+    ; every caller wants at least two of them. INVARIANT: fr_* is a single staging buffer, so a caller
     ; must consume it before the next row_load() (same rule as xtree's name_ptr).
-    const ubyte INDEX_BANK = 1
-    const uword INDEX_BASE = $b000
-    const ubyte INDEX_REC  = 4
+    const ubyte INDEX_BANK  = 10        ; banks 10 and 11; xarena.FIRST_BANK starts above them
+    const uword INDEX_BASE  = $a000
+    const ubyte INDEX_REC   = 8
+    const uword ROWS_PER_BANK = 1024    ; 8192-byte window / 8-byte record
+    const ubyte KEY_LEN     = 4
     uword match_total               ; files that MATCHED, counted past INDEX_MAX - what the header
                                     ; reports, so a truncated list can say how much it truncated
 
-    ubyte fr_bank                   ; far pointer + owning dir of the row last row_load()ed
+    ubyte fr_bank                   ; far pointer + owning dir + sort key of the last row_load()ed row
     uword fr_off
     ubyte fr_dir
+    uword fr_key_hi                 ; the 4-char key as TWO WORDS, chars packed big-endian, so
+    uword fr_key_lo                 ; comparing keys is two plain 16-bit compares. A ubyte[4] with
+                                    ; index loops cost 635 B of main RAM to do the same job.
 
-    sub row_addr(uword i) -> uword {
-        return INDEX_BASE + i * INDEX_REC
+    ubyte ix_bank                   ; bank + address of the row selected by row_at()
+    uword ix_off
+    uword key_hi                    ; scratch for a freshly derived key (make_key -> row_set)
+    uword key_lo
+
+    sub row_at(uword i) {
+        ; which bank the row lives in, and where in that bank's window
+        ix_bank = INDEX_BANK + lsb(i >> 10)         ; 1024 rows per bank
+        ix_off  = INDEX_BASE + (i & 1023) * INDEX_REC
     }
+
     sub row_load(uword i) {
-        cx16.push_rambank(INDEX_BANK)
-        uword p = row_addr(i)
-        fr_bank = @(p)
-        fr_off  = peekw(p + 1)
-        fr_dir  = @(p + 3)
+        row_at(i)
+        cx16.push_rambank(ix_bank)
+        fr_bank   = @(ix_off)
+        fr_off    = peekw(ix_off + 1)
+        fr_dir    = @(ix_off + 3)
+        fr_key_hi = peekw(ix_off + 4)
+        fr_key_lo = peekw(ix_off + 6)
         cx16.pop_rambank()
     }
+
+    sub row_put(uword i, ubyte bank, uword off, ubyte dir, uword khi, uword klo) {
+        ; store a row whose key is ALREADY known - the sort shuffles rows and must not pay to
+        ; re-derive a key it is already holding.
+        row_at(i)
+        cx16.push_rambank(ix_bank)
+        @(ix_off)     = bank
+        pokew(ix_off + 1, off)
+        @(ix_off + 3) = dir
+        pokew(ix_off + 4, khi)
+        pokew(ix_off + 6, klo)
+        cx16.pop_rambank()
+    }
+
     sub row_set(uword i, ubyte bank, uword off, ubyte dir) {
-        cx16.push_rambank(INDEX_BANK)
-        uword p = row_addr(i)
-        @(p)     = bank
-        pokew(p + 1, off)
-        @(p + 3) = dir
-        cx16.pop_rambank()
+        ; gather-time store: derive the sort key from the record's name first. One far read per row
+        ; here buys back the O(n log n) far reads the sort would otherwise do.
+        make_key(bank, off)
+        row_put(i, bank, off, dir, key_hi, key_lo)
     }
+
+    sub make_key(ubyte bank, uword off) {
+        ; First KEY_LEN chars of the name at off+5 into key_hi/key_lo, each char folded through
+        ; strings.lowerchar (see above) and packed most-significant-first, so an ordinary uword
+        ; compare of the pair reproduces the lexicographic order of those chars. Missing chars
+        ; pad with 0, which is what makes a short name sort before a longer one sharing its prefix.
+        ; Chars are read one at a time and stop at the NUL - reading blind would run into the next
+        ; record when the name is shorter than the key.
+        cx16.push_rambank(bank)
+        uword src = off + 5
+        ubyte c0 = @(src)
+        ubyte c1 = 0
+        ubyte c2 = 0
+        ubyte c3 = 0
+        if c0 != 0 {
+            c1 = @(src + 1)
+            if c1 != 0 {
+                c2 = @(src + 2)
+                if c2 != 0
+                    c3 = @(src + 3)
+            }
+        }
+        cx16.pop_rambank()
+        ubyte f0 = strings.lowerchar(c0)    ; hoisted: two calls inside one mkword() would fight
+        ubyte f1 = strings.lowerchar(c1)    ; over the accumulator
+        ubyte f2 = strings.lowerchar(c2)
+        ubyte f3 = strings.lowerchar(c3)
+        key_hi = mkword(f0, f1)
+        key_lo = mkword(f2, f3)
+    }
+
     sub row_dir(uword i) -> ubyte {
         ; the owning directory of one row, for callers that want only that
-        cx16.push_rambank(INDEX_BANK)
-        ubyte v = @(row_addr(i) + 3)
+        row_at(i)
+        cx16.push_rambank(ix_bank)
+        ubyte v = @(ix_off + 3)
         cx16.pop_rambank()
         return v
     }
@@ -276,6 +342,8 @@ xfiles {
         ; It is what makes a 1024-row index sortable at all.
         if ft_count < 2
             return
+        uword hold_key_hi              ; sort key of the row being placed, held across the inner loop
+        uword hold_key_lo
         uword gap = 1
         while gap < ft_count / 3
             gap = gap * 3 + 1                  ; 1, 4, 13, 40, 121, 364, 1093
@@ -286,34 +354,56 @@ xfiles {
                 ubyte hold_bank = fr_bank      ; the row being placed - consume fr_* immediately
                 uword hold_off  = fr_off
                 ubyte hold_dir  = fr_dir
-                xarena.read_str(hold_bank, hold_off + 5, cmpa, NAME_RD_CAP)
-                uword ablocks = blocks_at(hold_bank, hold_off)
+                hold_key_hi = fr_key_hi
+                hold_key_lo = fr_key_lo
+                ; only fetch what THIS sort mode actually compares on. Size never looks at a name,
+                ; and name mode reads one only when two keys tie.
+                uword ablocks = 0
+                if sort_mode == 2
+                    ablocks = blocks_at(hold_bank, hold_off)
+                else if sort_mode == 1
+                    xarena.read_str(hold_bank, hold_off + 5, cmpa, NAME_RD_CAP)
                 uword j = i
                 while j >= gap {
                     row_load(j - gap)
                     ubyte pred_bank = fr_bank      ; the row `gap` places back, ditto
                     uword pred_off  = fr_off
                     ubyte pred_dir  = fr_dir
-                    xarena.read_str(pred_bank, pred_off + 5, cmpb, NAME_RD_CAP)
                     bool pred_le
                     when sort_mode {
                         2 -> pred_le = blocks_at(pred_bank, pred_off) <= ablocks
                         1 -> {
+                            xarena.read_str(pred_bank, pred_off + 5, cmpb, NAME_RD_CAP)
                             ext_of(cmpb, exb)
                             ext_of(cmpa, exa)
-                            byte c = strings.compare_nocase(exb, exa)
-                            if c == 0
-                                c = strings.compare_nocase(cmpb, cmpa)
-                            pred_le = c <= 0
+                            byte ext_order = strings.compare_nocase(exb, exa)
+                            if ext_order == 0
+                                ext_order = strings.compare_nocase(cmpb, cmpa)
+                            pred_le = ext_order <= 0
                         }
-                        else -> pred_le = strings.compare_nocase(cmpb, cmpa) <= 0
+                        else -> {
+                            ; the whole point of the inline key: four bytes already in hand decide
+                            ; almost every comparison, and only a genuine tie on the first KEY_LEN
+                            ; characters costs two far string reads.
+                            if fr_key_hi != hold_key_hi {
+                                pred_le = fr_key_hi < hold_key_hi
+                            } else if fr_key_lo != hold_key_lo {
+                                pred_le = fr_key_lo < hold_key_lo
+                            } else {
+                                ; only a genuine tie on the first KEY_LEN characters pays for two
+                                ; far string reads - which is the whole point of the inline key.
+                                xarena.read_str(hold_bank, hold_off + 5, cmpa, NAME_RD_CAP)
+                                xarena.read_str(pred_bank, pred_off + 5, cmpb, NAME_RD_CAP)
+                                pred_le = strings.compare_nocase(cmpb, cmpa) <= 0
+                            }
+                        }
                     }
                     if pred_le
                         break                  ; predecessor already <= it
-                    row_set(j, pred_bank, pred_off, pred_dir)
+                    row_put(j, pred_bank, pred_off, pred_dir, fr_key_hi, fr_key_lo)
                     j -= gap
                 }
-                row_set(j, hold_bank, hold_off, hold_dir)
+                row_put(j, hold_bank, hold_off, hold_dir, hold_key_hi, hold_key_lo)
                 i++
             }
             gap /= 3

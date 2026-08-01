@@ -1,6 +1,6 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:241)*
+*(build:243)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
@@ -40,7 +40,7 @@ switchable **color themes**.
 - **Find file** (`Ctrl-F`) — a whole-disk crawler that walks the tree from the root,
   logs only the directories that contain a match, and shows every hit in a flat modal
   list you can jump straight into.
-- **Sorting** — cycle files by name → extension → size (`Alt-S`).
+- **Sorting** — tap `Alt-S` through name → extension → size; the list re-sorts once, on ALT release.
 - **File operations** — copy (`C`/`Ctrl-C`), move (`M`/`Ctrl-O`/`Ctrl-M`), rename with `*`/`?`
   wildcards (`R`), delete one (`D`) or all tagged (`Ctrl-X`/`Ctrl-D`). Copy/move
   destinations resolve from the drive root and can be picked interactively from the
@@ -137,7 +137,7 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `Alt-R` | **Release** — un-log the current folder to free the memory it holds |
 | `Alt-T` | **Tag branch** — tag every logged file in this folder and everything below it (honours the FileSpec) |
 | `Alt-U` | **Untag all** — clear every tag on the disk, ignoring the FileSpec and the list cap |
-| `Alt-S` | Cycle sort order: name → extension → size |
+| `Alt-S` | Pick sort order: name → extension → size (applied when ALT is released) |
 | `Alt-X` | Execute — quit XFMGR and chain-run the selected program |
 | `Alt-Q` | Quit, leaving the shell in the **currently selected** directory |
 | `Alt-F3` | Re-log the current context (sub-folders in the DIR pane, files in the FILE pane) |
@@ -186,17 +186,17 @@ cold, bulky data and cold *code* live in banked RAM behind far pointers / bank
 overlays.
 
 The stock machine has banks 0–63. The low banks are reserved: bank 0 is the Kernal,
-bank 1 holds the tree's cold dir-extras table (and the ShowAll/Find far-pointer arrays),
-banks 2–5 hold four code overlays, bank 6 the **zsmkit** music engine, bank 7 the
-**xmusic** overlay, and bank 8 the directory-name slab; the file arena grows upward from
-**bank 9** to the detected top bank.
+bank 1 holds the tree's cold dir-extras table, banks 2–5 hold four code overlays,
+bank 6 the **zsmkit** music engine, bank 7 the **xmusic** overlay, bank 8 the
+directory-name slab, bank 9 the **xsyntax** overlay, and banks 10–11 the file index;
+the file arena grows upward from **bank 12** to the detected top bank.
 
 | Module | Lives in | Holds | Why |
 |---|---|---|---|
-| `xarena.p8` | banks 6+ | append-only bump allocator (~7.8 KB usable per bank, `$A000–$BEFF`) | files are numerous and append-only, then bulk-freed on rescan; no per-record header, no fragmentation |
+| `xarena.p8` | banks 12+ | append-only bump allocator (~7.8 KB usable per bank, `$A000–$BEFF`) | files are numerous and append-only, then bulk-freed on rescan; no per-record header, no fragmentation |
 | `xtree.p8` | main RAM (names in bank 8) | directory tree — a byte-indexed node pool (`DIR_MAX = 254`, `NONE=255`), links/flags/depth; the directory-name slab lives in bank 8 behind a far pointer | few dirs, redrawn on every keystroke; the hot node pool stays in main RAM while the cold name bytes are banked |
 | xtree **dir-extras** | bank 1 | per-node cold fields (file count/offset/bank, tag count) in fixed 7-byte records | never touched in the per-row redraw loop, only on scan/tag/file ops; frees main RAM, and bank 1 is never disturbed by an arena reset |
-| `xfiles.p8` | banked arena + main RAM | length-prefixed file records in the arena; a small far-pointer display index + sort mode + file-spec in main RAM; ShowAll/Find far-pointer arrays | large records stay in the arena; the insertion sort runs on the small index, not the records |
+| `xfiles.p8` | banked arena + banks 10–11 + main RAM | length-prefixed file records in the arena; the display index in banks 10–11 as 2048 8-byte rows (far pointer + owning dir + a 4-char sort key); sort mode and file-spec in main RAM | large records stay in the arena, and a 2048-row index would be 8 KB of main RAM it doesn't have; the shell sort runs on the index, deciding most comparisons from the inline key without re-reading a name |
 | `xscan.p8` | main module | on-demand logger + scratch paths | drives diskio's one-listing-at-a-time rule: subdirs → tree, files → arena |
 | `tview.ovl` | bank 2 (overlay) | 16-bit page-offset table + shared read buffer | read-only text/hex pager with in-file search; larger files hand off to X16 Edit |
 | `miscutil.ovl` | bank 3 (overlay) | wildcard-rename expander, recursive prune engine, input-history ring, file-copy byte pump, whole-disk Find crawler | self-contained cold helpers pulled out of main RAM; their path/copy buffers cost no main RAM |
@@ -341,11 +341,9 @@ Remaining limitations:
   crawls the whole disk, and it logs solely the directories that contain a match.
 - **Append-only arena.** Individual file records are never freed; dead space from
   refreshes/renames accumulates and is only reclaimed on a full reset/reload.
-- **Fixed capacity caps:** `DIR_MAX = 254` directories, 255 files per displayed
-  directory, 1024 files collected for Find (excess → "(partial)"), and a
-  bounded directory-name slab.
-- **The cross-directory GLOBAL browser is out for rebuild.** Tagging still spans every
-  logged directory, but the flat all-files list (and the batch copy/move that ran from
-  it) is being reworked; content search and sequential view now run per-directory.
+- **Fixed capacity caps:** `DIR_MAX = 254` directories and 2048 rows in the file
+  index — which is the cap on a single directory's listing, a Showall/Branch scope
+  and a Find result set alike (excess → "(partial)") — plus a bounded
+  directory-name slab.
 - **Single drive.** All operations are relative to one mounted drive; there is no
   multi-volume or `.d64` image support.
