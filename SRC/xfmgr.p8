@@ -40,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 239       ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 240       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -876,6 +876,8 @@ main {
                 op_jump_dir()
                 dirty_full = true
             }
+            't' -> op_tag_branch()          ; Alt-T: tag this folder + everything below it
+            'u' -> op_untag_disk()          ; Alt-U: clear every tag on the disk
             'p' -> {                        ; Alt-P: prune (dir pane only) - delete the subtree
                 if focus == FOCUS_TREE {
                     op_prune()
@@ -2615,6 +2617,40 @@ main {
             xtree.build_path(xfiles.row_dir(file_cursor), pathbuf)   ; the program's OWN directory
             run_exit = true
         }
+    }
+
+    sub op_tag_branch() {
+        ; Alt-T: tag every logged file in this folder and everything below it, without first
+        ; entering the Branch view to do it. Borrows the shared file index for the gather and
+        ; hands it straight back - tags live in the file RECORDS, so they outlive the index that
+        ; set them. Honours the FileSpec, which is the point: "F *.prg" then Alt-T tags every
+        ; program in the branch.
+        xfiles.collect_root = cur_dir
+        xfiles.collect_all()
+        uword touched = xfiles.ft_count
+        xfiles.tag_all()
+        void rebuild_view()                 ; put the pane's own listing back
+        clamp_file_cursor()
+        void strings.copy("Tagged ", cm_dst)
+        box_append_uw(touched)
+        void strings.append(cm_dst, " file(s) in this branch")
+        toast(cm_dst)
+        dirty_full = true
+    }
+
+    sub op_untag_disk() {
+        ; Alt-U: clear every tag on the disk. After a Showall session the tags are scattered over
+        ; directories you are no longer looking at, and Ctrl-U only reaches the current listing -
+        ; so without this, starting clean means hunting them down. See xfiles.untag_disk for why
+        ; it deliberately does NOT go through the index.
+        uword cleared = xfiles.untag_disk()
+        void rebuild_view()
+        clamp_file_cursor()
+        void strings.copy("Untagged ", cm_dst)
+        box_append_uw(cleared)
+        void strings.append(cm_dst, " file(s) disk-wide")
+        toast(cm_dst)
+        dirty_full = true
     }
 
     sub op_jump_dir() {

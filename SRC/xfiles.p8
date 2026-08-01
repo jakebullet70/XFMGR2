@@ -410,6 +410,19 @@ xfiles {
         }
     }
 
+    sub untag_disk() -> uword {
+        ; Clear EVERY tag on the disk; returns how many were cleared.
+        ;
+        ; Goes through collect's walker (mode 3) rather than the INDEX, and that is the whole
+        ; point of it: the index caps at INDEX_MAX rows and honours the FileSpec, so "untag
+        ; everything" done through the index would leave tags behind that you can no longer SEE -
+        ; on files past the cap, or filtered out by the spec - still counted in the tree markers.
+        ; Leaves the index empty; every caller rebuilds the pane's own listing straight after.
+        collect_root = xtree.NONE
+        collect(3, spec_lc)                 ; mode 3 ignores the pattern
+        return match_total
+    }
+
     ; ---- one shared arena walker for the multi-directory gathers (Showall / Branch / Find) ----
     ; The collectors differ only in the per-record test, so they share this walker to keep code
     ; size down (main RAM is scarce). It walks every LOGGED directory's record run (bridging bank
@@ -417,8 +430,9 @@ xfiles {
     ;   mode 0 = tagged only            (tagged-file consolidation)
     ;   mode 1 = NAME matches `pat`     (Find-file results)
     ;   mode 2 = all files passing the FileSpec `pat` (Showall/Branch; '*' short-circuits the match)
+    ;   mode 3 = CLEAR every tag, store nothing (Alt-U untag-all; `pat` unused)
     ; `collect_root` narrows WHICH directories are walked: xtree.NONE = every logged one (Showall,
-    ; Find), otherwise only that directory and its descendants (Branch).
+    ; Find, untag-all), otherwise only that directory and its descendants (Branch).
     ; NOTE this REPLACES whatever the file pane was listing - it is the same index. Callers that
     ; gather for a modal list (Find) must rebuild the pane's view when they are done.
     ubyte collect_root
@@ -439,6 +453,7 @@ xfiles {
         ft_count = 0
         match_total = 0
         bool takeall = mode == 2 and spec_all()
+        bool untagging = mode == 3
         ubyte d
         for d in 0 to xtree.dir_count-1 {
             if xtree.d_flags[d] & xtree.FL_SCANNED == 0
@@ -459,7 +474,15 @@ xfiles {
                     continue
                 }
                 ubyte fl = xarena.far_peek(bank, off + 4)
-                if fl & REC_HIDDEN == 0 {
+                if untagging {
+                    ; HIDDEN records are cleared too: hide() leaves the tag bit set (it only
+                    ; decrements the counter), so skipping them would leave a tag behind that
+                    ; comes back the moment the directory is re-logged.
+                    if fl & REC_TAGGED != 0 {
+                        xarena.far_poke(bank, off + 4, fl & %11111110)
+                        match_total++               ; doubles as the cleared counter
+                    }
+                } else if fl & REC_HIDDEN == 0 {
                     bool take = false
                     if mode == 0 {
                         take = fl & REC_TAGGED != 0
@@ -480,8 +503,11 @@ xfiles {
                 off += rl
                 remaining--
             }
+            if untagging
+                xtree.dx_set_tag(d, 0)          ; this dir's counter is now provably zero
         }
-        scope_partial = match_total > ft_count
+        if not untagging
+            scope_partial = match_total > ft_count   ; untagging stores nothing; ft_count means nothing
     }
 
     sub build_scoped_index(ubyte branch_root) -> uword {

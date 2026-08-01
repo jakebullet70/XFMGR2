@@ -1,5 +1,5 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 239)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 240)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
@@ -125,6 +125,16 @@
                folder that has never been logged, which is how you widen
                what Showall and Branch can see. F2 picks from the tree.
    Alt-R       Release - un-log the current folder to free its memory
+   Alt-T       Tag branch - tag every logged file in this folder AND
+               everything below it, without entering the Branch view.
+               Honours the FileSpec, so "F *.prg" then Alt-T tags every
+               program in the branch.
+   Alt-U       Untag all - clear every tag on the DISK. Ctrl-U only
+               reaches the current listing; after a Showall session the
+               tags are spread over folders you are no longer looking
+               at, and this is how you start clean. Ignores the FileSpec
+               and the 1024-row list cap on purpose - a tag you cannot
+               see is still a tag.
    Alt-S       Cycle sort order: name -> extension -> size
    Alt-X       Execute - quit XFMGR and chain-run the selected program
    Alt-Q       Quit, leaving the shell in the CURRENTLY SELECTED directory
