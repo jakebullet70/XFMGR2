@@ -102,11 +102,26 @@ xscan {
     }
 
     sub open_path(str fullpath) -> ubyte {
+        return descend_path(fullpath, false)
+    }
+
+    sub open_new_path(str fullpath) -> ubyte {
+        ; open_path for a path that may contain directories created since their parent was
+        ; logged - a copy/move destination the user asked us to create, say. See `discover`.
+        return descend_path(fullpath, true)
+    }
+
+    sub descend_path(str fullpath, bool discover) -> ubyte {
         ; Descend the tree from the root (node 0) following the absolute path 'fullpath'
-        ; (diskio.curdir() format: leading '/', no trailing slash, root = "/"), logging
+        ; (diskio.curdir() format: leading '/', trailing slash tolerated, root = "/"), logging
         ; and expanding each directory on the way down. Returns the deepest node that
         ; matched an on-disk segment; if a segment can't be found the descent stops there.
         ; Reuses pr_leaf as per-segment scratch (nothing else in xscan uses it now).
+        ;
+        ; `discover`: scan_dir is a no-op on an ALREADY-LOGGED directory, so a plain descent can
+        ; never see a subfolder created after that directory was logged - it just stops at the
+        ; parent. With discover set, an already-logged level is re-listed (refresh_dirs) so newly
+        ; made children become real nodes. Costs one directory listing per level, so it is opt-in.
         ubyte node = 0
         uword p = fullpath as uword
         if @(p) == '/'
@@ -126,7 +141,10 @@ xscan {
                 p++
             if n == 0
                 continue                            ; tolerate an empty segment ("//")
-            void scan_dir(node)                     ; ensure this level's children are logged
+            if xtree.d_flags[node] & xtree.FL_SCANNED == 0
+                void scan_dir(node)                 ; first visit: log this level's children
+            else if discover
+                void refresh_dirs(node)             ; logged already: pick up folders made since
             ; find the child directory whose name matches the segment
             ubyte ch = xtree.d_first_child[node]
             bool found = false

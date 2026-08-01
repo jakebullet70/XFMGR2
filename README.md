@@ -1,6 +1,6 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:236)*
+*(build:238)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
@@ -21,6 +21,12 @@ switchable **color themes**.
   (`Enter`), keeping startup fast. No blocking whole-disk crawl.
 - **File tagging**, XTree-style tag-and-advance: tag/untag one file, tag/untag/invert
   a whole directory, or tag by wildcard (`Ctrl-W`).
+- **Scoped file views** — XTree's Expanded File Window. From the directory pane, `S`
+  (**Showall**) lists every logged file on the disk as one flat list and `B` (**Branch**)
+  lists the selected folder plus everything logged below it. It is the same file pane with
+  the same commands, widened to the full screen: tag, copy, move, delete, rename and the
+  content search all work across directories, each file acting in its own folder. The
+  header names the highlighted file's directory; `Esc` returns to the two-pane view.
 - **Search tagged files by content** (`Ctrl-S` / `Ctrl-E`) — the XTree model: type a
   string and every tagged file that does *not* contain it is untagged, collapsing the
   tag set down to the hits. Tag broadly, then search to narrow.
@@ -87,6 +93,8 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `M` | Make a new subdirectory in the selected folder |
 | `R` | Rename the selected directory |
 | `D` | Delete the selected folder (empty folders only) |
+| `S` | **Showall** — list every logged file on the disk as one flat file window |
+| `B` | **Branch** — list this folder and everything logged below it |
 | `P` | **Prune** — recursively delete the folder and all its contents (type `prune` to confirm) |
 | `F3` | Re-log sub-folders (picks up folders made since logging) |
 | `A` | About box (version, banked-RAM usage, credits) |

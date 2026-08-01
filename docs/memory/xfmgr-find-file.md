@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: f3d00c60-c71e-4045-88f8-0aa07cdf93f6
+  modified: 2026-08-01T02:45:37.339Z
 ---
 
 Added 2026-07-03 (implemented the reloaded "Find file" plan). A CTRL-menu command (both panes)
@@ -41,7 +42,13 @@ recursive walk can't hold a parent open while descending.
 **Log-on-match:** only dirs that contain a match are ever logged — the tree stays clean and the
 128-dir cap is respected. **Caps surfaced (no silent truncation):** `(partial)` in the modal title
 via `partial` bits — bit0 too-deep (`crawl_trunc()`), bit1 128-dir cap (`dir_count>=DIR_MAX`), bit2
-255-result cap (`sa_count>=GLOBAL_MAX`).
+result cap (build 236+: `xfiles.scope_partial`, i.e. more matches than `INDEX_MAX`=1024 rows).
+
+**Build 236 changed where Find's results live.** They are gathered into THE shared file index, not
+a private table - so `op_find` must re-anchor the pane (`select_dir`) BEFORE `collect_matching`,
+and both exits from `show_find_results` hand the index back to a directory listing. Find also
+leaves any scoped view up front, because it rebuilds the tree and every node id with it.
+See [[xfmgr-showall-revisit]].
 
 **Crash fixed 2026-07-03 (whole-disk scan exposed two latent buffer overflows on long hostfs
 filenames):** (1) `xarena.read_str` was uncapped -> now takes a `cap` and every caller passes

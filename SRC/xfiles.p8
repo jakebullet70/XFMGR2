@@ -44,10 +44,12 @@ xfiles {
 
     ; Which set of files the pane is listing. Set by main when entering/leaving a scoped view.
     ;   0 = SCOPE_DIR    - the current directory (classic behaviour)
+    ;   1 = SCOPE_BRANCH - the current directory AND everything logged below it (XTree "Branch")
     ;   2 = SCOPE_DISK   - every logged file on the disk (XTree "Showall")
-    ; (1 = SCOPE_BRANCH, current directory + its subdirectories, is phase 2.)
-    const ubyte SCOPE_DIR   = 0
-    const ubyte SCOPE_DISK  = 2
+    ; The order matters only in that SCOPE_DIR is 0, so a zeroed BSS starts in the normal view.
+    const ubyte SCOPE_DIR    = 0
+    const ubyte SCOPE_BRANCH = 1
+    const ubyte SCOPE_DISK   = 2
     ubyte file_scope
     bool scope_partial              ; more files matched than INDEX_MAX rows, so the list is truncated
 
@@ -408,15 +410,31 @@ xfiles {
         }
     }
 
-    ; ---- one shared arena walker for the whole-disk gathers (Showall / Find) ----
+    ; ---- one shared arena walker for the multi-directory gathers (Showall / Branch / Find) ----
     ; The collectors differ only in the per-record test, so they share this walker to keep code
     ; size down (main RAM is scarce). It walks every LOGGED directory's record run (bridging bank
     ; sentinels like build_index) and fills the index, capped at INDEX_MAX.
     ;   mode 0 = tagged only            (tagged-file consolidation)
     ;   mode 1 = NAME matches `pat`     (Find-file results)
-    ;   mode 2 = all files passing the FileSpec `pat` (Showall; '*' short-circuits the match)
+    ;   mode 2 = all files passing the FileSpec `pat` (Showall/Branch; '*' short-circuits the match)
+    ; `collect_root` narrows WHICH directories are walked: xtree.NONE = every logged one (Showall,
+    ; Find), otherwise only that directory and its descendants (Branch).
     ; NOTE this REPLACES whatever the file pane was listing - it is the same index. Callers that
     ; gather for a modal list (Find) must rebuild the pane's view when they are done.
+    ubyte collect_root
+
+    sub in_branch(ubyte d) -> bool {
+        ; is directory d inside the collect_root subtree? Walks parents, so it costs the depth of
+        ; d - a handful of banked reads per directory, once per gather, not per file.
+        ubyte ancestor = d
+        while ancestor != xtree.NONE {
+            if ancestor == collect_root
+                return true
+            ancestor = xtree.dx_parent(ancestor)
+        }
+        return false
+    }
+
     sub collect(ubyte mode, str pat) {
         ft_count = 0
         match_total = 0
@@ -425,6 +443,8 @@ xfiles {
         for d in 0 to xtree.dir_count-1 {
             if xtree.d_flags[d] & xtree.FL_SCANNED == 0
                 continue
+            if collect_root != xtree.NONE and not in_branch(d)
+                continue                        ; Branch: outside the subtree we were asked for
             uword remaining = xtree.dx_fcount(d)
             ubyte bank = xtree.dx_fbank(d)
             uword off  = xtree.dx_foff(d)
@@ -464,18 +484,20 @@ xfiles {
         scope_partial = match_total > ft_count
     }
 
-    sub build_scoped_index() -> uword {
-        ; Fill the index from a SCOPED gather (XTree Showall) instead of one directory. collect()
-        ; already walks every logged directory's record run, applies the FileSpec and records the
+    sub build_scoped_index(ubyte branch_root) -> uword {
+        ; Fill the index from a SCOPED gather (Showall/Branch) instead of one directory. collect()
+        ; already walks the logged directories' record runs, applies the FileSpec and records the
         ; owning directory per row, straight into the index - so all that is left is the sort.
+        ; branch_root = xtree.NONE for the whole disk, else the subtree to stay inside.
+        collect_root = branch_root
         collect_all()
         sort_index()
         return ft_count
     }
 
-    sub collect_tagged()               { collect(0, spec_lc) }             ; tagged-only (pat unused)
-    sub collect_matching(str lc_pat)   { collect(1, lc_pat)  }             ; Find: NAME matches lc_pat
-    sub collect_all()                  { collect(2, spec_lc) }             ; Showall: all files vs FileSpec
+    sub collect_tagged()               { collect_root = xtree.NONE  collect(0, spec_lc) }
+    sub collect_matching(str lc_pat)   { collect_root = xtree.NONE  collect(1, lc_pat)  }  ; Find: whole disk
+    sub collect_all()                  { collect(2, spec_lc) }    ; caller sets collect_root first
 
     sub invert_all() {
         ; flip the tag state of every visible file

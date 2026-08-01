@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: ff94bf97-5839-406e-b6b3-a755dab25e6a
+  modified: 2026-08-01T02:45:32.632Z
 ---
 
 XFMGR2 = an XTree-style file manager for the Commander X16 in Prog8. v1 (navigator)
@@ -26,7 +27,9 @@ is built and verified on the emulator. Modules (project root .p8 files):
   ~974 B net main RAM (Tier A). `rebuild_visible()` flattens expanded nodes iteratively.
 - `xfiles.p8` — per-dir FILE records in the banked arena: `[reclen][blocksLo][blocksHi]`
   `[ftype][flags][name+NUL]`; reclen==0 byte is a bank-roll SENTINEL the walker follows.
-  Tag bit in flags; `build_index()` fills ft_bank[]/ft_off[] for the shown dir.
+  Tag bit in flags; `build_index()` fills THE FILE INDEX for the shown dir. Since build 236
+  that index lives in BANKED RAM (bank 1 @ $b000, 4-byte rows, 1024 max) and is shared by
+  directory listings, scoped views and Find alike - see [[xfmgr-showall-revisit]].
 - `xscan.p8` — logs ONE dir on demand via diskio `lf_start_list`/`lf_next_entry`/`lf_end_list`
   (one session at a time): subdirs→xtree.add_child, files→xfiles.add_file. Also `refresh_files`
   / `refresh_dirs` for in-place relog.

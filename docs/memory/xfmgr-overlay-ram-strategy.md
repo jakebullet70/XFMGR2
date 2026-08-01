@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 34a3aff3-3870-4671-a1b8-ab8c9f46ea15
+  modified: 2026-08-01T02:46:26.314Z
 ---
 
 XFMGR is main-RAM constrained; the lever for headroom is moving cold code into HIRAM bank
@@ -12,7 +13,9 @@ overlays (%output library blobs, org $A000, loaded via diskio.loadlib, called vi
 
 **Bank map** (see [[x16-banked-ram-min-config]], xarena.FIRST_BANK): 0=Kernal, 1=xtree dir-extras
 (the 14-byte DX per-node record at $a000 - now also holds name_off/depth/parent, see below)
-+ xfiles sa index at $b000 (1024 * 4-byte recs, uword-indexed), 2=tview (viewer), 3=miscutil
++ **xfiles' one FILE INDEX at $b000** (1024 * 4-byte rows, uword-indexed - since build 236 this is
+THE index for directory listings, scoped views AND Find, not a ShowAll-only side table; see
+[[xfmgr-showall-revisit]]), 2=tview (viewer), 3=miscutil
 (wildcard/prune/history + stream_copy byte-pump + whole-disk Find crawler + content_scan),
 4=uiutil (bottom dialogs + About/modal-box drawing),
 5=ximgview (BMX image viewer, see [[xfmgr-bmx-image-viewer]]), 6=zsmkit v2 engine blob (ZSM

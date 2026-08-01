@@ -40,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 236       ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 238       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -1041,12 +1041,19 @@ main {
             's' -> {                    ; S: Showall - every logged file on the disk, as one list
                 enter_scope(xfiles.SCOPE_DISK)
             }
+            'b' -> {                    ; B: Branch - this directory and everything logged below it
+                enter_scope(xfiles.SCOPE_BRANCH)
+            }
             'a' -> {                    ; A: about (replaces the old '?')
                 show_about()
                 dirty_full = true
             }
         }
     }
+
+    ; Root of a SCOPE_BRANCH listing: the directory the user pressed B on. Kept separate from
+    ; cur_dir because cur_dir follows the tree cursor and the branch must not drift with it.
+    ubyte branch_root
 
     sub enter_scope(ubyte new_scope) {
         ; Switch the file pane to a scoped listing (XTree Showall) and move the highlight into it.
@@ -1057,6 +1064,7 @@ main {
         ; pane - so it reads as a hang rather than as work. Say so first.
         box_open()
         box_left(CMDROW1, "Working...")
+        branch_root = cur_dir                       ; only read when new_scope is SCOPE_BRANCH
         xfiles.file_scope = new_scope
         if rebuild_view() == 0 {
             xfiles.file_scope = xfiles.SCOPE_DIR    ; nothing to show - don't strand the user in an
@@ -1343,11 +1351,21 @@ main {
             ; panel for the same reason: a flat list of files from everywhere looks exactly like a
             ; normal directory listing until something says otherwise.
             txt.plot(TREE_TEXT, 2)
-            txt.print(" SHOWALL: ")
-            print_trunc(xfiles.spec_lc, 14)
+            if xfiles.file_scope == xfiles.SCOPE_BRANCH {
+                ; Name the SUBTREE, not just the filespec - "BRANCH" alone doesn't say which
+                ; branch, and the Path line follows the highlighted file rather than the root.
+                txt.print(" BRANCH: ")
+                xtree.build_path(branch_root, pathbuf)
+                print_trunc(pathbuf, 22)
+                txt.print(" : ")
+                print_trunc(xfiles.spec_lc, 10)
+            } else {
+                txt.print(" SHOWALL: ")
+                print_trunc(xfiles.spec_lc, 14)
+            }
             txt.spc()
             if xfiles.scope_partial {
-                txt.plot(40, 2)
+                txt.plot(50, 2)
                 txt.print(" (partial) ")   ; more matches on disk than xfiles.INDEX_MAX rows
             }
         } else {
@@ -1642,7 +1660,9 @@ main {
         ; back to the current directory mid-operation.
         if xfiles.file_scope == xfiles.SCOPE_DIR
             return xfiles.build_index(cur_dir)
-        return xfiles.build_scoped_index()
+        if xfiles.file_scope == xfiles.SCOPE_BRANCH
+            return xfiles.build_scoped_index(branch_root)
+        return xfiles.build_scoped_index(xtree.NONE)
     }
 
     sub tagged_in_view() -> uword {
@@ -2231,11 +2251,24 @@ main {
             }
         }
 
-        ; refresh the source view (moved files vanish) and the dest dir if it's logged
+        ; refresh the source view (moved files vanish) and the destination
         if is_move
             void rebuild_view()
         ubyte dd = find_dir_by_path(cm_ddir)
-        if dd != xtree.NONE and xtree.d_flags[dd] & xtree.FL_SCANNED != 0 {
+        if dd == xtree.NONE {
+            ; The destination did not exist and ensure_dest_dir CREATED it. make_dirs only makes
+            ; the folder on disk - nothing told the tree about it - so without this the new folder
+            ; and everything just copied into it stay invisible until the user manually re-logs the
+            ; parent. open_new_path re-lists each logged level on the way down, which is what finds
+            ; a child made after its parent was logged.
+            dd = xscan.open_new_path(cm_ddir)
+            if dd != xtree.NONE {
+                void xscan.scan_dir(dd)         ; the descent logs the PARENT's children, not dd's files
+                xtree.rebuild_visible()
+                set_tree_cursor_to(cur_dir)     ; new rows shifted the visible list under the cursor
+                dirty_full = true
+            }
+        } else if xtree.d_flags[dd] & xtree.FL_SCANNED != 0 {
             void xscan.refresh_files(dd)
             if dd == cur_dir
                 void rebuild_view()
@@ -2586,6 +2619,12 @@ main {
         ; back to the "(Enter to log)" state; a later Enter re-scans it fresh. The banked
         ; bytes are reclaimed on the next full reset (the arena is append-only, see xarena),
         ; so this releases the folder LOGICALLY. Nothing to release if it was never logged.
+        ;
+        ; Alt-R is not focus-guarded, so it can fire from inside a scoped view. Leave the scope
+        ; first: unlog drops this folder's subfolders and file records, and a scoped index holds
+        ; far pointers INTO those records - keeping it would leave rows aimed at released storage.
+        if xfiles.file_scope != xfiles.SCOPE_DIR
+            leave_scope()
         if xtree.d_flags[cur_dir] & xtree.FL_SCANNED == 0 {
             flash("folder not logged")
             return
@@ -3581,6 +3620,12 @@ main {
             flash("Find needs the misc overlay")
             return
         }
+        ; Drop any scoped view FIRST. Find rebuilds the tree from scratch (every node id changes,
+        ; so a stored branch_root would point at the wrong folder) and lands you on one specific
+        ; directory, which is a normal two-pane result. Staying "in" Showall/Branch would leave the
+        ; title bar and the full-width geometry claiming a scope the listing no longer has.
+        if xfiles.file_scope != xfiles.SCOPE_DIR
+            leave_scope()
         if not input_line("Find (eg *.prg):", inputbuf, 31, "find", false, false)
             return
         if inputbuf[0] == 0

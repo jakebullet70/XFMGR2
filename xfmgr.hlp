@@ -1,5 +1,5 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 236)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 238)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
@@ -31,6 +31,10 @@
    M           Make a new subdirectory in the selected folder
    R           Rename the selected directory
    D           Delete the selected folder (empty folders only)
+   S           Showall - list every logged file on the DISK as one flat
+               file window (see SCOPED FILE VIEWS below)
+   B           Branch - the same, but only this folder and everything
+               logged below it
    P           Prune - recursively delete the folder and all its contents
                (type 'prune' to confirm)
    F3          Re-log sub-folders (picks up folders made since logging)
@@ -49,6 +53,36 @@
    R           Rename (supports * and ? wildcards)
    D           Delete current file (confirm)
    F           Set the file-spec filter (e.g. *.prg, Enter = * = all)
+
+------------------------------------------------------------------------------
+ SCOPED FILE VIEWS - Showall (S) and Branch (B)
+------------------------------------------------------------------------------
+ From the DIRECTORY pane, S and B widen the file pane to the whole screen
+ and fill it from more than one folder:
+
+   S  Showall   every logged file on the disk, as one flat list
+   B  Branch    the selected folder and everything logged below it
+
+ It is the SAME file window with the SAME commands, not a separate screen.
+ Tag, Untag, View, Play, Edit, Copy, Move, Rename, Delete and the Ctrl
+ commands all work exactly as they do in a normal listing - each file is
+ acted on IN ITS OWN FOLDER, so Ctrl-C and Ctrl-M gather tagged files from
+ all over the disk into one destination, and Ctrl-S searches their contents
+ wherever they live.
+
+ Because the rows come from many folders, the Path line at the top follows
+ the HIGHLIGHTED FILE rather than the tree cursor - it is the only thing
+ telling you which folder the row under the bar belongs to. The title bar
+ shows the scope and the active filespec; the counts on the right are for
+ the whole list.
+
+ Only files in LOGGED directories appear - log more of the tree (Enter on
+ a folder) to widen what Showall can see. The FileSpec (F) still applies,
+ so "F *.prg" then S lists every program on the disk. The list holds up to
+ 1024 files; past that the title shows (partial) and the count reads
+ "1024 of N".
+
+ Esc (or TAB back to the tree) returns to the normal two-pane view.
 
 ------------------------------------------------------------------------------
  CTRL menu (acts on the current directory / all tagged)
