@@ -102,6 +102,17 @@ main {
     ; pages_push restarts the window rather than stopping, which is what makes a search hit deep in
     ; a big file reachable (and highlightable). Hex mode uses a single long -> no cap.
     const ubyte VPAGES = 64            ; page-top cache depth; MUST match view_pages' length
+    ; { | } ~ _ \ have NO glyph in the PETSCII font, and scr_of's blanket "-$40" fold used to land
+    ; them on ; < = > £ ← - REAL characters, so a source line READ as correct while saying something
+    ; else. main.patch_font now DRAWS those six into the charset in VRAM (slots $74-$78 and $1C),
+    ; and scr_of below maps each character onto its slot. See main.patch_font for how the slots
+    ; were chosen. If that patch ever fails the characters simply revert to the old wrong glyphs -
+    ; a display fault, never a crash, since these are only ever screen codes.
+    ; TAB renders as ONE space (content_scr), not a column stop. True stops need the emit path to
+    ; run N times for one byte, and bank 2 has no room for it - it was 66 bytes over $C000. Nesting
+    ; still reads correctly (1 tab = 1 space, 2 = 2), but tab/space-mixed alignment will not line up.
+    ; Upgrade to real stops when the custom-font work reclaims space in this bank.
+    const ubyte TAB_W = 4
     const long NO_MATCH = $7f000000    ; "no hit in this file": past any real file, and far enough
                                        ; below the 32-bit ceiling that view_match+termlen can't wrap
     long[64] view_pages
@@ -305,8 +316,16 @@ main {
         ; sc $41..$5A are uppercase A-Z. So: a-z fold DOWN to $01..$1A, A-Z are already their own
         ; screen codes ($41..$5A) and stay put, and space/digits/punctuation ($20..$3F) map 1:1.
         ; (The old blanket "$40-$5F -$40 / $60-$7E -$20" fold SWAPPED letter case.)
-        if b >= $61 and b <= $7A
-            return b - $60              ; a-z -> $01..$1A (lowercase glyphs)
+        ; Tested high-to-low ON PURPOSE: ruling out $7B-$7E first means the a-z test below needs
+        ; only its LOWER bound, one compare instead of two. This bank has no spare bytes.
+        if b > $7a
+            return b - 7                ; { | } ~ ($7B-$7E) -> the custom glyphs at $74-$77.
+                                        ; content_scr bounds b to $7E, so nothing else gets here.
+        if b >= $61
+            return b - $60              ; a-z -> $01..$1A (upper bound implied by the test above)
+        if b == $5f
+            return $78                  ; _ -> custom glyph. Cannot ride the -$40 fold below: that
+                                        ; lands on $1F, the ← the command menu draws.
         if b >= $41 and b <= $5A
             return b                    ; A-Z -> $41..$5A (uppercase glyphs, unchanged)
         if b < $40
@@ -321,6 +340,11 @@ main {
         ; in the active encoding show as '.'. The machine charset NEVER changes (that would garble
         ; XFMGR's own PETSCII UI + box chrome and break the Alt/Ctrl command keys - see the ISO
         ; memory note); only how each content byte is interpreted onto the shared PETSCII font.
+        if b == 9
+            return $20                  ; TAB -> a space, in BOTH encodings. Source files (BASLOAD,
+                                        ; prog8) indent with tabs and every one used to draw as the
+                                        ; '.' unprintable marker, which made them unreadable. This
+                                        ; is ONE space per tab, not a column stop - see TAB_W.
         if view_pet {
             if b < 32 or (b >= 128 and b < 160)
                 return $2e              ; PETSCII control / color codes -> '.' (screencode $2E)
@@ -431,7 +455,9 @@ main {
                         if ln_len < shared.SYN_LINE_MAX {
                             ubyte sc = ch
                             if sc < 32 or sc > 126
-                                sc = '.'
+                                sc = ' '        ; was '.': this buffer feeds the CLASSIFIER, never
+                                                ; the screen, and a TAB (or any stray control byte)
+                                                ; is whitespace to a tokenizer, not a token char
                             @(syn_line_p + ln_len) = sc
                             ln_len++
                         }

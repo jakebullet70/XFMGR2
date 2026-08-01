@@ -40,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 243       ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 247       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -433,6 +433,10 @@ main {
             view_char = 'V'
         }
         txt.lowercase()
+        ; AFTER txt.lowercase(), never before: the X16's upper/lower case switch re-uploads the
+        ; charset from ROM into VRAM, so a patch applied earlier is silently wiped (build 245 drew
+        ; the STOCK glyph at $78 - a mid-height bar - instead of an underscore).
+        patch_font()                             ; draw { | } ~ _ \ into the charset
         txt.color2(shared.CLR_FG, shared.CLR_BG)               ; white text on a blue field
         txt.clear_screen()
 
@@ -713,6 +717,62 @@ main {
         cx16.push_rambank(0)
         @(KBD_SHFLAG) = @(KBD_SHFLAG) | MOD_CAPS
         cx16.pop_rambank()
+    }
+
+    ; ---------- custom glyphs for the ASCII characters PETSCII has none for ----------
+    ;
+    ; The PETSCII font has no { | } ~ _ or \ glyph, so the viewer folded them onto OTHER REAL
+    ; characters (; < = > and ← £). A source line then READ as correct while saying something
+    ; else, which is worse than an obviously-missing glyph. So we draw the six ourselves, straight
+    ; into the KERNAL's charset in VRAM (base $1F000, 8 bytes per glyph, one bit per pixel).
+    ;
+    ; Slots were picked against the ACTUAL BUILD, not by eye: XFMGR's box chrome occupies $6B-$73
+    ; and $7D (plus the reverse-video twins at $C0+ that the selection bar draws), and no text path
+    ; emits above $5A - so $74..$78 are free. Backslash gets $1C, the PETSCII pound sign: nothing
+    ; here draws it, AND it is exactly where the viewer's existing "-$40" fold already sends `\`,
+    ; so backslash costs the viewer no extra code at all.
+    ;
+    ; MSEDIT needed a second VRAM tilebase for this because it switches fonts per document. XFMGR
+    ; has ONE charset for the whole app, so patching the default one in place is enough - no
+    ; tilebase juggling, no font file to ship.
+    const uword FONT_VRAM  = $f000      ; low 16 bits of $1F000; bit 16 is set in VERA_ADDR_H
+    const ubyte GLYPH_SLOT = $74        ; $74..$7A are contiguous and free -> ONE write covers them
+    const ubyte GLYPH_BS   = $1c        ; \  replaces the unused pound sign
+    ; The two pane scroll markers. PETSCII has a real up-arrow (at $1E, which is what sc:'^' used
+    ; to reach) but NO down-arrow, so the "more below" marker was drawing the LETTER v. Both are
+    ; drawn here instead, as exact vertical mirrors of each other - borrowing PETSCII's ↑ for one
+    ; and inventing the other would have left the pair visibly mismatched.
+    const ubyte SC_ARROW_DN = $79
+    const ubyte SC_ARROW_UP = $7a
+    ubyte[56] glyph_data = [
+        $0c,$18,$18,$30,$18,$18,$0c,$00,        ; $74  {
+        $18,$18,$18,$18,$18,$18,$18,$00,        ; $75  |
+        $30,$18,$18,$0c,$18,$18,$30,$00,        ; $76  }  (mirror of {)
+        $00,$00,$00,$76,$dc,$00,$00,$00,        ; $77  ~
+        $00,$00,$00,$00,$00,$00,$ff,$00,        ; $78  _  (row 6, not 7, so it doesn't touch
+                                                ;          the line below)
+        $18,$18,$18,$18,$7e,$3c,$18,$00,        ; $79  down arrow: shaft, then a head tapering
+                                                ;      to a point
+        $18,$3c,$7e,$18,$18,$18,$18,$00 ]       ; $7A  up arrow: the same, mirrored
+    ubyte[8] glyph_bs = [
+        $c0,$60,$30,$18,$0c,$06,$03,$00 ]       ; $1c  \
+
+    sub patch_font() {
+        ; Runs AFTER every charset (re)load - screen_set_charset re-uploads the ROM font and wipes
+        ; these, and set_screen_mode does it too via CINT. Cheap enough to just call again.
+        vera_glyphs(GLYPH_SLOT, &glyph_data, len(glyph_data))
+        vera_glyphs(GLYPH_BS, &glyph_bs, len(glyph_bs))
+    }
+
+    sub vera_glyphs(ubyte slot, uword src, ubyte count) {
+        uword addr = FONT_VRAM + (slot as uword) * 8
+        cx16.VERA_CTRL   = 0                ; ADDR0 / DATA0
+        cx16.VERA_ADDR_L = lsb(addr)
+        cx16.VERA_ADDR_M = msb(addr)
+        cx16.VERA_ADDR_H = $11              ; bit 0 = VRAM address bit 16; $10 = auto-increment 1
+        ubyte gi
+        for gi in 0 to count-1
+            cx16.VERA_DATA0 = @(src + gi)   ; auto-increment walks the glyph rows for us
     }
 
     sub restore_machine_state() {
@@ -1184,6 +1244,7 @@ main {
                         view_image(&namebuf)            ; bank-5 overlay: shows the BMX, returns on any key
                         cx16.set_screen_mode(SCREEN_MODE)  ; image viewer left VERA in bitmap mode -> back to 80x30
                         txt.lowercase()                 ; CINT/set_screen_mode reset the charset to uppercase
+                        patch_font()                    ; ...which also wiped our custom glyphs
                         txt.color2(shared.CLR_FG, shared.CLR_BG)   ; restore app theme after CINT reset the palette
                     } else if viewer_ok {
                         ; Prime the viewer's in-file Find history: load the "viewfind" ring BEFORE the
@@ -1456,9 +1517,9 @@ main {
         ; the ^/v indicators sit in the pane's right edge column, which blank_span wipes;
         ; re-assert them (only when there is more above / below the window)
         if tree_top != 0
-            txt.setchr(TREE_BAR_R, PANE_TOP, sc:'^')
+            txt.setchr(TREE_BAR_R, PANE_TOP, SC_ARROW_UP)
         if tree_top + PANE_H < xtree.vis_count
-            txt.setchr(TREE_BAR_R, PANE_BOT, sc:'v')
+            txt.setchr(TREE_BAR_R, PANE_BOT, SC_ARROW_DN)
     }
 
     sub draw_tree() {
@@ -1598,9 +1659,9 @@ main {
 
     sub file_scroll_marks() {
         if file_top != 0
-            txt.setchr(FILE_BAR_R, FILE_TOP, sc:'^')
+            txt.setchr(FILE_BAR_R, FILE_TOP, SC_ARROW_UP)
         if file_top + FILE_VIS < xfiles.ft_count
-            txt.setchr(FILE_BAR_R, PANE_BOT, sc:'v')
+            txt.setchr(FILE_BAR_R, PANE_BOT, SC_ARROW_DN)
     }
 
     sub draw_files() {
@@ -2461,6 +2522,7 @@ main {
         ; are laid out for charset 3. Caller's dirty_full repaints over it.
         cx16.set_screen_mode(SCREEN_MODE)               ; reinit 80x30 layer + charset tile base
         cx16.screen_set_charset(3, 0)                   ; FORCE-reload PETSCII upper/lower ROM font to VRAM
+        patch_font()                                    ; that reload wiped our custom glyphs
         %asm {{
             lda  $0372
             and  #$bf                       ; clear bit $40 -> leave ISO mode, back to PETSCII CHROUT

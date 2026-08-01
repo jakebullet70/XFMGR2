@@ -1,6 +1,6 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:243)*
+*(build:247)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
