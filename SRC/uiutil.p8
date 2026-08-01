@@ -15,7 +15,8 @@
 ; Fixed entry offsets via %jmptable: $A000 = init, $A003 = ui_flash, $A006 = ui_toast,
 ; $A009 = ui_ask_yn, $A00C = ui_ask_overwrite, $A00F = ui_ask_confirm_each,
 ; $A012 = ui_ask_delete_this, $A015 = ui_banner_copymove, $A018 = ui_banner_delete,
-; $A01B = ui_copy_diag.
+; $A01B = ui_copy_diag, $A01E = ui_draw_box, $A021 = ui_box_header, $A024 = ui_show_about,
+; $A027 = ui_draw_commands, $A02A = ui_hist_popup.
 
 %import textio
 %import strings
@@ -32,7 +33,17 @@ main {
     ; a module-level initialized var would be emitted before the code and shove the table off its
     ; fixed offsets. cm_dst below is UNINITIALIZED (-> BSS tail); all strings used here are inline
     ; literals inside subs (those are fine - it's only module init-data that moves the table).
-    %jmptable ( main.ui_flash, main.ui_toast, main.ui_ask_yn, main.ui_ask_overwrite, main.ui_ask_confirm_each, main.ui_ask_delete_this, main.ui_banner_copymove, main.ui_banner_delete, main.ui_copy_diag, main.ui_draw_box, main.ui_box_header, main.ui_show_about, main.ui_draw_commands )
+    %jmptable ( main.ui_flash, main.ui_toast, main.ui_ask_yn, main.ui_ask_overwrite, main.ui_ask_confirm_each, main.ui_ask_delete_this, main.ui_banner_copymove, main.ui_banner_delete, main.ui_copy_diag, main.ui_draw_box, main.ui_box_header, main.ui_show_about, main.ui_draw_commands, main.ui_hist_popup )
+
+    ; miscutil (bank 3) owns the history ring. A bank overlay CAN cross-bank call another overlay -
+    ; prog8 emits a JSRFAR, which runs from ROM and restores our bank on return. What does NOT
+    ; cross is DATA: while bank 3 is mapped, this bank's own storage is gone, so the line buffer
+    ; hist_get writes into has to live in MAIN RAM (below $A000, always mapped) - main passes us
+    ; its pointer rather than us keeping a local one.
+    extsub @bank 3 $A012 = hist_get(ubyte slot @R0, uword outptr @R1)
+
+    const ubyte HIST_PX0 = 12                   ; Recent-popup box left/right columns
+    const ubyte HIST_PX1 = 67
 
     ; bottom-banner layout (must match xfmgr.p8's constants)
     const ubyte DIVBOT   = 26
@@ -336,6 +347,108 @@ main {
             txt.spc()
     }
 
+    sub print_trunc(uword sptr, ubyte maxlen) {
+        ubyte i = 0
+        ubyte ch
+        while i < maxlen {
+            ch = @(sptr + i)
+            if ch == 0
+                break
+            txt.chrout(ch)
+            i++
+        }
+    }
+
+    ; ---- the "Recent entries" history picker (Up-arrow in any text prompt) ----
+
+    sub hist_draw_row(ubyte srow, uword textptr, bool selected) {
+        ; (re)draw a single history row: clear it, print the entry, highlight if selected.
+        ; Matches how do_draw_box's box_row paints a base row, so an unselected redraw is
+        ; pixel-identical to the original (it resets any bar color).
+        txt.color(shared.CLR_FG)
+        blank_span(HIST_PX0+1, HIST_PX1-1, srow)
+        txt.plot(HIST_PX0+2, srow)
+        print_trunc(textptr, HIST_PX1-HIST_PX0-3)
+        if selected
+            hilite_row(HIST_PX0+1, HIST_PX1-1, srow, shared.HILITE)
+    }
+
+    sub ui_hist_popup(uword destptr @R0, ubyte maxlen @R1, ubyte count @R2, uword linebuf @R3) -> ubyte {
+        ; (only the extsub decl in main names the return register - a normal sub here can't)
+        ; @Rn args die the moment anything else is called, so hand them straight to a normal sub.
+        return do_hist_popup(destptr, maxlen, count, linebuf)
+    }
+
+    sub do_hist_popup(uword destptr, ubyte maxlen, ubyte count, uword linebuf) -> ubyte {
+        ; modal picker of recent entries, shell-style: the NEWEST entry (slot 0) sits at
+        ; the BOTTOM of the list, right above the prompt, and is selected by default;
+        ; Up walks back into older entries. `sel` is a slot index (0 = newest). On Enter,
+        ; copy the choice into destptr (capped at maxlen) and return its length; on Esc
+        ; return 255 (no change). Only called when count != 0.
+        ;
+        ; `linebuf` is main's staging buffer - see the hist_get note at the top of this file.
+        ubyte sel = 0
+        ubyte c
+        ; geometry is fixed while the popup is open (count can't change): a blank spacer line
+        ; sits under the header at boxtop+1, the list fills boxtop+2.., and the bottom border
+        ; anchors at row 26. srow for a slot = boxtop+rows+1-slot.
+        ubyte rows = count
+        ubyte boxtop = 24 - rows
+        ; --- draw the chrome + full list ONCE; the key loop below only repaints the two
+        ;     rows that change on Up/Down instead of redrawing the whole list ---
+        do_draw_box(HIST_PX0, boxtop, HIST_PX1, boxtop+rows+2)
+        do_box_header(HIST_PX0, HIST_PX1, boxtop, " Recent ")
+        ; key hints in a centered footer on the bottom border, as ONE embedded-color
+        ; string (\x9e=accent, \x05=fg; ←┘=ENTER glyph). Visible length = 23.
+        txt.plot(HIST_PX0 + 1 + (HIST_PX1 - HIST_PX0 - 1 - 23) / 2, boxtop+rows+2)
+        txt.print(petscii:"\x9e ←┘\x05 Select  \x9eESC\x05 Cancel ")
+        ubyte p
+        for p in 0 to rows-1 {
+            ubyte slot = rows - 1 - p        ; oldest at top, newest at the bottom
+            hist_get(slot, linebuf)          ; pull the entry out of the miscutil ring
+            hist_draw_row(boxtop+2+p, linebuf, slot == sel)
+        }
+        repeat {
+            ubyte k = wait_key()
+            if k >= $c1 and k <= $da
+                k -= $80
+            when k {
+                27, 3 -> return 255          ; ESC / STOP: cancel
+                13 -> {                      ; Enter: take the selected entry
+                    hist_get(sel, linebuf)
+                    ubyte j = 0
+                    repeat {
+                        c = @(linebuf + j)
+                        if c == 0 or j >= maxlen
+                            break
+                        @(destptr + j) = c
+                        j++
+                    }
+                    @(destptr + j) = 0
+                    return j
+                }
+                145 -> {                     ; up -> older entry (higher slot)
+                    if sel + 1 < rows {
+                        hist_get(sel, linebuf)
+                        hist_draw_row(boxtop+rows+1-sel, linebuf, false)
+                        sel++
+                        hist_get(sel, linebuf)
+                        hist_draw_row(boxtop+rows+1-sel, linebuf, true)
+                    }
+                }
+                17 -> {                      ; down -> newer entry (lower slot)
+                    if sel != 0 {
+                        hist_get(sel, linebuf)
+                        hist_draw_row(boxtop+rows+1-sel, linebuf, false)
+                        sel--
+                        hist_get(sel, linebuf)
+                        hist_draw_row(boxtop+rows+1-sel, linebuf, true)
+                    }
+                }
+            }
+        }
+    }
+
     ; ---- the About modal (full box; banked-RAM figures passed in from main's xarena) ----
 
     sub ui_show_about(ubyte high_bank @R0, ubyte max_bank @R1) {
@@ -347,7 +460,7 @@ main {
         aboutln(2,  "X F M G R")
         aboutln(4,  "An XTree-style file manager")
         aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Beta Version 1.0.240")     ; bump the last number with BUILD_NUM in xfmgr.p8
+        aboutln(7,  "Beta Version 1.0.241")     ; bump the last number with BUILD_NUM in xfmgr.p8
         ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
         txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
         txt.print("Banked RAM: ")

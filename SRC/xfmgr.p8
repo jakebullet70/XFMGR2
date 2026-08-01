@@ -40,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 240       ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 241       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -380,6 +380,9 @@ main {
     ; the bottom command menu (all its label strings) draws here too; main passes the state it
     ; depends on (menu_mode / focus / del_char / sort_mode) since the overlay can't see globals.
     extsub @bank 4 $A027 = ui_draw_commands(ubyte menu_mode @R0, ubyte focus @R1, ubyte del_char @R2, ubyte sort_mode @R3, ubyte find_char @R4, ubyte move_char @R5, ubyte srch_char @R6, ubyte view_char @R7)
+    ; the Recent-entries picker. hist_line is OUR buffer by necessity - see the note at the
+    ; history section below.
+    extsub @bank 4 $A02A = ui_hist_popup(uword destptr @R0, ubyte maxlen @R1, ubyte count @R2, uword linebuf @R3) -> ubyte @A
     bool ui_ok                              ; uiutil.ovl loaded OK -> dialogs use the overlay
 
     sub start() {
@@ -2743,93 +2746,15 @@ main {
         cx16.kbdbuf_put($0d)                ; RUN + CR
     }
 
-    ; ---------- shared input history (picker UI; the ring + its ops live in the miscutil
-    ;            overlay, bank 3 - see the hist_* extsubs) ----------
+    ; ---------- shared input history (the ring + its ops live in the miscutil overlay, bank 3 -
+    ;            see the hist_* extsubs; the PICKER UI lives in uiutil, bank 4) ----------
+    ;
+    ; ui_hist_popup moved out of main RAM: it is cold, modal, and drew entirely with box/blank/
+    ; hilite helpers uiutil already owned, so keeping it here cost ~630 B for nothing.
+    ; hist_line STAYS in main RAM. uiutil cross-bank calls miscutil's hist_get to read the ring,
+    ; and while bank 3 is mapped uiutil's own storage is not there to be written into - main RAM
+    ; is always mapped below $A000, so that is where the staging buffer has to live.
 
-    const ubyte HIST_PX0 = 12                   ; Recent-popup box left/right columns
-    const ubyte HIST_PX1 = 67
-
-    sub hist_draw_row(ubyte srow, uword textptr, bool selected) {
-        ; (re)draw a single history row: clear it, print the entry, highlight if selected.
-        ; Matches how draw_box's box_row + the list loop paint a base row, so an
-        ; unselected redraw is pixel-identical to the original (resets any bar color).
-        txt.color(shared.CLR_FG)
-        blank_span(HIST_PX0+1, HIST_PX1-1, srow)
-        txt.plot(HIST_PX0+2, srow)
-        print_trunc(textptr, HIST_PX1-HIST_PX0-3)
-        if selected
-            hilite_row(HIST_PX0+1, HIST_PX1-1, srow, shared.HILITE)
-    }
-
-    sub hist_popup(uword destptr, ubyte maxlen) -> ubyte {
-        ; modal picker of recent entries, shell-style: the NEWEST entry (slot 0) sits at
-        ; the BOTTOM of the list, right above the prompt, and is selected by default;
-        ; Up walks back into older entries. `sel` is a slot index (0 = newest). On Enter,
-        ; copy the choice into destptr (capped at maxlen) and return its length; on Esc
-        ; return 255 (no change). Only reached when hist_count != 0.
-        ubyte sel = 0
-        ubyte c
-        ; geometry is fixed while the popup is open (hist_count can't change): a blank
-        ; spacer line sits under the header at boxtop+1, the list fills boxtop+2.., and the
-        ; bottom border anchors at row 26. srow for a slot = boxtop+rows+1-slot.
-        ubyte rows = hist_count
-        ubyte boxtop = 24 - rows
-        ; --- draw the chrome + full list ONCE; the key loop below only repaints the two
-        ;     rows that change on Up/Down instead of redrawing the whole list ---
-        if ui_ok {
-            ui_draw_box(HIST_PX0, boxtop, HIST_PX1, boxtop+rows+2)
-            ui_box_header(HIST_PX0, HIST_PX1, boxtop, " Recent ")
-        }
-        ; key hints in a centered footer on the bottom border, as ONE embedded-color
-        ; string (\x9e=accent, \x05=fg; ←┘=ENTER glyph). Visible length = 23.
-        txt.plot(HIST_PX0 + 1 + (HIST_PX1 - HIST_PX0 - 1 - 23) / 2, boxtop+rows+2)
-        txt.print(petscii:"\x9e ←┘\x05 Select  \x9eESC\x05 Cancel ")
-        ubyte p
-        for p in 0 to rows-1 {
-            ubyte slot = rows - 1 - p        ; oldest at top, newest at the bottom
-            hist_get(slot, &hist_line)       ; pull the entry out of the overlay ring
-            hist_draw_row(boxtop+2+p, &hist_line, slot == sel)
-        }
-        repeat {
-            g_key = wait_key()
-            if g_key >= $c1 and g_key <= $da
-                g_key -= $80
-            when g_key {
-                27, 3 -> return 255          ; ESC / STOP: cancel
-                13 -> {                      ; Enter: take the selected entry
-                    hist_get(sel, &hist_line)
-                    ubyte j = 0
-                    repeat {
-                        c = hist_line[j]
-                        if c == 0 or j >= maxlen
-                            break
-                        @(destptr + j) = c
-                        j++
-                    }
-                    @(destptr + j) = 0
-                    return j
-                }
-                145 -> {                     ; up -> older entry (higher slot)
-                    if sel + 1 < rows {
-                        hist_get(sel, &hist_line)
-                        hist_draw_row(boxtop+rows+1-sel, &hist_line, false)
-                        sel++
-                        hist_get(sel, &hist_line)
-                        hist_draw_row(boxtop+rows+1-sel, &hist_line, true)
-                    }
-                }
-                17 -> {                      ; down -> newer entry (lower slot)
-                    if sel != 0 {
-                        hist_get(sel, &hist_line)
-                        hist_draw_row(boxtop+rows+1-sel, &hist_line, false)
-                        sel--
-                        hist_get(sel, &hist_line)
-                        hist_draw_row(boxtop+rows+1-sel, &hist_line, true)
-                    }
-                }
-            }
-        }
-    }
 
     ; per-prompt history persistence (/xfmgr/hist/<category>.his in the install folder) now lives in the
     ; miscutil overlay (hist_load / hist_save extsubs); str_copy_cap stays here (still used by the
@@ -3350,8 +3275,8 @@ main {
                     }
                 }
                 145 -> {                      ; up-arrow -> recall from history
-                    if usehist and hist_count != 0 {
-                        ubyte r = hist_popup(dest, maxlen)
+                    if usehist and hist_count != 0 and ui_ok {
+                        ubyte r = ui_hist_popup(dest, maxlen, hist_count, &hist_line)
                         ; the picker drew over the panes; repaint, then re-show the prompt
                         full_redraw()
                         dirty_full = true
