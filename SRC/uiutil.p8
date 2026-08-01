@@ -460,7 +460,7 @@ main {
         aboutln(2,  "X F M G R")
         aboutln(4,  "An XTree-style file manager")
         aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Beta Version 1.0.250")     ; bump the last number with BUILD_NUM in xfmgr.p8
+        aboutln(7,  "Beta Version 1.0.253")     ; bump the last number with BUILD_NUM in xfmgr.p8
         ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
         txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
         txt.print("Banked RAM: ")
@@ -524,8 +524,15 @@ main {
         blank_span(1, 78, CMDROW2)
         txt.plot(TREE_TEXT, CMDROW2)
         txt.color(shared.CLR_FG)
-        if menu_mode == 0
+        if menu_mode == 0 {
             txt.print(petscii:"Hold \x9eCTRL\x05 or \x9eALT\x05 for more commands")
+            ; TAB Files sits on THIS row, beside the modifier hint: both are about GETTING somewhere
+            ; rather than acting on the folder under the bar, which is what all of row 1 does.
+            if focus == FOCUS_TREE {
+                txt.plot(58, CMDROW2)
+                txt.print(petscii:"\x9eTAB\x05 Files")
+            }
+        }
         if menu_mode == 2 {
             txt.plot(70, CMDROW2)
             txt.print(petscii:"\x9eQ\x05uit-here")
@@ -544,8 +551,11 @@ main {
 
     sub menu_plain_items(ubyte focus) {
         if focus == FOCUS_TREE {
-            txt.print(petscii:"\x9e←┘\x05Log  \x9eM\x05kdir  \x9eR\x05ename  \x9eD\x05elete  \x9eS\x05howall  \x9eB\x05ranch  \x9eTAB\x05 Files")
-            txt.plot(65, CMDROW1)
+            ; Row 1 is the commands that ACT on the selected folder; 53 visible chars from col 2,
+            ; ending at 54. TAB Files is on row 2 with the other navigation text - it moves you
+            ; between panes rather than doing anything to the folder under the bar.
+            txt.print(petscii:"\x9e←┘\x05Log  \x9eM\x05kdir  \x9eR\x05ename  \x9eD\x05elete  \x9eS\x05howall  \x9eB\x05ranch  \x9eG\x05lobal")
+            txt.plot(65, CMDROW1)                   ; right-justified: 14 chars ending at col 78
             txt.print(petscii:"\x9eF1\x05 Help  \x9eA\x05bout")
         } else {
             txt.print(petscii:"\x9eT\x05ag \x9eU\x05ntag \x9eV\x05iew \x9eP\x05lay \x9eE\x05dit \x9eC\x05opy \x9eM\x05ove \x9eF\x05ilespec \x9eR\x05ename \x9eD\x05elete")

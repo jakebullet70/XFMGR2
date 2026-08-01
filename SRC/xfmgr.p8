@@ -40,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 250       ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 253       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -1112,7 +1112,13 @@ main {
                 op_delete_dir()
                 dirty_full = true       ; confirm / result flash covered the screen
             }
-            's' -> {                    ; S: Showall - every logged file on the disk, as one list
+            's', 'g' -> {               ; S: Showall - every logged file on the disk, as one list.
+                                        ; G: Global - XTree's fourth scope, which widens Showall from
+                                        ; the current disk to EVERY logged disk. XFMGR is single-drive
+                                        ; (one tree, anchored at xtree.base_path), so global and
+                                        ; whole-disk are the same set of files and G is deliberately
+                                        ; the same command. It exists so the menu matches XTree's;
+                                        ; when multi-volume support lands this is where they diverge.
                 enter_scope(xfiles.SCOPE_DISK)
             }
             'b' -> {                    ; B: Branch - this directory and everything logged below it

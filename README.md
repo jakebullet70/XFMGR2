@@ -1,6 +1,6 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:250)*
+*(build:253)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
@@ -99,6 +99,7 @@ Entering the FILE pane on an unscanned directory logs its files on the fly.
 | `D` | Delete the selected folder (empty folders only) |
 | `S` | **Showall** — list every logged file on the disk as one flat file window |
 | `B` | **Branch** — list this folder and everything logged below it |
+| `G` | **Global** — every logged *disk*; identical to `S` until multi-volume support exists |
 | `P` | **Prune** — recursively delete the folder and all its contents (type `prune` to confirm) |
 | `F3` | Re-log sub-folders (picks up folders made since logging) |
 | `A` | About box (version, banked-RAM usage, credits) |

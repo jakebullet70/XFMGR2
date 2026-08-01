@@ -1,5 +1,5 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 250)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 253)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
@@ -35,6 +35,10 @@
                file window (see SCOPED FILE VIEWS below)
    B           Branch - the same, but only this folder and everything
                logged below it
+   G           Global - in XTree this widens Showall from the current
+               disk to EVERY logged disk. XFMGR drives one volume, so
+               there is nothing further to widen to and G does exactly
+               what S does. It is here so the menu matches XTree's.
    P           Prune - recursively delete the folder and all its contents
                (type 'prune' to confirm)
    F3          Re-log sub-folders (picks up folders made since logging)
@@ -55,13 +59,15 @@
    F           Set the file-spec filter (e.g. *.prg, Enter = * = all)
 
 ------------------------------------------------------------------------------
- SCOPED FILE VIEWS - Showall (S) and Branch (B)
+ SCOPED FILE VIEWS - Showall (S), Branch (B) and Global (G)
 ------------------------------------------------------------------------------
- From the DIRECTORY pane, S and B widen the file pane to the whole screen
+ From the DIRECTORY pane, these widen the file pane to the whole screen
  and fill it from more than one folder:
 
    S  Showall   every logged file on the disk, as one flat list
    B  Branch    the selected folder and everything logged below it
+   G  Global    every logged DISK - identical to S on a single-drive
+                machine, which is what the X16 is here
 
  It is the SAME file window with the SAME commands, not a separate screen.
  Tag, Untag, View, Play, Edit, Copy, Move, Rename, Delete and the Ctrl
