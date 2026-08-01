@@ -16,7 +16,8 @@
 - [Run own utils and return](xfmgr-run-utils-and-return.md) — banked overlay vs swap-and-relaunch patterns
 - [Prune command](xfmgr-prune-command.md) — DIR-col P deletes a subtree; miscutil per-dir iterator + live (Dir: N) counter
 - [Always report mem stats](always-report-mem-stats.md) — include build memory-stats block in replies
-- [Revisit ShowAll](xfmgr-showall-revisit.md) — GLOBAL browser PULLED at build 214 for rebuild; Ctrl-G is free, sa_/collect foundation kept
+- [Readable variable names](readable-variable-names.md) — no one/two-letter locals in new code; name them for what they hold
+- [Showall / file scopes](xfmgr-showall-revisit.md) — rebuilt at 233-234 as a scope flag; costed plan past 255 rows + approved dedicated index bank
 - [ZIP/ARC support (V2)](xfmgr-zip-arc-v2.md) — backlog: browse/extract archives in V2; DEFLATE/ARC decompress is the hard part
 - [Embedded PETSCII color codes](x16-embedded-petscii-color-codes.md) — inline \x9e/\x05/\x9a in one txt.print string saves bytes vs txt.color() calls
 - [User tests in emulator themselves](user-tests-in-emulator-themselves.md) — build & launch, then report; don't drive the GUI to verify

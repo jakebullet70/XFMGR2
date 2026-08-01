@@ -11,6 +11,7 @@
 %import textio
 %import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
 %import strings
+%import conv               ; str_l only: BCD long->decimal for the blocks total (see box_append_long)
 %import xarena
 %import xtree
 %import xfiles
@@ -39,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 232       ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 236       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -82,10 +83,19 @@ main {
 
     ubyte focus
     ubyte tree_cursor, tree_top
-    ubyte file_cursor, file_top
+    uword file_cursor, file_top     ; uword: the file index holds up to xfiles.INDEX_MAX rows
+
+    ; File-pane geometry. Variables, not constants, because a scoped listing (Showall) hides the
+    ; tree and gives the file list the WHOLE width - XTree's Expanded File Window. Everything that
+    ; paints a file row reads these, so there is one renderer rather than a normal one and a
+    ; scoped one. set_pane_geometry() is the only writer.
+    ubyte pane_mark_col                 ; column of the '>' / '*' markers (name starts 2 further in)
+    ubyte pane_name_w                   ; how many characters of the filename fit before the size
     ubyte cur_dir
     ubyte start_node                    ; tree node of the launch directory (selected at startup)
-    uword cur_blocks                    ; total blocks of visible files in cur_dir
+    long cur_blocks                     ; total blocks of everything the file header reports.
+                                        ; 32-bit: one directory fits a uword, but a whole-disk
+                                        ; scope does not - 65535 blocks is only ~16 MB.
     ubyte saved_mode                    ; screen mode to restore on exit
     ubyte saved_charset                 ; pre-launch charset (2=upper/gfx 3=lower); restored on exit
 
@@ -122,7 +132,7 @@ main {
     ; cursor / scroll position last PAINTED, so a light update knows which row to un-ink
     ; and whether the pane scrolled since (top changed -> fall back to a full repaint)
     ubyte tree_cursor_shown, tree_top_shown
-    ubyte file_cursor_shown, file_top_shown
+    uword file_cursor_shown, file_top_shown
 
     const ubyte MOD_CTRL = $04              ; kbdbuf_get_modifiers bit: 1=shift 2=alt 4=ctrl
     const ubyte MOD_ALT  = $02
@@ -528,6 +538,8 @@ main {
         xtree.rebuild_visible()
 
         focus = FOCUS_TREE
+        xfiles.file_scope = xfiles.SCOPE_DIR    ; explicit: the pane geometry and half the file ops
+        xfiles.scope_partial = false            ; branch on this before anything else writes it
         tree_top = 0
         set_tree_cursor_to(start_node)
         select_dir(start_node)
@@ -558,6 +570,10 @@ main {
                         133  -> {                                  ; F1: show the help file
                             op_help()
                             dirty_full = true                      ; viewer took the whole screen
+                        }
+                        27   -> {                                  ; Esc: leave a scoped listing
+                            if xfiles.file_scope != xfiles.SCOPE_DIR
+                                leave_scope()
                         }
                         9    -> change_focus(FOCUS_FILE - focus)   ; TAB toggles pane
                         29   -> {                                  ; cursor-right: enter files,
@@ -704,15 +720,11 @@ main {
         cur_dir = idx
         file_cursor = 0
         file_top = 0
-        cur_blocks = 0
-        if xtree.d_flags[idx] & xtree.FL_SCANNED != 0 {
+        if xtree.d_flags[idx] & xtree.FL_SCANNED != 0
             void xfiles.build_index(idx)
-            if xfiles.ft_count != 0
-                for g_ndx in 0 to xfiles.ft_count-1
-                    cur_blocks += xfiles.get_blocks(g_ndx)
-        } else {
+        else
             xfiles.ft_count = 0
-        }
+        recount_blocks()
     }
 
     sub set_tree_cursor_to(ubyte idx) {
@@ -796,17 +808,17 @@ main {
         }
         when letter {
             't' -> {                        ; Ctrl-T: tag ALL files
-                xfiles.tag_all(cur_dir)
+                xfiles.tag_all()
                 dirty_files = true
                 dirty_status = true
             }
             'u' -> {                        ; Ctrl-U: untag all
-                xfiles.untag_all(cur_dir)
+                xfiles.untag_all()
                 dirty_files = true
                 dirty_status = true
             }
             'i' -> {                        ; Ctrl-I: invert tags
-                xfiles.invert_all(cur_dir)
+                xfiles.invert_all()
                 dirty_files = true
                 dirty_status = true
             }
@@ -871,6 +883,15 @@ main {
     }
 
     sub change_focus(ubyte newfocus) {
+        ; A scoped listing HIDES the tree, so there is no tree row to move a highlight onto: every
+        ; route back to the directory pane (Enter, TAB, cursor-left, an op emptying the list) has to
+        ; leave the scope first. Funnelling that through here means each of those keeps working
+        ; without knowing scopes exist - which is how XTree behaves too: "Press Enter or Esc while
+        ; in any Expanded File Window to return to the Directory Window".
+        if newfocus == FOCUS_TREE and xfiles.file_scope != xfiles.SCOPE_DIR {
+            leave_scope()
+            return
+        }
         ; Entering the FILE column on a directory that hasn't been logged yet logs it now
         ; (scan folders + files) so the file pane has something to show, instead of landing
         ; on an empty column. Mirrors the Enter key's first-time scan. Covers TAB and
@@ -1017,11 +1038,63 @@ main {
                 op_delete_dir()
                 dirty_full = true       ; confirm / result flash covered the screen
             }
+            's' -> {                    ; S: Showall - every logged file on the disk, as one list
+                enter_scope(xfiles.SCOPE_DISK)
+            }
             'a' -> {                    ; A: about (replaces the old '?')
                 show_about()
                 dirty_full = true
             }
         }
+    }
+
+    sub enter_scope(ubyte new_scope) {
+        ; Switch the file pane to a scoped listing (XTree Showall) and move the highlight into it.
+        ; Entered from the DIRECTORY pane only, exactly as XTree does it - the scope is a property
+        ; of the file window, and you leave it the same way you leave any file window (Esc/Enter).
+        ; Gathering + sorting a whole disk's worth of files takes a visible moment (every comparison
+        ; re-reads a name out of banked RAM), and until it finishes the screen still shows the old
+        ; pane - so it reads as a hang rather than as work. Say so first.
+        box_open()
+        box_left(CMDROW1, "Working...")
+        xfiles.file_scope = new_scope
+        if rebuild_view() == 0 {
+            xfiles.file_scope = xfiles.SCOPE_DIR    ; nothing to show - don't strand the user in an
+            void rebuild_view()                     ; empty pane they then have to Esc out of
+            flash("no logged files match the filespec")
+            dirty_full = true                       ; the box we opened covered the menu rows
+            return
+        }
+        file_cursor = 0
+        file_top = 0
+        recount_blocks()                            ; header total now covers the whole scope
+        focus = FOCUS_FILE
+        dirty_full = true                           ; the pane changes shape - repaint everything
+    }
+
+    sub recount_blocks() {
+        ; Total blocks of everything the file header REPORTS (its "(Total blocks: N)").
+        ;
+        ; One index means one loop: it covers a directory listing and a scoped view alike. Only if
+        ; the disk holds more than xfiles.INDEX_MAX matches does this go partial, and the header
+        ; says so.
+        cur_blocks = 0
+        uword row = 0
+        while row < xfiles.ft_count {
+            cur_blocks += xfiles.get_blocks(row)
+            row++
+        }
+    }
+
+    sub leave_scope() {
+        ; Back to the current directory's own listing, highlight returned to the tree.
+        xfiles.file_scope = xfiles.SCOPE_DIR
+        void rebuild_view()
+        file_cursor = 0
+        file_top = 0
+        recount_blocks()
+        focus = FOCUS_TREE
+        dirty_full = true
     }
 
     sub handle_file(ubyte key) {
@@ -1043,7 +1116,7 @@ main {
             }
             2 -> {                      ; PgDn: jump down one page
                 if xfiles.ft_count != 0 {
-                    ubyte last = xfiles.ft_count - 1
+                    uword last = xfiles.ft_count - 1
                     if file_cursor != last {
                         if last - file_cursor > FILE_VIS
                             file_cursor += FILE_VIS
@@ -1064,7 +1137,7 @@ main {
             }
             't' -> {
                 if xfiles.ft_count != 0 {
-                    xfiles.toggle_tag(file_cursor, cur_dir)
+                    xfiles.toggle_tag(file_cursor)
                     if file_cursor + 1 < xfiles.ft_count
                         file_cursor++           ; tag-and-advance, like XTree
                     dirty_files = true
@@ -1074,7 +1147,7 @@ main {
             'u' -> {
                 if xfiles.ft_count != 0 {
                     if xfiles.is_tagged(file_cursor)
-                        xfiles.toggle_tag(file_cursor, cur_dir)
+                        xfiles.toggle_tag(file_cursor)
                     if file_cursor + 1 < xfiles.ft_count
                         file_cursor++           ; untag-and-advance
                     dirty_files = true
@@ -1084,8 +1157,7 @@ main {
             'v' -> {                            ; View: .bmx -> banked image viewer, else text/hex viewer
                 if xfiles.ft_count != 0 {
                     xfiles.get_name(file_cursor, namebuf)
-                    xtree.build_path(cur_dir, pathbuf)
-                    diskio.chdir(pathbuf)       ; so bmx.open/f_open(namebuf) resolve in the file's dir
+                    cd_to_entry(file_cursor)    ; so bmx.open/f_open(namebuf) resolve in the file's dir
                     if imgview_ok and sniff_kind(&namebuf) == 1 {   ; 1 = BMX image
                         view_image(&namebuf)            ; bank-5 overlay: shows the BMX, returns on any key
                         cx16.set_screen_mode(SCREEN_MODE)  ; image viewer left VERA in bitmap mode -> back to 80x30
@@ -1124,8 +1196,7 @@ main {
             'p' -> {                            ; Play: .zsm -> zsmkit engine, .wav -> PCM streamer
                 if xfiles.ft_count != 0 {
                     xfiles.get_name(file_cursor, namebuf)
-                    xtree.build_path(cur_dir, pathbuf)
-                    diskio.chdir(pathbuf)       ; so the player's f_open(namebuf) resolves in the dir
+                    cd_to_entry(file_cursor)    ; so the player's f_open(namebuf) resolves in the dir
                     ubyte fk = sniff_kind(&namebuf)
                     if fk == 2
                         play_zsm()
@@ -1175,13 +1246,27 @@ main {
 
     ; ---------- drawing ----------
 
+    sub set_pane_geometry() {
+        ; Where the file rows live: right of the divider normally, full width when a scoped
+        ; listing has taken the tree's half of the screen.
+        if xfiles.file_scope == xfiles.SCOPE_DIR {
+            pane_mark_col = FILE_MARK
+            pane_name_w   = 27
+        } else {
+            pane_mark_col = 1
+            pane_name_w   = FILE_SIZE - 4       ; up to the size column, less the two marker cells
+        }
+    }
+
     sub full_redraw() {
         ; No full clear_screen: the static frame is overwritten with setchr and the
         ; dynamic regions blank+repaint their own lines, which avoids the whole-screen
         ; wipe that caused flicker.
+        set_pane_geometry()
         draw_frame()
         draw_status()
-        draw_tree()
+        if xfiles.file_scope == xfiles.SCOPE_DIR
+            draw_tree()                     ; a scoped listing occupies the tree's half of the screen
         draw_files()
         draw_commands()
     }
@@ -1211,9 +1296,18 @@ main {
     }
 
     sub draw_frame() {
+        ; With no divider column in a scoped listing, the two rows that would carry a T-junction
+        ; get a plain horizontal there instead - otherwise a stub of the removed wall is left
+        ; poking into the top and bottom of the file list.
+        ubyte join_top = SC_JT
+        ubyte join_bot = SC_JB
+        if xfiles.file_scope != xfiles.SCOPE_DIR {
+            join_top = SC_H
+            join_bot = SC_H
+        }
         hline(0, SC_TL, SC_H, SC_TR)        ; top border
-        hline(2, SC_JL, SC_JT, SC_JR)       ; header / panes divider (carries titles)
-        hline(DIVBOT, SC_JL, SC_JB, SC_JR)  ; panes / command divider
+        hline(2, SC_JL, join_top, SC_JR)    ; header / panes divider (carries titles)
+        hline(DIVBOT, SC_JL, join_bot, SC_JR)   ; panes / command divider
         hline(SCR_BOT, SC_BL, SC_H, SC_BR)  ; bottom border
         ; side borders of the header and the two command rows
         txt.setchr(0, HDRROW, SC_V)
@@ -1228,23 +1322,42 @@ main {
         txt.setclr(79, CMDROW1, shared.CLR_BOX)
         txt.setclr(0, CMDROW2, shared.CLR_BOX)
         txt.setclr(79, CMDROW2, shared.CLR_BOX)
-        ; side + middle borders down the content area
+        ; side + middle borders down the content area. A scoped listing spans the full width, so
+        ; the divider column is content there, not frame - drawing it would put a wall through the
+        ; middle of the file names.
+        bool scoped = xfiles.file_scope != xfiles.SCOPE_DIR
         for g_ndx in PANE_TOP to PANE_BOT {
             txt.setchr(0, g_ndx, SC_V)
-            txt.setchr(SPLIT, g_ndx, SC_V)
             txt.setchr(79, g_ndx, SC_V)
             txt.setclr(0, g_ndx, shared.CLR_BOX)
-            txt.setclr(SPLIT, g_ndx, shared.CLR_BOX)
             txt.setclr(79, g_ndx, shared.CLR_BOX)
+            if not scoped {
+                txt.setchr(SPLIT, g_ndx, SC_V)
+                txt.setclr(SPLIT, g_ndx, shared.CLR_BOX)
+            }
         }
         ; window titles embedded in the divider line
         txt.color(shared.CLR_TITLE)
-        txt.plot(TREE_TEXT, 2)
-        txt.print(" DIRECTORY ")
-        txt.plot(FILE_TEXT, 2)
-        txt.print(" FILE: ")
-        print_trunc(xfiles.spec_lc, 14)
-        txt.spc()
+        if scoped {
+            ; One title across the whole width, naming the scope. XTree retitles its statistics
+            ; panel for the same reason: a flat list of files from everywhere looks exactly like a
+            ; normal directory listing until something says otherwise.
+            txt.plot(TREE_TEXT, 2)
+            txt.print(" SHOWALL: ")
+            print_trunc(xfiles.spec_lc, 14)
+            txt.spc()
+            if xfiles.scope_partial {
+                txt.plot(40, 2)
+                txt.print(" (partial) ")   ; more matches on disk than xfiles.INDEX_MAX rows
+            }
+        } else {
+            txt.plot(TREE_TEXT, 2)
+            txt.print(" DIRECTORY ")
+            txt.plot(FILE_TEXT, 2)
+            txt.print(" FILE: ")
+            print_trunc(xfiles.spec_lc, 14)
+            txt.spc()
+        }
         ; program title embedded in the top border
         txt.plot(2, 0)
         txt.print(" XFMGR2 ")
@@ -1259,16 +1372,29 @@ main {
 
     sub draw_status() {
         blank_span(1, 78, HDRROW)
-        ; path on the left of the header row
+        ; Path on the left of the header row. In a scoped listing this is the ONE place that says
+        ; where the highlighted file actually lives - the rows themselves show only names, and
+        ; without this a flat list of 200 files from all over the disk is unreadable. (This is
+        ; exactly XTree's Path Identification line, and why it follows the file rather than the
+        ; directory.) Rebuilt on every cursor move, which is one parent-walk - nothing.
         txt.plot(TREE_TEXT, HDRROW)
         txt.print("Path: ")
-        xtree.build_path(cur_dir, pathbuf)
+        if xfiles.file_scope != xfiles.SCOPE_DIR and xfiles.ft_count != 0
+            xtree.build_path(xfiles.row_dir(file_cursor), pathbuf)
+        else
+            xtree.build_path(cur_dir, pathbuf)
         print_trunc(pathbuf, 40)                ; leave room for the counts on the right
-        ; file + tag counts, pushed to the far right of the header row (border at col 79)
+        ; File + tag counts, pushed to the far right of the header row (border at col 79).
+        ; Only a list past INDEX_MAX rows is truncated now, and it reads "1024 of 1837 Files" -
+        ; the bare row count alone would claim a 1837-file disk held 1024 files.
         cm_dst[0] = 0
         box_append_uw(xfiles.ft_count)
+        if xfiles.scope_partial {
+            void strings.append(cm_dst, " of ")
+            box_append_uw(xfiles.match_total)
+        }
         void strings.append(cm_dst, " Files ")
-        box_append_uw(xtree.dx_tag(cur_dir))
+        box_append_uw(tagged_in_view())
         void strings.append(cm_dst, " Tagged")
         txt.plot(79 - lsb(strings.length(cm_dst)), HDRROW)
         txt.print(cm_dst)
@@ -1395,16 +1521,17 @@ main {
     }
 
     sub draw_file_header() {
-        blank_span(FILE_MARK, FILE_BAR_R, FILE_HDR)
+        ubyte name_col = pane_mark_col + 1      ; column heads sit over the names, wherever those are
+        blank_span(pane_mark_col, FILE_BAR_R, FILE_HDR)
         txt.color(shared.CLR_ACCENT)
-        txt.plot(FILE_TEXT, FILE_HDR)
+        txt.plot(name_col, FILE_HDR)
         txt.print("Name")
         txt.color(shared.CLR_FG)
         ; "(Total blocks: N)" centered in the file pane, between the Name and Size labels
         void strings.copy("(Total blocks: ", cm_dst)
-        box_append_uw(cur_blocks)
+        box_append_long(cur_blocks)
         void strings.append(cm_dst, ")")
-        txt.plot(FILE_TEXT + (FILE_BAR_R - FILE_TEXT + 1 - lsb(strings.length(cm_dst))) / 2, FILE_HDR)
+        txt.plot(name_col + (FILE_BAR_R - name_col + 1 - lsb(strings.length(cm_dst))) / 2, FILE_HDR)
         txt.print(cm_dst)
         txt.color(shared.CLR_ACCENT)
         txt.plot(FILE_SIZE, FILE_HDR)
@@ -1412,12 +1539,12 @@ main {
         txt.color(shared.CLR_FG)
     }
 
-    sub draw_file_row(ubyte i) {
+    sub draw_file_row(uword i) {
         ; paint ONE file row: file entry i at its screen row (assumes i is in the window)
-        ubyte srow = FILE_TOP + (i - file_top)
-        blank_span(FILE_MARK, FILE_BAR_R, srow)
+        ubyte srow = FILE_TOP + lsb(i - file_top)       ; (i - file_top) is always 0..FILE_VIS-1
+        blank_span(pane_mark_col, FILE_BAR_R, srow)
         if i < xfiles.ft_count {
-            txt.plot(FILE_MARK, srow)
+            txt.plot(pane_mark_col, srow)
             if i == file_cursor and focus != FOCUS_FILE
                 txt.chrout('>')
             else
@@ -1427,13 +1554,13 @@ main {
             else
                 txt.spc()
             xfiles.get_name(i, namebuf)
-            print_trunc(namebuf, 27)
+            print_trunc(namebuf, pane_name_w)
             txt.plot(FILE_SIZE, srow)
             txt.print_uw(xfiles.get_blocks(i))
             ; tagged files are flagged by the '*' marker only - the row keeps the
             ; normal colors (no bar). The focused selection bar still wins on the cursor.
             if i == file_cursor and focus == FOCUS_FILE
-                hilite_row(FILE_MARK, FILE_BAR_R, srow, shared.HILITE)
+                hilite_row(pane_mark_col, FILE_BAR_R, srow, shared.HILITE)
         }
     }
 
@@ -1454,7 +1581,7 @@ main {
         for row in 0 to FILE_VIS-1
             draw_file_row(file_top + row)
         if xfiles.ft_count == 0 {
-            txt.plot(FILE_TEXT, FILE_TOP)
+            txt.plot(pane_mark_col + 1, FILE_TOP)
             if xtree.d_flags[cur_dir] & xtree.FL_SCANNED == 0
                 txt.print("(Enter to log)")
             else
@@ -1472,6 +1599,11 @@ main {
             file_top = file_cursor
         if file_cursor >= file_top + FILE_VIS
             file_top = file_cursor - FILE_VIS + 1
+        ; In a scoped listing the header path belongs to the HIGHLIGHTED FILE, so it is no longer
+        ; static across a cursor move - it is the only thing telling you which directory the row
+        ; under the bar came from, and a stale one is worse than none.
+        if xfiles.file_scope != xfiles.SCOPE_DIR
+            draw_status()
         if file_top != file_top_shown {
             draw_files()
             return
@@ -1491,6 +1623,47 @@ main {
 
     ; ---------- file operations ----------
 
+    sub cd_to_entry(uword i) {
+        ; chdir to the directory that OWNS file-pane row i, and leave its path in pathbuf.
+        ;
+        ; Every per-file operation goes through this instead of building cur_dir's path directly.
+        ; In a normal single-directory listing a row's dir IS cur_dir, so nothing changes; in a scoped
+        ; view (Showall) the rows come from all over the disk and the owning directory is the only
+        ; correct answer. Getting this wrong does not fail loudly - it operates on a same-named file
+        ; in the wrong directory - so the rule is that NO file op may call build_path(cur_dir).
+        xtree.build_path(xfiles.row_dir(i), pathbuf)
+        diskio.chdir(pathbuf)
+    }
+
+    sub rebuild_view() -> uword {
+        ; Rebuild whatever the pane is listing, in place. Every op that mutates files (delete,
+        ; rename, copy/move) or changes the listing rules (FileSpec, Sort) calls this instead of
+        ; build_index(cur_dir) directly - in a scoped view that would silently swap the whole list
+        ; back to the current directory mid-operation.
+        if xfiles.file_scope == xfiles.SCOPE_DIR
+            return xfiles.build_index(cur_dir)
+        return xfiles.build_scoped_index()
+    }
+
+    sub tagged_in_view() -> uword {
+        ; Number of tagged files IN THE CURRENT LISTING.
+        ;
+        ; xtree.dx_tag(cur_dir) is a per-directory counter and is the right answer only for a
+        ; single-directory view; a scoped listing draws from many directories, so the count has to
+        ; come from the rows actually on display. O(n) over the index, which is nothing next to the
+        ; disk work every caller is about to do.
+        if xfiles.file_scope == xfiles.SCOPE_DIR
+            return xtree.dx_tag(cur_dir)
+        uword tagged = 0
+        uword row = 0
+        while row < xfiles.ft_count {
+            if xfiles.is_tagged(row)
+                tagged++
+            row++
+        }
+        return tagged
+    }
+
     sub clamp_file_cursor() {
         ; keep file_cursor within the current file list (0 when the list is empty).
         ; factored out of the ~8 ops that rebuild the file index (relog/copy/move/etc.)
@@ -1506,11 +1679,10 @@ main {
         xfiles.get_name(file_cursor, namebuf)
         box_compose_name("Delete ", namebuf, "?")
         if confirm(cm_dst, false) {                 ; default No (destructive)
-            xtree.build_path(cur_dir, pathbuf)
-            diskio.chdir(pathbuf)
+            cd_to_entry(file_cursor)
             diskio.delete(namebuf)
-            xfiles.hide(file_cursor, cur_dir)       ; drop from the cached view
-            void xfiles.build_index(cur_dir)
+            xfiles.hide(file_cursor)   ; drop from the cached view
+            void rebuild_view()
             clamp_file_cursor()
             if xfiles.ft_count == 0                 ; last file gone -> hop back to the dir pane
                 change_focus(FOCUS_TREE)
@@ -1522,16 +1694,16 @@ main {
     }
 
     sub op_delete_tagged() {
-        if xtree.dx_tag(cur_dir) == 0 {
+        uword ntag = tagged_in_view()
+        if ntag == 0 {
             flash("no tagged files")
             return
         }
-        uword ntag = xtree.dx_tag(cur_dir)
         ubyte mode = ask_confirm_each(ntag)         ; 1 = confirm each, 0 = delete all, 255 = cancel
         if mode == 255
             return
-        xtree.build_path(cur_dir, pathbuf)
-        diskio.chdir(pathbuf)
+        ; NB: no chdir here - a scoped listing spans directories, so each file is chdir'd to
+        ; individually inside the loop (see cd_to_entry).
         bool allrem = mode == 0                     ; "No" at the top prompt -> delete all, no asking
         uword ndel = 0
         uword total = ntag                          ; tagged count, for the "(n of N)" progress
@@ -1539,7 +1711,7 @@ main {
         ; Walk DOWNWARD: deleting a file + reindexing only shifts indices ABOVE it, which we've
         ; already visited, so lower indices stay valid. Local `fi` (not g_ndx): the per-file
         ; prompt and the live repaint both clobber the shared g_ndx counter.
-        ubyte fi = xfiles.ft_count
+        uword fi = xfiles.ft_count
         while fi != 0 {
             fi--
             if xfiles.is_tagged(fi) {
@@ -1555,10 +1727,11 @@ main {
                         break                       ; cancel the remaining files
                 }
                 if act == 1 {
+                    cd_to_entry(fi)                 ; this row's OWN directory
                     diskio.delete(namebuf)
-                    xfiles.hide(fi, cur_dir)        ; clears its tag + marks deleted
+                    xfiles.hide(fi)  ; clears its tag + marks deleted
                     ndel++
-                    void xfiles.build_index(cur_dir)    ; recompact the cached view...
+                    void rebuild_view()    ; recompact the cached view...
                     clamp_file_cursor()
                     draw_files()                        ; ...and repaint so the file leaves the screen live
                     box_open()                          ; live "Deleting... (n of N)" progress, like copy/move
@@ -1768,8 +1941,7 @@ main {
             wildcard_expand(&namebuf, &inputbuf, &cm_dst)
             void strings.copy(cm_dst, inputbuf)
         }
-        xtree.build_path(cur_dir, pathbuf)
-        diskio.chdir(pathbuf)
+        cd_to_entry(file_cursor)
         ; refuse to clobber an existing file (unless it's the same name we started with).
         ; f_open succeeds only if the target already exists, so use it as the probe.
         if strings.compare_nocase(inputbuf, namebuf) != 0 {
@@ -1790,12 +1962,12 @@ main {
         if strings.length(inputbuf) <= xfiles.name_cap(file_cursor) {
             ; new name fits the existing record slot: overwrite in place (keeps tags)
             void xfiles.rename_inplace(file_cursor, inputbuf)
-            void xfiles.build_index(cur_dir)
+            void rebuild_view()
         } else {
             ; longer than the slot: re-read the directory so the full-length name shows
             ; (the append-only arena can't grow a record). This resets the dir's tags.
             void xscan.refresh_files(cur_dir)
-            void xfiles.build_index(cur_dir)
+            void rebuild_view()
         }
         ; keep the cursor on the same row (don't chase the file to its new sorted slot,
         ; which made it look like the bottom file got renamed)
@@ -1963,12 +2135,14 @@ main {
 
     sub op_copymove(bool is_move, bool use_tags) {
         ; use_tags=false (plain C/M): act on the single highlighted file, IGNORING tags.
-        ; use_tags=true  (CTRL C/O):  act on every tagged file in THIS directory only.
-        ; (cross-directory batch copy/move went out with the GLOBAL browser; it returns with it.)
+        ; use_tags=true  (CTRL C/O):  act on every tagged file in the CURRENT LISTING - which in a
+        ; scoped view (Showall) spans the whole disk. copy_one reads through an absolute cm_sdir and
+        ; writes by bare name into the cwd, so gathering files from many directories into one
+        ; destination only needs cm_sdir rebuilt per row; the destination cwd never moves.
         if xfiles.ft_count == 0
             return
-        if use_tags and xtree.dx_tag(cur_dir) == 0 {
-            flash("no tagged files in this dir")
+        if use_tags and tagged_in_view() == 0 {
+            flash("no tagged files")
             return
         }
 
@@ -1992,7 +2166,10 @@ main {
         }
         ensure_slash(cm_ddir)
 
-        if strings.compare(cm_sdir, cm_ddir) == 0 {
+        ; Only a single-directory listing has ONE source dir to compare up front. A scoped listing
+        ; may legitimately contain files that already live in the destination; those are skipped
+        ; individually inside the loop instead of aborting the whole batch.
+        if xfiles.file_scope == xfiles.SCOPE_DIR and strings.compare(cm_sdir, cm_ddir) == 0 {
             flash("source and dest are the same dir")
             return
         }
@@ -2013,16 +2190,30 @@ main {
         ow_mode = 0                             ; ask on the first overwrite conflict this batch
         uword total = 1                         ; files we'll actually touch (for "n of N")
         if use_tags
-            total = xtree.dx_tag(cur_dir)
+            total = tagged_in_view()
         uword cur = 0
-        ubyte i
-        for i in 0 to xfiles.ft_count-1 {
+        ; a while loop, not `for i in 0 to ft_count-1`: ft_count is a uword now and prog8 wants the
+        ; loop variable to match. next_row is stepped before the body so the two `continue`s below
+        ; can't skip the increment.
+        uword i
+        uword next_row = 0
+        while next_row < xfiles.ft_count {
+            i = next_row
+            next_row++
             if use_tags and not xfiles.is_tagged(i)
                 continue
             if not use_tags and i != file_cursor
                 continue
             cur++
             box_progress(cur, total)
+            ; this row's OWN source directory - the whole point of the scoped batch. (In a
+            ; single-directory listing this rebuilds the same string every pass, which is cheap
+            ; next to the file copy that follows.)
+            xtree.build_path(xfiles.row_dir(i), cm_sdir)
+            if strings.compare(cm_sdir, cm_ddir) == 0 {
+                skipped++                       ; already living in the destination
+                continue
+            }
             xfiles.get_name(i, namebuf)
             when copy_one(namebuf) {
                 1 -> {
@@ -2032,7 +2223,7 @@ main {
                         void strings.copy(cm_sdir, cm_src)
                         void strings.append(cm_src, namebuf)
                         diskio.delete(cm_src)
-                        xfiles.hide(i, cur_dir)
+                        xfiles.hide(i)
                     }
                 }
                 2 -> skipped++
@@ -2042,12 +2233,12 @@ main {
 
         ; refresh the source view (moved files vanish) and the dest dir if it's logged
         if is_move
-            void xfiles.build_index(cur_dir)
+            void rebuild_view()
         ubyte dd = find_dir_by_path(cm_ddir)
         if dd != xtree.NONE and xtree.d_flags[dd] & xtree.FL_SCANNED != 0 {
             void xscan.refresh_files(dd)
             if dd == cur_dir
-                void xfiles.build_index(cur_dir)
+                void rebuild_view()
         }
 
         clamp_file_cursor()
@@ -2077,7 +2268,7 @@ main {
         if strings.length(inputbuf) == 0
             void strings.copy("*", inputbuf)        ; blank ENTER -> show all
         xfiles.set_spec(inputbuf)
-        void xfiles.build_index(cur_dir)
+        void rebuild_view()
         file_top = 0
         clamp_file_cursor()
     }
@@ -2088,7 +2279,7 @@ main {
             return
         void strings.copy(inputbuf, cm_dst)         ; lowercase a copy for nocase match
         void strings.lower(cm_dst)
-        ubyte cnt = xfiles.tag_by_spec(cm_dst, cur_dir)
+        uword cnt = xfiles.tag_by_spec(cm_dst)
         void strings.copy("Tagged ", cm_dst)
         box_append_uw(cnt)
         void strings.append(cm_dst, " file(s)")
@@ -2104,7 +2295,7 @@ main {
         xfiles.sort_mode++
         if xfiles.sort_mode > 2
             xfiles.sort_mode = 0
-        void xfiles.build_index(cur_dir)
+        void rebuild_view()
         clamp_file_cursor()
         ; brief 4-row white box so the new order is obvious even with 0/1 files
         box_open()
@@ -2153,11 +2344,8 @@ main {
         } else {
             void xscan.refresh_files(cur_dir)
         }
-        void xfiles.build_index(cur_dir)
-        cur_blocks = 0
-        if xfiles.ft_count != 0
-            for g_ndx in 0 to xfiles.ft_count-1
-                cur_blocks += xfiles.get_blocks(g_ndx)
+        void rebuild_view()
+        recount_blocks()
         clamp_file_cursor()
         box_open()
         box_left(CMDROW1, "relogged")
@@ -2187,8 +2375,7 @@ main {
             return
         }
         xfiles.get_name(file_cursor, namebuf)
-        xtree.build_path(cur_dir, pathbuf)
-        diskio.chdir(pathbuf)
+        cd_to_entry(file_cursor)
         ubyte firstbank = xarena.high_bank + 1
         sys.enable_caseswitch()                 ; X16Edit charset workaround
         ubyte oldrom = cx16.getrombank()
@@ -2388,7 +2575,7 @@ main {
         xfiles.get_name(file_cursor, namebuf)
         box_compose_name("Run ", namebuf, "? exits XFMGR")
         if confirm_enter(cm_dst) {                  ; ENTER = run, ESC = cancel (no No option)
-            xtree.build_path(cur_dir, pathbuf)
+            xtree.build_path(xfiles.row_dir(file_cursor), pathbuf)   ; the program's OWN directory
             run_exit = true
         }
     }
@@ -2644,6 +2831,14 @@ main {
             l++
         }
         cm_dst[l] = 0
+    }
+
+    sub box_append_long(long v) {
+        ; append decimal v to cm_dst. Only the blocks total needs this - a whole-disk scope runs
+        ; past what box_append_uw can say, and a wrapped total looks like a plausible number.
+        ; Uses conv.str_l (BCD) rather than box_append_uw's digit loop: a 32-bit / and % drag in
+        ; prog8's general long-divide and cost ~790 B, which this build does not have.
+        void strings.append(cm_dst, conv.str_l(v))
     }
 
     sub box_progress(uword cur, uword total) {
@@ -3235,8 +3430,8 @@ main {
         }
         if xfiles.ft_count == 0
             return
-        xtree.build_path(cur_dir, pathbuf)
-        diskio.chdir(pathbuf)
+        ; NB: no chdir here - each file is chdir'd to as the walk reaches it (the viewer opens
+        ; namebuf relative to the cwd), so a scoped set can walk files from different directories.
         ; Hand the viewer the last content-search term (if any) so each file opens ON its first hit
         ; with the find highlight lit. 0 = no term -> files open at the top, unhighlighted.
         uword seedp = 0
@@ -3244,11 +3439,13 @@ main {
             seedp = &srch_term
         ; count the set first, so the viewer can show "File N of M" and the walk's progress is
         ; visible instead of guessed at
-        ubyte total = 0
-        ubyte i
-        for i in 0 to xfiles.ft_count-1
+        uword total = 0
+        uword i = 0
+        while i < xfiles.ft_count {
             if xfiles.is_tagged(i)
                 total++
+            i++
+        }
         if total == 0 {
             flash("Tag files first (T), then view tagged")
             return
@@ -3257,17 +3454,27 @@ main {
         ; forwards. `cur` is the ft_ index of the file on screen, `seen` its 1-based position in
         ; the tagged set (shown as "File n/m"). A step that would fall off either end simply
         ; re-shows the current file, so the ends of the set are soft stops rather than an exit.
-        ubyte cur = 0
+        uword cur = 0
         while cur < xfiles.ft_count and not xfiles.is_tagged(cur)
             cur++
-        ubyte seen = 1
-        ubyte j
+        uword seen = 1
+        uword j
+        ; The viewer's "File n of m" counters are bytes (they are R4/R5 of the tview jmptable entry).
+        ; The walk stays uword and exact; only the DISPLAY saturates at 255, which beats wrapping to
+        ; "File 45 of 44" on a tagged set that spans the disk.
+        ubyte shown_tot = 255
+        if total < 256
+            shown_tot = lsb(total)
         repeat {
             xfiles.get_name(cur, namebuf)
             file_cursor = cur                           ; leave the pane cursor on the file we stop at
+            cd_to_entry(cur)                            ; this file's own directory
             uword wblk = xfiles.get_blocks(cur)         ; size for the footer's "n%"; own local, since
                                                         ; a call in the arg list would clobber r0 first
-            ubyte r = view_file(&namebuf, 255, 1, seedp, seen, total, wblk)
+            ubyte shown_num = 255
+            if seen < 256
+                shown_num = lsb(seen)
+            ubyte r = view_file(&namebuf, 255, 1, seedp, shown_num, shown_tot, wblk)
             if r == 0
                 break                                   ; Q/ESC ends the walk
             if r == 1 {
@@ -3306,10 +3513,12 @@ main {
         if xfiles.ft_count == 0
             return
         uword tagged = 0                                ; how many candidates (tagged files) to scan
-        ubyte i
-        for i in 0 to xfiles.ft_count-1
+        uword i = 0
+        while i < xfiles.ft_count {
             if xfiles.is_tagged(i)
                 tagged++
+            i++
+        }
         if tagged == 0 {
             flash("Tag files first (T), then search")
             return
@@ -3321,11 +3530,16 @@ main {
         void strings.copy(inputbuf, srch_term)          ; remember it for the Ctrl-V walk's highlight
         while cbm.GETIN2() != 0 { }                     ; drain the ENTER/typeahead before scanning
 
-        xtree.build_path(cur_dir, pathbuf)              ; every candidate shares this directory
+        ; NB: pathbuf is rebuilt per candidate inside the loop - in a scoped listing the tagged
+        ; files come from all over the disk, which is what turns this into a whole-disk content
+        ; search rather than a single-directory one.
         box_open()
         box_left(CMDROW1, "Searching...")
         uword n = 0                                     ; candidates scanned so far
-        for i in 0 to xfiles.ft_count-1 {
+        uword next_row = 0                              ; stepped before the body: it `continue`s
+        while next_row < xfiles.ft_count {
+            i = next_row
+            next_row++
             if not xfiles.is_tagged(i)
                 continue
             n++
@@ -3339,8 +3553,9 @@ main {
             if cbm.GETIN2() != 0                        ; any key aborts; remaining tags stay as-is
                 break
             xfiles.get_name(i, namebuf)
+            xtree.build_path(xfiles.row_dir(i), pathbuf)     ; this candidate's own directory
             if content_scan(&pathbuf, &namebuf, &inputbuf) == 0 {
-                xfiles.toggle_tag(i, cur_dir)           ; miss -> untag (keeps the dir count in step)
+                xfiles.toggle_tag(i)  ; miss -> untag (keeps the dir count in step)
                 draw_status()                           ; live "N Tagged" in the top-right header:
                                                         ; the count only changes on a miss, so redraw
                                                         ; here rather than every iteration
@@ -3423,13 +3638,14 @@ main {
         box_close()
 
         xtree.rebuild_visible()
-        xfiles.collect_matching(find_lc)
-        if xfiles.sa_count >= xfiles.GLOBAL_MAX
-            partial |= 4                            ; results capped at GLOBAL_MAX
 
-        ; re-anchor the dual-pane on the folder the user came from (recreated by open_path as it
+        ; Re-anchor the dual-pane on the folder the user came from (recreated by open_path as it
         ; descends the saved path). If it matched nothing it isn't a crawl hit, so open_path lands
         ; on its deepest logged ancestor - still a sane spot rather than a stale/invalid node.
+        ;
+        ; This has to happen BEFORE the matches are gathered: select_dir rebuilds the file index,
+        ; and the matches are gathered into that same index. Gathering first would leave the results
+        ; overwritten by this directory's listing before the browser ever drew them.
         tree_top = 0
         ubyte back = xscan.open_path(pathbuf)
         void xscan.scan_dir(back)
@@ -3438,7 +3654,12 @@ main {
         xfiles.set_spec(cm_ddir)                    ; restore the pre-Find FileSpec before reindexing
         select_dir(back)
 
-        if xfiles.sa_count == 0 {
+        xfiles.collect_matching(find_lc)            ; index now holds the matches, not the listing
+        if xfiles.scope_partial
+            partial |= 4                            ; results capped at INDEX_MAX
+
+        if xfiles.ft_count == 0 {
+            select_dir(back)                        ; nothing to browse - put the listing back
             if partial != 0
                 flash("No matches (search was partial)")
             else
@@ -3451,51 +3672,52 @@ main {
     ; Flat-list modal layout for the Find panel (show_find_results): viewer-style reverse-blue header
     ; (row 0) + footer (SCR_BOT) bars, white-on-gray list body (rows SF_TOP..SF_TOP+SF_VIS-1). The bars
     ; are painted ONCE on entry; the body redraws a whole page only when it scrolls, otherwise just the
-    ; two rows the cursor left and landed on. Rows come from the sa_* table via draw_sa_row/draw_sa_page
-    ; over the sf_top window. (The GLOBAL browser shared this renderer too - it will again when rebuilt.)
+    ; two rows the cursor left and landed on. Rows come from the file index (which Find has loaded with
+    ; its matches) via draw_find_row/draw_find_page over the sf_top window.
     const ubyte SF_TOP = 2
     const ubyte SF_VIS = 27                 ; list rows 2..28 (row 0 header bar, row 1 col headers, row 29 footer)
     ubyte sf_partial
-    uword sf_top                            ; window top index; module-level so draw_sa_row sees it
+    uword sf_top                            ; window top index; module-level so draw_find_row sees it
 
-    sub draw_sa_row(uword i, uword cursor) {
+    sub draw_find_row(uword i, uword cursor) {
         ; paint the absolute-index entry i onto its screen row; caller keeps i within the visible
         ; window, so the row is SF_TOP + (i - sf_top). Highlights when i == cursor.
         ubyte srow = SF_TOP + lsb(i - sf_top)           ; (i - sf_top) is always 0..SF_VIS-1
         txt.color2(shared.BAR_FG, shared.CONTENT_BG)    ; white on gray body
         blank_span(0, 79, srow)
-        if i < xfiles.sa_count {
+        if i < xfiles.ft_count {
             txt.plot(0, srow)
             if i == cursor
                 txt.chrout('>')
             else
                 txt.spc()
-            if xfiles.sa_is_tagged(i)               ; '*' tag marker, same convention as the file pane
+            if xfiles.is_tagged(i)                  ; '*' tag marker, same convention as the file pane
                 txt.chrout('*')
             else
                 txt.spc()
-            xtree.build_path(xfiles.sa_get_dir(i), sa_line)
-            xfiles.sa_name(i, namebuf)
+            xtree.build_path(xfiles.row_dir(i), sa_line)
+            xfiles.get_name(i, namebuf)
             ubyte sl = lsb(strings.length(sa_line))     ; append the filename with a cap so
             if sl < 99                                  ; path+name can't overflow the 100-byte
                 str_copy_cap(namebuf, sa_line + sl, 99 - sl)  ; sa_line buffer
             print_trunc(sa_line, 69)
             txt.plot(73, srow)
-            txt.print_uw(xfiles.sa_blocks(i))
+            txt.print_uw(xfiles.get_blocks(i))
             if i == cursor
                 hilite_row(0, 78, srow, shared.HILITE)
         }
     }
 
-    sub draw_sa_page(uword cursor) {
+    sub draw_find_page(uword cursor) {
         ubyte row
         for row in 0 to SF_VIS-1
-            draw_sa_row(sf_top + row, cursor)
+            draw_find_row(sf_top + row, cursor)
     }
 
     sub show_find_results(ubyte partial) {
-        ; full-screen modal listing the Find matches gathered in sa_* (path + name + blocks).
-        ; Enter jumps to the highlighted file; ESC/Q exits.
+        ; full-screen modal listing the Find matches the file index now holds (path + name + blocks).
+        ; Enter jumps to the highlighted file; ESC/Q exits. Both exits must leave the file index back
+        ; on a real directory listing - browsing borrowed it.
         sf_partial = partial
         sf_top = 0
         uword cursor = 0
@@ -3507,7 +3729,7 @@ main {
         bar_fill(0)                                     ; header bar
         txt.plot(2, 0)
         txt.print("FIND matches: ")
-        txt.print_uw(xfiles.sa_count)
+        txt.print_uw(xfiles.ft_count)
         if sf_partial != 0
             txt.print("  (partial - capped)")
         txt.color2(shared.CLR_ACCENT, shared.CONTENT_BG) ; row 1: column headers over the gray body
@@ -3523,29 +3745,34 @@ main {
         txt.print(" Go Dir  ")
         bar_key("ESC")
         txt.print(" Exit")
-        draw_sa_page(cursor)
+        draw_find_page(cursor)
 
         repeat {
             g_key = wait_key()
             if g_key >= $c1 and g_key <= $da
                 g_key -= $80
             when g_key {
-                27, 3, 'q' -> return
+                27, 3, 'q' -> {
+                    select_dir(cur_dir)     ; hand the index back to the directory listing
+                    return
+                }
                 13 -> {                     ; enter: jump to the highlighted match, close the modal
-                    if xfiles.sa_count != 0
-                        jump_to_result(cursor)
+                    if xfiles.ft_count != 0
+                        jump_to_result(cursor)      ; does its own select_dir on the target
+                    else
+                        select_dir(cur_dir)
                     return
                 }
                 17 -> {                     ; down
-                    if cursor + 1 < xfiles.sa_count {
+                    if cursor + 1 < xfiles.ft_count {
                         oldc = cursor
                         cursor++
                         if cursor >= sf_top + SF_VIS {
                             sf_top++
-                            draw_sa_page(cursor)              ; scrolled: whole page
+                            draw_find_page(cursor)            ; scrolled: whole page
                         } else {
-                            draw_sa_row(oldc, cursor)        ; un-highlight the row we left
-                            draw_sa_row(cursor, cursor)      ; highlight the new row
+                            draw_find_row(oldc, cursor)      ; un-highlight the row we left
+                            draw_find_row(cursor, cursor)    ; highlight the new row
                         }
                     }
                 }
@@ -3555,21 +3782,21 @@ main {
                         cursor--
                         if cursor < sf_top {
                             sf_top = cursor
-                            draw_sa_page(cursor)
+                            draw_find_page(cursor)
                         } else {
-                            draw_sa_row(oldc, cursor)
-                            draw_sa_row(cursor, cursor)
+                            draw_find_row(oldc, cursor)
+                            draw_find_row(cursor, cursor)
                         }
                     }
                 }
                 2 -> {                      ; PgDn: next page (not shown in the footer, keys only)
-                    if sf_top + SF_VIS < xfiles.sa_count {
+                    if sf_top + SF_VIS < xfiles.ft_count {
                         sf_top += SF_VIS                     ; advance a whole page, cursor at its top
                         cursor = sf_top
-                        draw_sa_page(cursor)
-                    } else if cursor + 1 != xfiles.sa_count {
-                        cursor = xfiles.sa_count - 1         ; last page already shown: land on the end
-                        draw_sa_page(cursor)
+                        draw_find_page(cursor)
+                    } else if cursor + 1 != xfiles.ft_count {
+                        cursor = xfiles.ft_count - 1         ; last page already shown: land on the end
+                        draw_find_page(cursor)
                     }
                 }
                 130 -> {                    ; PgUp ($82): previous page
@@ -3579,10 +3806,10 @@ main {
                         else
                             sf_top = 0
                         cursor = sf_top
-                        draw_sa_page(cursor)
+                        draw_find_page(cursor)
                     } else if cursor != 0 {
                         cursor = 0
-                        draw_sa_page(cursor)
+                        draw_find_page(cursor)
                     }
                 }
             }
@@ -3590,11 +3817,12 @@ main {
     }
 
     sub jump_to_result(uword i) {
-        ; land the dual-pane view on the file at sa_ index i: expand every ancestor of its dir,
+        ; land the dual-pane view on the file at index row i: expand every ancestor of its dir,
         ; put the tree cursor on the dir, filter the file pane to the search spec (so the match
         ; shows), and drop focus into the file pane on the matching row.
-        ubyte dir = xfiles.sa_get_dir(i)
-        xfiles.sa_name(i, namebuf)                   ; the matched filename
+        ; Read the row FIRST - select_dir below rebuilds the very index i points into.
+        ubyte dir = xfiles.row_dir(i)
+        xfiles.get_name(i, namebuf)                  ; the matched filename
         ubyte a = xtree.dx_parent(dir)
         while a != xtree.NONE {
             xtree.d_flags[a] |= xtree.FL_EXPANDED
@@ -3603,16 +3831,16 @@ main {
         xtree.rebuild_visible()
         set_tree_cursor_to(dir)
         xfiles.set_spec(inputbuf)                    ; file pane shows the found set (draw clamps tops)
-        select_dir(dir)                              ; build ft_ index with that spec (resets cursor/top)
+        select_dir(dir)                              ; rebuild the index with that spec (resets cursor/top)
         file_cursor = 0
-        if xfiles.ft_count != 0 {
-            for g_ndx in 0 to xfiles.ft_count-1 {
-                xfiles.get_name(g_ndx, pathbuf)      ; pathbuf: name scratch (>= namebuf capacity)
-                if strings.compare(pathbuf, namebuf) == 0 {
-                    file_cursor = g_ndx
-                    break
-                }
+        uword row = 0
+        while row < xfiles.ft_count {
+            xfiles.get_name(row, pathbuf)            ; pathbuf: name scratch (>= namebuf capacity)
+            if strings.compare(pathbuf, namebuf) == 0 {
+                file_cursor = row
+                break
             }
+            row++
         }
         focus = FOCUS_FILE
     }
