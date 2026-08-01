@@ -40,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 238       ; shown top-right; bump by 1 every build. Keep the About
+    const ubyte BUILD_NUM = 239       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
@@ -871,6 +871,10 @@ main {
             'r' -> {                        ; Alt-R: release (un-log) the current folder
                 op_release()
                 dirty_full = true           ; tree rows vanished + flash may cover the menu
+            }
+            'j' -> {                        ; Alt-J: jump to a typed directory (XTree's Treespec)
+                op_jump_dir()
+                dirty_full = true
             }
             'p' -> {                        ; Alt-P: prune (dir pane only) - delete the subtree
                 if focus == FOCUS_TREE {
@@ -2611,6 +2615,48 @@ main {
             xtree.build_path(xfiles.row_dir(file_cursor), pathbuf)   ; the program's OWN directory
             run_exit = true
         }
+    }
+
+    sub op_jump_dir() {
+        ; Alt-J: type a path and go there, logging every level on the way down. This is XTree's
+        ; Treespec. On a card with a deep layout it beats walking the tree, and it is the only way
+        ; to reach a folder that exists on disk but has never been logged - Showall and Branch can
+        ; only ever show you LOGGED directories, so this is how you widen what they can see.
+        ;
+        ; Leaves any scoped view first: this moves the tree cursor, which is a two-pane result.
+        if xfiles.file_scope != xfiles.SCOPE_DIR
+            leave_scope()
+        if not input_line("Go to dir:", inputbuf, 79, "godir", true, false)
+            return
+        if inputbuf[0] == 0
+            return
+        ; Normalise exactly like a copy destination: absolute wins, otherwise it hangs off the
+        ; drive root, and either way it ends in '/' so it matches build_path's format.
+        if inputbuf[0] == '/' {
+            void strings.copy(inputbuf, pathbuf)
+        } else {
+            void strings.copy(xtree.base_path, pathbuf)
+            ensure_slash(pathbuf)
+            void strings.append(pathbuf, inputbuf)
+        }
+        ensure_slash(pathbuf)
+        if not dir_exists(pathbuf) {
+            flash("no such folder")
+            return
+        }
+        ; open_NEW_path, not open_path: the folder may have been made outside XFMGR (or by a copy)
+        ; since its parent was logged, and a plain descent cannot see those - see xscan.
+        ubyte node = xscan.open_new_path(pathbuf)
+        if node == xtree.NONE {
+            flash("could not log that path")
+            return
+        }
+        void xscan.scan_dir(node)               ; log its files, so the pane has something to show
+        xtree.rebuild_visible()
+        set_tree_cursor_to(node)
+        select_dir(node)
+        focus = FOCUS_TREE
+        dirty_full = true
     }
 
     sub op_release() {

@@ -1,5 +1,5 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 238)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 239)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
@@ -120,6 +120,11 @@
 ------------------------------------------------------------------------------
  ALT menu  (ALT = the Commodore key)
 ------------------------------------------------------------------------------
+   Alt-J       Jump to dir - type a path and go there, logging every
+               level on the way down (XTree's Treespec). Works for a
+               folder that has never been logged, which is how you widen
+               what Showall and Branch can see. F2 picks from the tree.
+   Alt-R       Release - un-log the current folder to free its memory
    Alt-S       Cycle sort order: name -> extension -> size
    Alt-X       Execute - quit XFMGR and chain-run the selected program
    Alt-Q       Quit, leaving the shell in the CURRENTLY SELECTED directory
