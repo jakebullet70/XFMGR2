@@ -1,6 +1,6 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:258)*
+*(build:262)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
@@ -120,7 +120,7 @@ followed by `S` lists every program on the disk, and it is honoured by `Alt-T`
 | `↑` / `↓` | Move the cursor in the focused pane |
 | `PgUp` / `PgDn` | Page the focused pane |
 | `TAB` | Switch focus between the directory and file panes |
-| `→` | Focus the file pane (logs the directory's files if needed) |
+| `→` | Focus the file pane (logs the directory's files if needed) — or, on a folder with no files, expand it |
 | `←` | Focus the directory pane — or, in the tree, collapse the folder |
 | `Esc` | Leave a scoped listing, back to the two-pane view |
 | `F1` | Help |

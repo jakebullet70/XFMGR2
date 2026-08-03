@@ -40,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const uword BUILD_NUM = 258       ; shown top-right; bump by 1 every build. Keep the About
+    const uword BUILD_NUM = 262       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
                                          ; UWORD, not ubyte: build 255 was the ceiling and the next
                                          ; bump would have wrapped to 0 silently. It is only ever
@@ -594,8 +594,17 @@ main {
                         9    -> change_focus(FOCUS_FILE - focus)   ; TAB toggles pane
                         29   -> {                                  ; cursor-right: enter files,
                             change_focus(FOCUS_FILE)               ; but only if the folder has
-                            if focus == FOCUS_FILE and xfiles.ft_count == 0
+                            if focus == FOCUS_FILE and xfiles.ft_count == 0 {
                                 change_focus(FOCUS_TREE)           ; files - an empty one stays in the tree
+                                ; There is nothing to step sideways INTO, so Right does the other
+                                ; thing this key means in a tree: open the folder. Without this a
+                                ; folder that holds only subfolders answered Right with a blank
+                                ; pane and no visible effect at all, while its contents - which are
+                                ; right there, one level down - stayed hidden. '+' is exactly this
+                                ; command already (log / expand, never collapse), so reuse it
+                                ; rather than write a second copy of the same three cases.
+                                handle_tree('+')
+                            }
                         }
                         157  -> {                                  ; cursor-left
                             if focus == FOCUS_TREE
@@ -1698,6 +1707,14 @@ main {
     sub draw_files_cursor() {
         ; light update after a pure cursor move (see draw_tree_cursor). The file HEADER
         ; (Total blocks) is untouched - a cursor move never changes those counts.
+        ;
+        ; AN EMPTY PANE HAS NO CURSOR ROW TO RE-INK. What sits on those lines is the "(no files)" /
+        ; "(Enter to log)" placeholder that draw_files paints, and draw_file_row would cheerfully
+        ; blank right over it. Cursor-right on an empty folder changes focus twice in a row (into
+        ; the pane, then straight back out), so this ran and erased the message the pane had only
+        ; just put up - the pane went blank on the second Right.
+        if xfiles.ft_count == 0
+            return
         if file_cursor < file_top
             file_top = file_cursor
         if file_cursor >= file_top + FILE_VIS
@@ -2353,17 +2370,43 @@ main {
             ; parent. open_new_path re-lists each logged level on the way down, which is what finds
             ; a child made after its parent was logged.
             dd = xscan.open_new_path(cm_ddir)
+            ; THE DESCENT CAN LAND SHORT. descend_path returns the DEEPEST level it matched, and it
+            ; is never NONE - a segment it cannot find just stops the walk and hands back an
+            ; ANCESTOR. Refreshing that would re-read the wrong folder and still leave the real
+            ; destination stale, so check we actually got there before trusting it.
             if dd != xtree.NONE {
-                void xscan.scan_dir(dd)         ; the descent logs the PARENT's children, not dd's files
-                xtree.rebuild_visible()
-                set_tree_cursor_to(cur_dir)     ; new rows shifted the visible list under the cursor
-                dirty_full = true
+                xtree.build_path(dd, cm_src)
+                if strings.compare(cm_src, cm_ddir) != 0 {
+                    ; Landed short. The ancestor may also be flagged "logged" while missing the
+                    ; folder we just made inside it - make_last_dir marks a folder it creates as
+                    ; logged-and-empty, so an intermediate level of a chain like /111/222 can end up
+                    ; claiming to be fully known and childless. Unlog it: the next Enter re-reads
+                    ; that whole branch off the disk. That is the Alt-R + relog by hand, automatic.
+                    xtree.unlog(dd)
+                    dd = xtree.NONE
+                }
             }
-        } else if xtree.d_flags[dd] & xtree.FL_SCANNED != 0 {
-            void xscan.refresh_files(dd)
-            if dd == cur_dir
-                void rebuild_view()
+            xtree.rebuild_visible()
+            set_tree_cursor_to(cur_dir)         ; new rows shifted the visible list under the cursor
         }
+        if dd != xtree.NONE {
+            relog_dest(dd)
+            ; VERIFY, don't assume. Everything above is pointer-chasing that can miss in several
+            ; ways at once, and every one of them fails the same silent way: the folder keeps
+            ; listing as it did before. This one check catches the lot - we just wrote `done` files
+            ; into that folder, so a record count of ZERO cannot be true. Unlog it and let the next
+            ; Enter read the disk instead of leaving records on screen that we know are wrong.
+            if done != 0 and xtree.dx_fcount(dd) == 0 {
+                xtree.unlog(dd)
+                set_tree_cursor_to(cur_dir)
+                if dd == cur_dir
+                    void rebuild_view()     ; we are STANDING in it - drop the rows we just voided
+            }
+        }
+        ; The tree structure and/or a folder's contents changed - a created destination, a re-logged
+        ; one, an unlogged one. Repaint everything: the plain C/M callers only ask for dirty_tree,
+        ; which was not enough to bring a newly created folder onto the screen.
+        dirty_full = true
 
         clamp_file_cursor()
         if is_move and xfiles.ft_count == 0     ; moved the last file out -> back to the dir pane
@@ -2373,6 +2416,36 @@ main {
             copy_diag()
         else
             banner_copymove(is_move, done, failed, skipped)
+    }
+
+    sub relog_dest(ubyte dd) {
+        ; Make a copy/move destination's CACHED file records agree with what we just wrote into it.
+        ;
+        ; There are two states the destination node can be in, and calling the wrong routine for
+        ; either one fails SILENTLY - which is how freshly copied files could sit on disk, correct,
+        ; while the folder still listed as it did before, until it was Released (Alt-R) and re-logged
+        ; by hand:
+        ;   NOT logged  -> scan_dir, a full log. refresh_files would re-point a directory that has
+        ;                  no record run of its own yet.
+        ;   ALREADY logged -> refresh_files. scan_dir RETURNS EARLY on a logged directory (its first
+        ;                  two lines), so it can never see the files we just added.
+        ; Both states reach here: find_dir_by_path hands back long-logged folders, make_last_dir
+        ; marks a folder it creates as logged-and-empty, and open_new_path's descent returns levels
+        ; of either kind. The old code picked ONE routine per branch and got it wrong on the paths
+        ; that mattered - it called scan_dir on a node the descent had usually already logged.
+        if xtree.d_flags[dd] & xtree.FL_SCANNED == 0 {
+            void xscan.scan_dir(dd)
+        } else if not xscan.refresh_files(dd) {
+            ; The re-listing would not open. Do NOT leave the old records on screen claiming to be
+            ; this folder's contents - unlog it, so the next Enter logs it fresh from disk. That is
+            ; exactly the Alt-R-then-relog the user had to do by hand, done for them, and it turns
+            ; any future failure of this path into stale-free-but-unlogged rather than a quiet lie.
+            xtree.unlog(dd)
+            set_tree_cursor_to(cur_dir)     ; unlog dropped dd's rows - re-anchor the tree cursor
+            dirty_full = true
+        }
+        if dd == cur_dir
+            void rebuild_view()
     }
 
     sub find_dir_by_path(str p) -> ubyte {

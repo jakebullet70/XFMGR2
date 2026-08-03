@@ -1,5 +1,5 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 258)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 262)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
@@ -19,7 +19,10 @@
 ------------------------------------------------------------------------------
    Up / Dn     Move the cursor within the focused pane
    TAB         Switch focus between the DIRECTORY and FILE panes
-   Right       Focus the FILE pane (logs the dir's files on the fly)
+   Right       Focus the FILE pane (logs the dir's files on the fly).
+               On a folder that holds no files, expands it instead -
+               there is nothing to step sideways into, so Right does
+               the other thing it means in a tree.
    Left        Focus the DIRECTORY pane
    F1          Show this help
    Q           Quit, leaving the shell in the LAUNCH directory
