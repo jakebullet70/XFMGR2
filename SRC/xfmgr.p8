@@ -40,8 +40,12 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const ubyte BUILD_NUM = 253       ; shown top-right; bump by 1 every build. Keep the About
+    const uword BUILD_NUM = 258       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.0.N" string in uiutil.p8 in sync with this.
+                                         ; UWORD, not ubyte: build 255 was the ceiling and the next
+                                         ; bump would have wrapped to 0 silently. It is only ever
+                                         ; printed (box_append_uw already takes a uword), so the
+                                         ; wider type costs nothing.
     const ubyte BANNER_LEFT = 2         ; left margin for ALL bottom-banner text (prompts, messages,
                                         ; confirmations) - two white columns, text from col 2
 
@@ -3109,8 +3113,22 @@ main {
         ; modal directory picker over the logged tree. Up/Down move, Right expands (and
         ; logs on demand), Left collapses, Enter selects the highlighted dir, Esc cancels.
         ; Returns the selected node index, or xtree.NONE if cancelled.
-        ubyte cur = 0
+        ;
+        ; OPENS ON THE CURRENT DIRECTORY, not at the root. What this picker is nearly always asked
+        ; for is a destination NEAR where you already are - a Copy/Move target beside the source -
+        ; and starting at the root meant walking back down the whole tree every single time, past
+        ; the very dirs you had just been standing in. pick_find falls back to 0 (the root) if
+        ; cur_dir somehow is not in the visible list, which is exactly the old behaviour, so this
+        ; can never leave the cursor pointing at nothing.
+        ubyte cur = pick_find(cur_dir)
         ubyte top = 0
+        if cur >= PICK_VIS {
+            ; scroll it into view roughly CENTRED rather than onto the last row: the dirs above the
+            ; current one are its siblings and parents, which is where a destination usually is.
+            top = cur - PICK_VIS / 2
+            if top + PICK_VIS > xtree.vis_count
+                top = xtree.vis_count - PICK_VIS
+        }
         ubyte oldcur = 0
         ubyte idx
         ; draw the box chrome ONCE (outside the loop, so it never flickers on scroll): an

@@ -1,10 +1,11 @@
 ---
 name: xfmgr-viewer-iso-pet-toggle
-description: "DONE build 197: viewer I key toggles ISO/ASCII <-> PETSCII display (content_scr per-byte remap); { } \\ | ~ glyph patch deferred"
+description: "DONE build 197 + auto-sniff in 254: viewer picks ISO/PETSCII from the file's bytes, I overrides (content_scr per-byte remap)"
 metadata:
   node_type: memory
   type: project
   originSessionId: 50cbdaf9-8664-4cd5-8a51-deebebebd509
+  modified: 2026-08-03T05:44:54.962Z
 ---
 
 **DONE build 197 (2026-07-24) - core shipped.** In tview.p8: `bool view_pet` (false = ASCII/ISO default,
@@ -18,10 +19,21 @@ Alt/Ctrl keys stay safe). **Footer:** originally showed a live `I:ISO`/`I:PET` m
 (viewer Find history, [[xfmgr-viewer-find-history]]) needed the bytes - bank 2 was full - so it was cut
 to a fixed `ISO` key hint; the text's own readability shows which mode is active.
 
+**AUTO-SNIFF DONE build 254 (2026-08-03).** A PETSCII-saved file (BASLOAD source off the X16, MSEDIT
+buffer, .SEQ) opened as ASCII drew EVERY letter as '.' - only digits/punctuation (same in both) survived -
+and the user had to find I. Now `sniff_head()` in tview (it absorbed the old `zsm_detect`: ONE 250-byte
+peek answers both the ZSM magic and the encoding) counts $C1-$DA (PETSCII-only letters) against $61-$7A
+(ASCII-only) and sets `view_pet` per file; view_run no longer resets it. The test is one-sided on purpose:
+$41-$5A is legible in either encoding, so ties keep the ASCII default. Two knock-ons that are easy to
+forget: the syntax classifier buffer clamps to ASCII printable, so PETSCII letters became SPACES and only
+numbers colored - the render loop now folds $C1-$DA down by $60 into that buffer when view_pet; and the
+footer's I hint is now live again (FF_PET = bit 7 of the draw_footer flags byte, the last free bit) so it
+reads `ISO` or `I PET`. Overlay space after: tview 137 bytes free to $C000 - it is nearly full.
+
 **DEFERRED (still backlog):** the five ISO-only glyphs `{ } \ | ~` glyph patch (MSEDIT font_setup/
 font_xfer) - in ASCII/ISO mode those still render as their `scr_of` approximation, and `_`/backtick are
-unmapped, same known limit MSEDIT documents. Auto-sniff-on-open (byte histogram) also not done; encoding
-is manual via I. Original design notes with the MSEDIT file:line references kept below.
+unmapped, same known limit MSEDIT documents. Original design notes with the MSEDIT file:line references
+kept below.
 
 ---
 

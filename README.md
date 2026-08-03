@@ -1,6 +1,6 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:253)*
+*(build:258)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
@@ -284,8 +284,14 @@ the ROM X16 Edit.
 | **Hex** | `H` toggles a hex + ASCII dump, `H` again returns to text |
 | **ZSM** | `.zsm` files are auto-detected and show a parsed header — version, tick rate, loop point, PCM, FM (YM) and PSG voices. `H` shows the raw bytes |
 
-`I` re-reads the file as **ASCII/ISO** or **PETSCII**. This is a display switch only —
-nothing is re-encoded and the file is never written.
+The encoding is **chosen from the file itself**. Text written through the KERNAL — a BASLOAD
+source saved from BASIC, an MSEDIT buffer, a `.SEQ` file off a real disk — holds its letters as
+PETSCII, and read as ASCII every one of them would come out as `.`; so the viewer counts the
+letters that can only be PETSCII against the ones that can only be ASCII and opens the file in
+whichever it is. The footer says which you got: `ISO` or `I PET`.
+
+`I` overrides that guess in either direction. It is a display switch only — nothing is
+re-encoded and the file is never written.
 
 #### 3.6.2 Long Lines and Wrapping
 

@@ -1,5 +1,5 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 253)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 258)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
@@ -217,8 +217,14 @@
    N / Space   Repeat the search. At end-of-file it wraps back to the top
                and reports "wrapped to top", so a search cycles round.
    C           Toggle syntax coloring on / off (see below)
-   I           Read the file as ASCII/ISO or as PETSCII (glyphs only -
-               nothing is re-encoded, and the file is never written)
+   I           Read the file as ASCII/ISO or as PETSCII. The viewer
+               already GUESSES this from the file's own bytes when it
+               opens - text saved through the KERNAL (BASLOAD sources,
+               MSEDIT buffers, .SEQ files) is PETSCII, and read as ASCII
+               every letter of it shows as '.'. The footer says which
+               reading you are in: ISO or I PET. This key overrides the
+               guess; glyphs only - nothing is re-encoded, and the file
+               is never written.
    W           Cycle how long lines are laid out:
                  Wrap off   one file line = one screen row, cut at the
                             right edge; Left/Right pan across it. The

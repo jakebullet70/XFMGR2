@@ -209,7 +209,7 @@ syntax {
     ; are swapped relative to ISO. Without it the footer comes out as "pGdN/pGuP  tOP  bOTTOM".
     ;
     ; flags bits: 0 = hex mode, 1 = at EOF, 2 = coloring available (advertise C), 3 = walking a
-    ; tagged set (SPACE steps files), 4 = ZSM breakout page.
+    ; tagged set (SPACE steps files), 4 = ZSM breakout page, 5-6 = wrap mode, 7 = PETSCII reading.
     const ubyte FOOT1 = shared.VIEW_FOOT1
     const ubyte FOOT2 = shared.VIEW_FOOT2
     const ubyte FF_HEX   = %00000001
@@ -220,6 +220,7 @@ syntax {
     const ubyte FF_WRAP  = %01100000    ; 2-bit wrap mode in bits 5-6 (0 char, 1 word, 2 off), NOT a
                                         ; flag - it rides the spare bits of this byte so the entry
                                         ; keeps its parameter list and its jmptable slot unchanged
+    const ubyte FF_PET   = %10000000    ; 5 = reading the file as PETSCII rather than ASCII/ISO
 
     sub draw_footer(ubyte flags @R0, ubyte setnum @R1, ubyte settot @R2,
                     uword offlo @R3, ubyte offhi @R4, uword blocks @R5) {
@@ -251,8 +252,14 @@ syntax {
             txt.print(petscii:" text  ")
         else
             txt.print(petscii:"ex  ")
+        ; The I key names the encoding you are CURRENTLY reading in (like Wrap, not like Hex): tview
+        ; now picks that from the file's own bytes, so which one you got is a thing to be told, not
+        ; something you can assume. "ISO" = ASCII/ISO, "I PET" = PETSCII.
         bar_key(petscii:"I")
-        txt.print(petscii:"SO  ")
+        if fl & FF_PET != 0
+            txt.print(petscii:" PET  ")
+        else
+            txt.print(petscii:"SO  ")
         ; Wrap only means something on the TEXT page - the hex dump and the ZSM header are fixed
         ; layouts - so the key is advertised only where it does something.
         if fl & (FF_HEX | FF_ZSM) == 0 {
@@ -275,6 +282,8 @@ syntax {
         txt.spc()
         bar_key(petscii:"F")
         txt.print(petscii:"ind  ")
+        ; "N/Space Next match". Tried highlighting the N of "Next" instead of spelling out the pair
+        ; (build 257) - it did not read right and was reverted; keep the explicit N/Space.
         bar_key(petscii:"N")
         txt.print(petscii:"/")
         bar_key(petscii:"Space")

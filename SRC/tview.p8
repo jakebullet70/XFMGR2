@@ -66,6 +66,7 @@ main {
     const ubyte FF_SET   = %00001000
     const ubyte FF_ZSM   = %00010000
     const ubyte FF_WRAP  = %01100000    ; wrap mode in bits 5-6, not a flag - see xsyntax's FF_WRAP
+    const ubyte FF_PET   = %10000000    ; reading the file as PETSCII (bit 7 was the last one free)
     const ubyte SYN_PROBE_MAGIC = $5a   ; must match syntax.PROBE_MAGIC in xsyntax.p8
 
     ; Geometry now lives in shared-const so xsyntax's color pass walks the SAME cells this
@@ -215,7 +216,7 @@ main {
         view_settot = settot
         view_blocks = blocks
         void strings.copy(nameptr, namebuf)
-        zsm_detect()                    ; set is_zsm + fill zsm_hdr before the view loop
+        sniff_head()                    ; set is_zsm + zsm_hdr + the text encoding, before the view loop
         syn_detect()                    ; pick BASIC/Markdown/off from the file extension
         return view_run()
     }
@@ -270,20 +271,57 @@ main {
         syn_m1 = 0
     }
 
-    sub zsm_detect() {
-        ; Read the first 16 bytes of namebuf into zsm_hdr and set is_zsm if the file starts with
-        ; the ZSM magic (0x7A 0x6D = "zm"). A file that won't open or is shorter than 16 bytes is
-        ; treated as non-ZSM. Hex literals (not 'z'/'m') dodge any PETSCII/ASCII source ambiguity.
+    sub sniff_head() {
+        ; ONE 250-byte peek at the head of the file settles BOTH things the view loop has to know
+        ; before it renders anything, for the price of a single open:
+        ;
+        ;   is_zsm   - does the file start with the ZSM magic (0x7A 0x6D = "zm")?  Hex literals
+        ;              (not 'z'/'m') dodge any PETSCII/ASCII source-encoding ambiguity.
+        ;   view_pet - is the TEXT in this file PETSCII or ASCII?
+        ;
+        ; Why sniff the encoding at all: everything on this machine that writes text through the
+        ; KERNAL - BASLOAD sources saved from BASIC, MSEDIT buffers, .SEQ files off a real disk -
+        ; stores letters as PETSCII, where A-Z are $C1-$DA. ASCII has no printable meaning for
+        ; those, so content_scr drew EVERY letter of such a file as '.' and only the digits and
+        ; punctuation (identical in both encodings) came through. The file was perfectly readable
+        ; the moment you pressed I - the viewer just never guessed, and always guessed ASCII.
+        ;
+        ; The test is ONE-SIDED on purpose. $C1-$DA is the only range where the two encodings
+        ; disagree decidably: $41-$5A means uppercase in ASCII and lowercase in PETSCII, so a file
+        ; built only from those reads fine either way and keeps the ASCII default, and $61-$7A can
+        ; only ever be ASCII. So we flip to PETSCII only when the head of the file holds MORE
+        ; unmistakably-PETSCII letters than unmistakably-ASCII ones. A file with neither (all-caps
+        ; ASCII, pure digits, an empty file) stays on the default, and I still overrides both ways.
         is_zsm = false
+        view_pet = false
         ubyte i
         for i in 0 to 15                ; deterministic bytes even on a short read
             zsm_hdr[i] = 0
         if not diskio.f_open(namebuf)
             return
-        ubyte got = lsb(diskio.f_read(&zsm_hdr, 16))
+        ubyte got = lsb(diskio.f_read(&viewbuf, 250))
         diskio.f_close()
-        if got >= 16 and zsm_hdr[0] == $7a and zsm_hdr[1] == $6d
+        if got == 0
+            return
+        ubyte hdrn = got
+        if hdrn > 16
+            hdrn = 16
+        for i in 0 to hdrn - 1
+            zsm_hdr[i] = viewbuf[i]
+        if got >= 16 and zsm_hdr[0] == $7a and zsm_hdr[1] == $6d {
             is_zsm = true
+            return                      ; a music file has no text encoding to guess at
+        }
+        ubyte petn = 0                  ; letters only PETSCII can mean ($C1-$DA)
+        ubyte ascn = 0                  ; letters only ASCII can mean ($61-$7A)
+        for i in 0 to got - 1 {
+            ubyte b = viewbuf[i]
+            if b >= $c1 and b <= $da    ; the two ranges are disjoint, so no byte is counted twice
+                petn++
+            if b >= $61 and b <= $7a
+                ascn++
+        }
+        view_pet = petn > ascn
     }
 
     ; ---------- shared helpers (ported from XFMGR's main module) ----------
@@ -369,8 +407,18 @@ main {
                 return $2e              ; PETSCII control / color codes -> '.' (screencode $2E)
             return txt.petscii2scr(b)
         }
-        if b < 32 or b > 126
-            return $2e                  ; non-ASCII-printable -> '.'
+        if b < 32 or b > 126 {
+            ; ...except $C1-$DA, which is PETSCII A-Z: the one high range that is unambiguously a
+            ; LETTER whichever encoding the file turns out to be in. MSEDIT's iso_scr does the same
+            ; thing structurally - its ISO path is a pre-fold in FRONT of petscii2scr and anything it
+            ; does not recognise falls straight through to it - which is why its ISO mode can never
+            ; turn a PETSCII file into a field of dots the way this one used to. Only this range
+            ; falls through: the rest still shows '.', because this is a FILE viewer and a binary
+            ; read as text should look like a binary, not like a wall of graphics glyphs.
+            if b >= $c1 and b <= $da
+                return txt.petscii2scr(b)
+            return $2e                  ; anything else non-ASCII-printable -> '.'
+        }
         return scr_of(b)
     }
 
@@ -511,6 +559,13 @@ main {
                         ; flip, not a re-encode - and so column k of the buffer is column k on screen.
                         if ln_len < shared.SYN_LINE_MAX {
                             ubyte sc = outch
+                            ; ...except that a PETSCII file's letters ARE different bytes: A-Z live at
+                            ; $C1-$DA, which the clamp below would turn into spaces - so every keyword
+                            ; in a PETSCII-saved BASLOAD source read as blank to the classifier and only
+                            ; its numbers ever got colored. Fold them down to ASCII a-z (fold() in
+                            ; xsyntax is case-insensitive, so lowercase is as good as upper).
+                            if view_pet and sc >= $c1 and sc <= $da
+                                sc -= $60
                             if sc < 32 or sc > 126
                                 sc = ' '        ; was '.': this buffer feeds the CLASSIFIER, never
                                                 ; the screen, and a TAB (or any stray control byte)
@@ -791,6 +846,8 @@ main {
             fflags |= FF_SET
         if is_zsm
             fflags |= FF_ZSM
+        if view_pet
+            fflags |= FF_PET            ; so the I key can advertise which reading you are looking at
         fflags |= view_wrap << 5        ; wrap mode rides bits 5-6 (see FF_WRAP)
         ; Position shown is a BYTE OFFSET: normally the top of what is on screen (the hex cursor, or
         ; the current text page's first byte).
@@ -990,7 +1047,8 @@ main {
         txt.print(" VIEW: ")
         print_trunc(namebuf, 60)
         view_hex = false
-        view_pet = false                   ; every file opens in the default ASCII/ISO reading; I toggles
+                                           ; view_pet is NOT reset here - sniff_head() already read the
+                                           ; file's own bytes and picked the encoding for it. I overrides.
         ; Wrap is a per-file setting, not a sticky mode: in a tagged-set walk a leftover pan would
         ; open the next file scrolled sideways for no visible reason.
         ;
