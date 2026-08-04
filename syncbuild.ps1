@@ -3,8 +3,12 @@
 # multi-file edits, no drift. build.bat calls this BEFORE the compile, so THIS build's binary shows
 # the resulting number.
 #
-#   -Src     SRC\xfmgr.p8   const ubyte BUILD_NUM = N     (compiled -> the "build N" on the frame)
-#   -Ui      SRC\uiutil.p8  About box "Version 1.0.N"      (compiled into uiutil.ovl)
+#   -Src     SRC\xfmgr.p8   const BUILD_NUM = N            (compiled -> the "build N" on the frame)
+#   -Ui      SRC\uiutil.p8  About box "Version <maj>.<min>.N"  (compiled into uiutil.ovl)
+#
+# The About pattern matches ANY major.minor, so a version bump (1.0 -> 1.1) does not need this file
+# edited - hard-coding "1.0" here meant the first such bump would silently stop syncing that one
+# file, and it would drift behind the other three with only a "no marker" line to say so.
 #   -Readme  README.md      "(build:N)" marker
 #   -Hlp     xfmgr.hlp      F1 readme "(Build N)"
 #
@@ -21,7 +25,7 @@ $opts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 # (we match up to but NOT including any trailing char, so e.g. the ")" in "(Build N)" is left in place)
 $targets = @(
     @{ name = 'xfmgr.p8';  path = $Src;    pat = '(BUILD_NUM\s*=\s*)(\d+)' }
-    @{ name = 'uiutil.p8'; path = $Ui;     pat = '(Version\s+1\.0\.)(\d+)' }
+    @{ name = 'uiutil.p8'; path = $Ui;     pat = '(Version\s+\d+\.\d+\.)(\d+)' }
     @{ name = 'README.md'; path = $Readme; pat = '(build:\s*)(\d+)'        }
     @{ name = 'xfmgr.hlp'; path = $Hlp;    pat = '(\(Build\s+)(\d+)'       }
 )

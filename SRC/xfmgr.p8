@@ -40,8 +40,8 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const uword BUILD_NUM = 262       ; shown top-right; bump by 1 every build. Keep the About
-                                         ; 1.0.N" string in uiutil.p8 in sync with this.
+    const uword BUILD_NUM = 195       ; shown top-right; bump by 1 every build. Keep the About
+                                         ; 1.1.N" string in uiutil.p8 in sync with this.
                                          ; UWORD, not ubyte: build 255 was the ceiling and the next
                                          ; bump would have wrapped to 0 silently. It is only ever
                                          ; printed (box_append_uw already takes a uword), so the
@@ -2323,6 +2323,15 @@ main {
         ; a while loop, not `for i in 0 to ft_count-1`: ft_count is a uword now and prog8 wants the
         ; loop variable to match. next_row is stepped before the body so the two `continue`s below
         ; can't skip the increment.
+        ; BORROW THE FOCUS FOR THE BATCH. The walking highlight below is painted by draw_file_row,
+        ; which only draws the selection BAR when the file pane holds focus - from the tree pane you
+        ; get the faint '>' marker instead, which is no kind of progress indicator. Ctrl-C / Ctrl-M
+        ; are reachable from EITHER pane, and kicking off a whole tagged move from the tree is a
+        ; perfectly normal thing to do, so the bar must not depend on where you started.
+        ; Assigned directly rather than through change_focus(): that logs an unlogged directory and
+        ; repaints panes, neither of which belongs in the middle of a copy.
+        ubyte saved_focus = focus
+        focus = FOCUS_FILE
         uword i
         uword next_row = 0
         while next_row < xfiles.ft_count {
@@ -2334,6 +2343,16 @@ main {
                 continue
             cur++
             box_progress(cur, total)
+            ; Show WHICH file, not just how many. The box counts "3 of 8"; the pane highlight says
+            ; which of your tagged files is being read right now, and it walks the list as the batch
+            ; runs. In a scoped listing draw_files_cursor also redraws the path line, so the FOLDER
+            ; each file comes from follows the bar as the batch crosses the disk. Costs one two-row
+            ; repaint per file - nothing beside the file copy that comes after it.
+            ; Safe to move the cursor here: this is BELOW the `i != file_cursor` test that picks the
+            ; row for a single-file (untagged) copy, and there it is being set to the value it
+            ; already holds. The bar is left on the last file of the batch, where the eye ends up.
+            file_cursor = i
+            draw_files_cursor()
             ; this row's OWN source directory - the whole point of the scoped batch. (In a
             ; single-directory listing this rebuilds the same string every pass, which is cheap
             ; next to the file copy that follows.)
@@ -2352,11 +2371,38 @@ main {
                         void strings.append(cm_src, namebuf)
                         diskio.delete(cm_src)
                         xfiles.hide(i)
+                        ; The file has LEFT this folder, so take its row out of the pane now instead
+                        ; of leaving a ghost that only clears when the whole batch ends. hide() just
+                        ; flags the record; rebuild_view re-indexes without it, which closes the list
+                        ; up over the gap.
+                        ;
+                        ; SO next_row MUST NOT ADVANCE. Every row below i has just slid up by one, so
+                        ; the next unprocessed file is now sitting AT i - stepping past it would skip
+                        ; every second tagged file in the batch. Leaving file_cursor on i likewise
+                        ; keeps the bar still while the list moves up underneath it, which is exactly
+                        ; how the removal reads on screen.
+                        void rebuild_view()
+                        next_row = i
+                        file_cursor = i
+                        clamp_file_cursor()     ; that was the last row -> keep the bar on the list
+                        draw_files()            ; rows shifted: a two-row repaint would not cover it
                     }
                 }
                 2 -> skipped++
                 else -> failed++
             }
+        }
+
+        focus = saved_focus             ; hand the focus back to whichever pane started this
+
+        ; The batch walked the highlight down the list as it ran; put it back at the TOP now it is
+        ; done, so the pane ends somewhere predictable instead of parked on whichever file happened
+        ; to be last. file_top too, or the pane would stay scrolled where the batch left it.
+        ; Tagged batches only: a single-file C/M never moved the bar, and sending it to the top
+        ; there would just lose your place for nothing.
+        if use_tags {
+            file_cursor = 0
+            file_top = 0
         }
 
         ; refresh the source view (moved files vanish) and the destination

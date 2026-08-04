@@ -48,7 +48,15 @@ shared {
     const ubyte SYN_FUNCTION = (CONTENT_BG << 4) | CLR_ACCENT  ; built-in functions / md subheadings
     const ubyte SYN_STRING   = (CONTENT_BG << 4) | 13          ; "quoted strings" - light green
     const ubyte SYN_NUMBER   = (CONTENT_BG << 4) | 10          ; numeric constants - light red
-    const ubyte SYN_COMMENT  = (CONTENT_BG << 4) | 12          ; REM / ## to end of line - mid gray
+    const ubyte SYN_COMMENT  = (CONTENT_BG << 4) | 15          ; REM / ## to end of line - LIGHT gray.
+                                        ; Was 12 (mid gray), which is the palette entry directly
+                                        ; beside CONTENT_BG's 11 (dark gray) - two adjacent grays,
+                                        ; and comments came out all but invisible. That went
+                                        ; unnoticed while PETSCII sources could not match REM at
+                                        ; all; the moment they could, a REM-heavy BASLOAD file went
+                                        ; flat gray and read as "no coloring". 15 still says
+                                        ; "dimmer than body text" - the thing a comment color is
+                                        ; for - while actually being legible against the field.
 
     ; --- viewer text-page geometry ---
     ; Shared because xsyntax paints the color pass itself (it walks the same cells with the same

@@ -3,9 +3,14 @@
 ; A normal $0801 PRG (NOT a bank overlay). XFMGR launches it via chain_run (Alt-F10); it lets the
 ; user pick a color theme with live preview, writes the choice to /xfmgr/xfmgr.cfg, then
 ; chain_runs back to /xfmgr/xfmgr.prg - which cold-starts, reads the cfg and applies the theme.
-; Because setup is stateless w.r.t. XFMGR's tree/arena, no state snapshot is needed; the only cost
-; is XFMGR's ~2s reload. Themes are palette remaps (see SRC/themes.p8), so this runs in the same
-; PETSCII 80x30 text mode XFMGR uses - no charset change.
+; Because setup is stateless w.r.t. XFMGR's tree/arena, no snapshot of the TREE is needed; the only
+; cost is XFMGR's ~2s reload. Themes are palette remaps (see SRC/themes.p8), so this runs in the
+; same PETSCII 80x30 text mode XFMGR uses.
+;
+; It does still take the MACHINE state, exactly as xfmgr.p8 does - screen mode, charset and text
+; color captured in start() and put back in return_to_xfmgr() before the hand-off. It has to: the
+; charset is changed here (txt.lowercase), and XFMGR re-snapshots on the way back in, so anything
+; left changed would be adopted as the user's own setting and never restored.
 
 %import textio
 %import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
@@ -33,6 +38,8 @@ main {
     const ubyte LIST_ROW = 10                ; row of the first theme entry
 
     ubyte saved_mode
+    ubyte saved_charset                      ; charset we were launched in (1=ISO 2=upper/gfx 3=lower)
+    ubyte saved_color                        ; and the text color (bg<<4|fg) - both put back on exit
     ubyte sel                                ; currently highlighted theme id (themes.FIRST..LAST)
 
     ; every input-history category XFMGR writes as hist/<cat>.his (current + legacy move/copy,
@@ -42,8 +49,10 @@ main {
 
     sub start() {
         saved_mode, cx16.r0L, cx16.r0H = cx16.get_screen_mode()
+        snapshot_machine_state()            ; charset + color, read while STILL in the launch mode
         cx16.set_screen_mode(SCREEN_MODE)
-        txt.lowercase()
+        txt.lowercase()                     ; our own UI needs the mixed-case charset - and this is
+                                            ; exactly the change restore_machine_state undoes
 
         ; The config lives in the program's own folder, alongside the .prg + overlays. No chdir:
         ; themes.cfg_read/cfg_write build an ABSOLUTE path from the install folder parsed out of
@@ -198,6 +207,35 @@ main {
         }
     }
 
+    sub snapshot_machine_state() {
+        ; Capture the charset + text color we were launched with, so the hand-off back to XFMGR
+        ; leaves the machine as we found it. Mirrors xfmgr.p8's sub of the same name and exists for
+        ; the same reason: set_screen_mode's CINT resets both to the X16 defaults, and txt.lowercase()
+        ; changes the charset again on top of that.
+        ;
+        ; This was missing, and it did not go missing quietly. XFMGR restores the user's charset
+        ; before it chain_runs us; we switched to charset 3 and never went back, so when XFMGR
+        ; restarted it snapshotted OUR charset as though it were the user's. One trip through
+        ; Alt-F10 and the font XFMGR would put back on quit was gone for the rest of the session.
+        saved_charset = cx16.get_charset()      ; 1=ISO 2=PETSCII upper/gfx 3=PETSCII lower (0=unknown)
+        ; text color = the color matrix at the cursor cell. txt.getclr, never a hand-computed VERA
+        ; address - the text matrix row stride is a fixed 256 bytes, so row*width*2 is wrong for
+        ; any row past the first (see the same note in xfmgr.p8).
+        ubyte cx_col
+        ubyte cx_row
+        cx_col, cx_row = txt.get_cursor()
+        saved_color = txt.getclr(cx_col, cx_row)
+    }
+
+    sub restore_machine_state() {
+        ; Undo our charset + color changes: re-apply what snapshot_machine_state() captured. The
+        ; set_screen_mode call that precedes every caller has already reset both to X16 defaults.
+        if saved_charset >= 1 and saved_charset <= 3
+            cx16.screen_set_charset(saved_charset, 0)       ; 0 ptr = built-in ROM charset
+        if saved_color != 0                                 ; 0 = black-on-black -> skip a bad read
+            txt.color2(saved_color & 15, saved_color >> 4)  ; low nibble = fg, high nibble = bg
+    }
+
     sub getkey() -> ubyte {
         repeat {
             ubyte k = cbm.GETIN2()
@@ -211,6 +249,9 @@ main {
         ; cursor back up onto it, then feed CR + RUN + CR (5 bytes - fits the 10-byte kbd buffer).
         txt.clear_screen()
         cx16.set_screen_mode(saved_mode)
+        restore_machine_state()             ; charset + color back BEFORE the hand-off - the same
+                                            ; order xfmgr.p8 uses on every one of its exits,
+                                            ; chain_run branches included
         txt.chrout($93)                     ; clear, cursor home (row 0)
         txt.nl()                            ; row 1 (BASIC "READY." overwrites)
         txt.print("load")                   ; row 2: LOAD"<install>/xfmgr.prg"

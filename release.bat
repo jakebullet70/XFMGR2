@@ -37,8 +37,12 @@ IF /I "%1"=="nobuild" (
     )
 )
 
-REM 2) read the build number back out of the compiled source
-FOR /F "usebackq delims=" %%N IN (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Select-String -Path '%ROOT%SRC\xfmgr.p8' -Pattern 'const\s+ubyte\s+BUILD_NUM\s*=\s*(\d+)').Matches[0].Groups[1].Value"`) DO SET BUILDNUM=%%N
+REM 2) read the build number back out of the compiled source. The pattern deliberately does NOT
+REM    name the declared type: BUILD_NUM was widened from ubyte to uword when build 255 hit the
+REM    byte ceiling, which made the old 'const ubyte BUILD_NUM' pattern stop matching - and this
+REM    step's only symptom would have been "could not read BUILD_NUM" at release time. It is the
+REM    same pattern syncbuild.ps1 uses, for the same reason.
+FOR /F "usebackq delims=" %%N IN (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Select-String -Path '%ROOT%SRC\xfmgr.p8' -Pattern 'BUILD_NUM\s*=\s*(\d+)').Matches[0].Groups[1].Value"`) DO SET BUILDNUM=%%N
 IF "%BUILDNUM%"=="" (
     ECHO *** could not read BUILD_NUM from SRC\xfmgr.p8 ***
     ENDLOCAL & EXIT /B 1

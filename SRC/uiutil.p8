@@ -460,7 +460,7 @@ main {
         aboutln(2,  "X F M G R")
         aboutln(4,  "An XTree-style file manager")
         aboutln(5,  "for the Commander X16")
-        aboutln(7,  "Beta Version 1.0.262")     ; bump the last number with BUILD_NUM in xfmgr.p8
+        aboutln(7,  "Beta Version 1.1.195")     ; bump the last number with BUILD_NUM in xfmgr.p8
         ; "Banked RAM: "(12) + digits + " of "(4) + digits + " banks"(6) = 22 + digits
         txt.plot(about_col(22 + about_digits(high_bank) + about_digits(max_bank)), ABOUT_TOP + 9)
         txt.print("Banked RAM: ")
@@ -526,12 +526,15 @@ main {
         txt.color(shared.CLR_FG)
         if menu_mode == 0 {
             txt.print(petscii:"Hold \x9eCTRL\x05 or \x9eALT\x05 for more commands")
-            ; TAB Files sits on THIS row, beside the modifier hint: both are about GETTING somewhere
-            ; rather than acting on the folder under the bar, which is what all of row 1 does.
-            if focus == FOCUS_TREE {
-                txt.plot(58, CMDROW2)
+            ; The TAB hint sits on THIS row, beside the modifier hint: both are about GETTING
+            ; somewhere rather than acting on the thing under the bar, which is what all of row 1
+            ; does. It names WHERE TAB TAKES YOU, so it has to flip with the focus - the file pane
+            ; used to advertise nothing at all, which read as though TAB only worked one way.
+            txt.plot(58, CMDROW2)
+            if focus == FOCUS_TREE
                 txt.print(petscii:"\x9eTAB\x05 Files")
-            }
+            else
+                txt.print(petscii:"\x9eTAB\x05 Folders")
         }
         if menu_mode == 2 {
             txt.plot(70, CMDROW2)

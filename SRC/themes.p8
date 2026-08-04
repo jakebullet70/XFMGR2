@@ -192,18 +192,33 @@ themes {
     }
 
     sub cfg_write(ubyte id) {
-        ; Overwrite <progdir>xfmgr.cfg with "theme=<id>\r". Delete-then-open for a portable
-        ; overwrite (same trick hist_save uses). Absolute path -> no chdir needed, and the caller's
-        ; working directory is left alone. path_to() is called twice rather than stashing its result
-        ; in another 44-byte buffer: it rebuilds the same string deterministically, so the second
-        ; call is just a strings.copy+append - far cheaper than the RAM here.
-        diskio.delete(path_to(CFG_NAME))
-        if diskio.f_open_w(path_to(CFG_NAME)) {
+        ; Write <progdir>xfmgr.cfg as "theme=<id>\r".
+        ;
+        ; CHDIR IN, THEN WRITE BY BARE NAME. This used to hand the absolute path straight to
+        ; f_open_w, and that does not work here: on this machine a WRITE open lands the file in the
+        ; CURRENT directory. It is the same rule op_copymove documents when it enters the
+        ; destination folder before copying, and the reason hist_save chdirs before writing its
+        ; ring - every other writer in this codebase already worked this way. This was the one
+        ; that did not.
+        ;
+        ; It failed DESTRUCTIVELY, which is exactly why the setup looked like it "would not save":
+        ; DOS SCRATCH *does* take a path, so the delete below removed the real cfg, and then the
+        ; open that was supposed to recreate it did nothing. The file was left missing and the next
+        ; XFMGR start read no theme and fell back to Classic - losing the setting rather than
+        ; failing to store it.
+        ;
+        ; READING keeps the absolute path: LOAD accepts one (see cfg_read), only writing does not.
+        ubyte[80] savedir
+        void strings.copy(diskio.curdir(), savedir)     ; transient buffer - copy before chdir'ing
+        diskio.chdir(progdir_cd())
+        diskio.delete(CFG_NAME)                         ; delete-then-create = portable overwrite
+        if diskio.f_open_w(CFG_NAME) {
             void strings.copy("theme=", cfg_line)   ; 6 chars + NUL
             cfg_line[6] = '0' + id
             cfg_line[7] = 13                        ; CR
             void diskio.f_write(cfg_line, 8)
             diskio.f_close_w()
         }
+        diskio.chdir(savedir)                           ; leave the caller's cwd as we found it
     }
 }

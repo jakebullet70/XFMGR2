@@ -34,6 +34,7 @@
 - [BMX image viewer](xfmgr-bmx-image-viewer.md) — V on *.bmx -> bank-5 ximgview overlay; png2bmx converter in tools/ (Python off-PATH)
 - [Color theme setup](xfmgr-color-theme-setup.md) — Alt-F10 -> standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
 - [Cfg read via loadlib](xfmgr-cfg-read-exists-guard.md) — cfg_read LOADs xfmgr.cfg like an overlay; never f_open (absent file corrupts menu draw)
+- [Writes land in the CWD](x16-writes-land-in-cwd.md) — LOAD/SCRATCH take a path, f_open_w does NOT; chdir in, write bare name, chdir back
 - [Overlays are .OVL](xfmgr-overlay-extension-ovl.md) — bank overlays ship as .ovl; build.bat renames prog8's .bin
 - [Theme contrast rules](xfmgr-theme-contrast-rules.md) — keys(7) must pop off text(1); idx14 is both border-fg and selbar-bg
 - [Find file (Ctrl-F)](xfmgr-find-file.md) — whole-disk crawler overlay yields match-dirs; log-on-match; flat modal + jump-to-file
