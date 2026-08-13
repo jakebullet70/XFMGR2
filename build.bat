@@ -73,10 +73,10 @@ IF /I "%SRC%"=="xfmgr.p8" (
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\xsyntax_build.txt" & ECHO *** xsyntax overlay build FAILED *** & ENDLOCAL & EXIT /B 1 )
     MOVE /Y "%BUILDDIR%\xsyntax.bin" "%BUILDDIR%\xsyntax.ovl" >NUL
     ECHO xsyntax overlay: xsyntax.ovl built ^($A000 HIRAM bank overlay^).
-    REM companion: the standalone colour-theme setup utility (a full $0801 PRG, not an overlay).
+    REM companion: the standalone settings utility (a full $0801 PRG, not an overlay).
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\xfsetup.p8" > "%TEMP%\xfsetup_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\xfsetup_build.txt" & ECHO *** xfsetup build FAILED *** & ENDLOCAL & EXIT /B 1 )
-    ECHO xfsetup utility: xfsetup.prg built ^(standalone theme picker^).
+    ECHO xfsetup utility: xfsetup.prg built ^(standalone settings screen^).
     REM companion: the standalone self-installer (a full $0801 PRG) - run once from the release folder.
     java -jar "%~dp0prog8c.jar" -target cx16 -out "%BUILDDIR%" "%SRCDIR%\install.p8" > "%TEMP%\install_build.txt" 2>&1
     IF ERRORLEVEL 1 ( TYPE "%TEMP%\install_build.txt" & ECHO *** install build FAILED *** & ENDLOCAL & EXIT /B 1 )

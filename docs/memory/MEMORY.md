@@ -32,7 +32,7 @@
 - [Filename literals must be lowercase](prog8-filename-literals-lowercase.md) — uppercase source A-Z encodes to $C1-DA and the FS won't match; use lowercase
 - [Overlay RAM strategy](xfmgr-overlay-ram-strategy.md) — bank map (…7=xmusic, 8=dir-name slab, arena 9+), UI-in-overlay, name_ptr staging
 - [BMX image viewer](xfmgr-bmx-image-viewer.md) — V on *.bmx -> bank-5 ximgview overlay; png2bmx converter in tools/ (Python off-PATH)
-- [Color theme setup](xfmgr-color-theme-setup.md) — Alt-F10 -> standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
+- [Settings screen (Alt-F10)](xfmgr-color-theme-setup.md) — standalone XFSETUP.PRG on MSEDIT's EDCFG model; multi-key xfmgr.cfg
 - [Cfg read via loadlib](xfmgr-cfg-read-exists-guard.md) — cfg_read LOADs xfmgr.cfg like an overlay; never f_open (absent file corrupts menu draw)
 - [Writes land in the CWD](x16-writes-land-in-cwd.md) — LOAD/SCRATCH take a path, f_open_w does NOT; chdir in, write bare name, chdir back
 - [Overlays are .OVL](xfmgr-overlay-extension-ovl.md) — bank overlays ship as .ovl; build.bat renames prog8's .bin

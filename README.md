@@ -1,6 +1,6 @@
 # XFMGR2 — an XTree-style file manager for the Commander X16 (Prog8)
 
-*(build:195)*
+*(build:197)*
 
 A dual-pane, keyboard-driven file manager in the spirit of XTree/XTreeGold:
 a collapsible **directory tree** on the left, the selected directory's **files**
@@ -31,7 +31,7 @@ the ROM-resident X16 Edit and switchable **color themes**.
 [3.3 Content Search](#33-searching-tagged-files-by-content) ·
 [3.4 Sequential Viewing](#34-sequential-viewing) · [3.5 Find File](#35-find-file) ·
 [3.6 The Viewer](#36-the-internal-viewer) · [3.7 Music](#37-music-playback) ·
-[3.8 Images](#38-image-viewer) · [3.9 Themes](#39-color-themes) ·
+[3.8 Images](#38-image-viewer) · [3.9 Settings](#39-settings) ·
 [3.10 History](#310-history-lists) · [3.11 Launching](#311-launching-programs)
 
 **[4. Installation](#4-installation)** · **[5. Implementation Notes](#5-implementation-notes)** ·
@@ -187,7 +187,7 @@ ALT is the **Commodore (C=) key** on real hardware, the left Alt key in the emul
 | `Alt-U` | either | **Untag all** — clear every tag on the disk |
 | `Alt-F3` | either | **Re-log** the current context (sub-folders in the tree, files in the file pane) |
 | `Alt-Q` | either | Quit, leaving the shell in the **currently selected** directory |
-| `Alt-F10` | either | Open the color-theme setup (quits to `XFSETUP.PRG`) |
+| `Alt-F10` | either | Open the **settings** screen (quits to `XFSETUP.PRG`, which saves and loads XFMGR back) |
 | `Alt-P` | directory | **Prune** — recursively delete the folder and everything under it |
 | `Alt-S` | file | Cycle the sort order: name → extension → size |
 | `Alt-X` | file | **Execute** — quit XFMGR and chain-run the selected program |
@@ -352,11 +352,22 @@ does nothing. `V` on a `.zsm` still shows the header breakout — `P` plays it.
 `V` on a `.bmx` bitmap sends it full-screen to the native BMX viewer; any key returns
 to the file list. A `png2bmx` converter is included under `tools/`.
 
-### 3.9 Color Themes
+### 3.9 Settings
 
-`Alt-F10` hands off to a standalone theme picker (`XFSETUP.PRG`) which remaps the
-palette and saves the choice to `xfmgr.cfg`; XFMGR re-applies it at startup. A
-re-install preserves an existing `xfmgr.cfg`, so a theme survives updates.
+`Alt-F10` hands off to a standalone settings program (`XFSETUP.PRG`), which saves to
+`xfmgr.cfg` and loads XFMGR straight back — so a change costs one restart. `↑`/`↓`
+picks a setting, `←`/`→` changes it (applied live), `F10` saves and returns, `Esc`
+returns without saving.
+
+| Setting | Values | Effect |
+|---|---|---|
+| **Color theme** | Classic, Amber Mono, Green Mono, X16 Blue, High-Contrast | Remaps the palette indices the whole UI draws with — previewed live on the settings screen itself |
+| **Command keys** | Auto-detect (default), Force hardware | Overrides the emulator/hardware `CTRL` key split ([§ 4.3](#43-emulator-vs-real-hardware)) — "Force hardware" keeps `Ctrl-D/F/M/S/V` even under the emulator |
+| **Input history** | `RETURN` clears | Deletes every saved prompt-history ring under `hist/`. Immediate — `Esc` does not undo it |
+
+A re-install preserves an existing `xfmgr.cfg`, so the settings survive updates. An
+older single-line cfg still reads correctly: settings it does not mention fall back to
+their defaults.
 
 ### 3.10 History Lists
 
@@ -408,10 +419,10 @@ start it from anywhere:
 └── XFMGR/            everything else lives here
      ├── XFMGR.PRG        the main program
      ├── *.OVL            banked overlays (viewer, image, music, ui, misc, syntax)
-     ├── XFSETUP.PRG      the color-theme setup (Alt-F10)
+     ├── XFSETUP.PRG      the settings screen (Alt-F10)
      ├── ZSMKIT.BIN       the ZSM music engine
      ├── XFMGR.HLP        the help file
-     └── XFMGR.CFG        your saved theme (kept across updates)
+     └── XFMGR.CFG        your saved settings (kept across updates)
 ```
 
 XFMGR always presents the tree rooted at `/`, so you can roam the whole drive no
@@ -433,6 +444,12 @@ shows the binding that is live.
 | Move tagged | `Ctrl-M` | `Ctrl-O` |
 | Search tagged | `Ctrl-S` | `Ctrl-E` |
 | View tagged | `Ctrl-V` | `Ctrl-L` |
+
+The detection can be overridden: **Command keys → Force hardware** in the settings
+([§ 3.9](#39-settings)) keeps the left-hand column everywhere. That is for a host or
+emulator build that does *not* actually grab `Ctrl-D/F/M/S/V`; where it does, those
+five commands become unreachable until the setting goes back to Auto-detect. On real
+hardware the setting changes nothing.
 
 Tag-by-wildcard is `Ctrl-W` in both. **ALT is the Commodore (C=) key** on a real X16
 and the left Alt key in the emulator. Everything else — plain keys, function keys,
@@ -483,8 +500,11 @@ The stock machine has banks 0–63. The low banks are reserved:
 | `xfmgr.p8` | main module | TUI + key loop, file ops, prompts, screen helpers | dual-pane draw, tagging, all `op_*` operations |
 
 `xfsetup.p8` builds to a **separate** `XFSETUP.PRG` (a full `$0801` program, not an
-overlay) — the `Alt-F10` theme picker; `themes.p8` does the palette remap and
-reads/writes `xfmgr.cfg`.
+overlay) — the `Alt-F10` settings screen. `themes.p8` is compiled into both binaries: it
+holds the palette presets, the settings themselves and the cfg *reader*. Only XFSETUP
+*writes* `xfmgr.cfg`, which keeps `diskio`'s write path out of XFMGR's low RAM (the same
+split `x16-MSEDIT` uses between `EDIT` and `EDCFG`, whose settings screen this one
+follows).
 
 ### 5.4 Key Design Decisions
 
@@ -520,7 +540,8 @@ under `hist/` on the drive root.
 ### 5.6 Build and Run
 
 Requires **Java** (JRE) and the **64tass** assembler (v1.60); their paths are baked
-into `build.bat`, which drives the bundled `prog8c.jar` Prog8 compiler:
+into `build.bat`, which drives the bundled `prog8c.jar` Prog8 compiler (currently
+**v12.3.1**; superseded jars are kept in `old-compilers\` and swapped back by renaming):
 
 ```
 build.bat xfmgr.p8        # -> build\xfmgr.prg + the .ovl overlays + xfsetup.prg
@@ -531,7 +552,7 @@ Building `xfmgr.p8` also compiles its companions:
 - **six banked overlays** — `tview.ovl`, `miscutil.ovl`, `uiutil.ovl`, `ximgview.ovl`,
   `xmusic.ovl` and `xsyntax.ovl`. Each is a headerless `%output library` loaded into a
   reserved HIRAM bank at runtime (the build renames prog8's `.bin` to `.ovl`).
-- **`xfsetup.prg`** — the standalone color-theme picker launched by `Alt-F10`.
+- **`xfsetup.prg`** — the standalone settings screen launched by `Alt-F10`.
 - **`install.prg`** — the standalone self-installer (see [4.1](#41-installing)).
 
 All compiler output (`.prg`, `.ovl`, and the intermediate `.asm` / `.vice-mon-list`)

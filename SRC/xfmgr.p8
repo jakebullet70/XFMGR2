@@ -40,7 +40,7 @@ main {
     const ubyte CMDROW2  = 28           ; command menu line 2: CTRL keys
     const ubyte MSGROW   = 27           ; prompts reuse the first command row
     const ubyte SCR_BOT  = 29           ; bottom border row
-    const uword BUILD_NUM = 195       ; shown top-right; bump by 1 every build. Keep the About
+    const uword BUILD_NUM = 197       ; shown top-right; bump by 1 every build. Keep the About
                                          ; 1.1.N" string in uiutil.p8 in sync with this.
                                          ; UWORD, not ubyte: build 255 was the ceiling and the next
                                          ; bump would have wrapped to 0 silently. It is only ever
@@ -164,9 +164,14 @@ main {
     ; main-menu Quit, or the currently selected dir for the ALT-menu Quit.
     ; (uword alias into cm_src storage - declared in the modal-buffer overlay below)
 
+    ubyte cfg_theme                         ; saved theme id, read at the top of start() (the same
+                                            ; cfg_read call fills themes.hw_keys, which the CTRL-key
+                                            ; block below needs) and applied once the overlays are in
+
     ; "delete tagged" CTRL key. The emulator swallows Ctrl-D ($04) before it reaches
     ; us, so under the emulator we bind delete to Ctrl-X; on real hardware Ctrl-D is
-    ; free, so we use the classic XTree Ctrl-D there. Set once at startup.
+    ; free, so we use the classic XTree Ctrl-D there. Set once at startup - from the
+    ; environment, unless XFSETUP's "Command keys" setting forces the hardware set.
     ubyte del_key                           ; lowercase dispatch key: 'x' (emu) or 'd' (hw)
     ubyte del_char                          ; uppercase display char: 'X' or 'D'
 
@@ -412,8 +417,18 @@ main {
         caps_off()                               ; CAPS LOCK off (it breaks the ALT/CTRL menus); restored on exit
         cx16.set_screen_mode(SCREEN_MODE)        ; 80x30
 
-        ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D/F/M/S)
-        if emudbg.is_emulator() {
+        ; Read the saved settings up front: the CTRL-key choice immediately below depends on
+        ; themes.hw_keys, which cfg_read() fills alongside the theme id. The theme itself is only
+        ; APPLIED further down (after the overlays load), where the first full repaint happens -
+        ; a palette remap this early would be undone by nothing, but there is nothing on screen yet
+        ; for it to show on either.
+        cfg_theme = themes.cfg_read()
+
+        ; pick the environment-specific CTRL keys (the emulator swallows Ctrl-D/F/M/S/V), unless the
+        ; user forced the hardware set in XFSETUP (Alt-F10 > Command keys). That override exists for
+        ; setups where the detection is right but the grab is not - e.g. an emulator build or host
+        ; window manager that passes Ctrl-D/F/M/S/V through after all.
+        if emudbg.is_emulator() and not themes.hw_keys {
             del_key  = 'x'
             del_char = 'X'
             find_key  = 'n'
@@ -533,10 +548,11 @@ main {
             ovl_missing |= %01000000
         check_overlays()
 
-        ; apply the saved color theme. cfg_read() reads the cfg by ABSOLUTE path (themes.path_to),
-        ; so it works regardless of where we are here and leaves the cwd alone.
-        ; A palette remap - full_redraw below repaints in the themed colors. Missing cfg -> Classic.
-        themes.apply_theme(themes.cfg_read())
+        ; apply the saved color theme, read at the top of start() (cfg_read reads the cfg by
+        ; ABSOLUTE path via themes.path_to, so it works regardless of where we are and leaves the
+        ; cwd alone). A palette remap - full_redraw below repaints in the themed colors.
+        ; Missing cfg -> Classic.
+        themes.apply_theme(cfg_theme)
 
         diskio.chdir(pathbuf)           ; back to the launch dir so the tree anchors where we started
 

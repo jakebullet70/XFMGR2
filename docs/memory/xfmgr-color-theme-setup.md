@@ -1,6 +1,6 @@
 ---
 name: xfmgr-color-theme-setup
-description: XFMGR2 colour-theme setup - Alt-F10 launches standalone XFSETUP.PRG; themes.p8 palette remap + xfmgr.cfg
+description: XFMGR2 settings screen - Alt-F10 launches standalone XFSETUP.PRG; themes.p8 palette remap + multi-key xfmgr.cfg
 metadata: 
   node_type: memory
   type: project
@@ -26,14 +26,23 @@ needed. `SRC/xfsetup.p8` is a normal $0801 PRG. Flow:
   Alt-F3=134. See [[xfmgr-find-file]] which took a CTRL slot in the same session.)
   (default No; the hop cold-restarts XFMGR) -> sets `setup_exit` -> main loop breaks -> shutdown
   branch `chain_run("/xfmgr/xfsetup.prg")` (existing dynamic-keyboard launcher).
-- XFSETUP: 80x30 PETSCII, up/down pick a theme with LIVE preview (`apply_theme` each move), ENTER
-  saves + returns, ESC cancels. On exit it `chain_run`s `/xfmgr/xfmgr.prg`.
-- XFMGR `start()` reads the saved theme while in the /xfmgr/ folder and applies it before
-  `full_redraw`: `themes.apply_theme(themes.cfg_read())`.
+- XFSETUP: 80x30 PETSCII. On exit it `chain_run`s `/xfmgr/xfmgr.prg`.
+- XFMGR `start()` calls `themes.cfg_read()` at the TOP (its `hw_keys` result is needed by the
+  CTRL-key block) and applies the returned theme id later, before `full_redraw`.
 
-**Config file** `/xfmgr/xfmgr.cfg` (tiny `theme=N` text line, staged beside the .prg + overlays).
-`themes.cfg_read/cfg_write` clone the `hist_save`/`hist_load` diskio pattern
-([[xfmgr-run-and-persistence]]); themes.p8 has NO `%encoding` so its filename literals stay PETSCII.
-Missing/garbled cfg -> theme 1 (Classic). Discoverability: `F10 Config` hint in uiutil's
+**Rebuilt build 196 (2026-08-13) on x16-MSEDIT's EDCFG model** (`x16-MSEDIT/SRC/edcfg.p8` - read it
+before touching this): a full-screen LIST of settings under non-selectable section headers, one row
+each. Up/Dn picks (headers skipped), Lt/Rt changes with live preview, **F10 saves + exits, Esc
+cancels** (ENTER no longer saves - it only fires the one ACTION row). Rows today: Color theme /
+Command keys ([[x16-adaptive-ctrl-keys]] override) / Input history (RETURN clears). Adding a setting =
+SET_ROW entry + change() arm + draw arm + HELP1/HELP2 line + a var in themes.p8 + one `append_kv`.
+
+**Config file** `<install>/xfmgr.cfg`, now one `key=<digit>\r` line per setting (`theme=`, `hwkeys=`).
+`themes.cfg_read` parses them in ONE byte loop keyed on each line's FIRST letter; unknown/absent keys
+keep their defaults, so an old single-line cfg still reads. **Only XFSETUP writes it** (`cfg_write`
+moved out of themes.p8 into xfsetup.p8, MSEDIT's EDIT/EDCFG split) - reads use an absolute path via
+`load_raw`, the write chdirs in and writes a BARE name ([[x16-writes-land-in-cwd]]). themes.p8 has NO
+`%encoding` so its filename + key literals stay PETSCII. Discoverability: `F10 Config` hint in uiutil's
 `menu_alt_items` (both panes). Build/run: `build.bat`/`run.bat` compile+stage `xfsetup.prg` like the overlays.
-Cost: xfmgr.prg +~0.6 KB (themes apply/cfg code); ~5.3 KB main RAM still free. See [[prog8-build-toolchain]].
+Cost of the 196 rework: 95 B of xfmgr low RAM (412 -> 317 B free below $9F00 - the tightest resource
+here, so keep new parsing OUT of themes.p8). See [[prog8-build-toolchain]], [[always-report-mem-stats]].

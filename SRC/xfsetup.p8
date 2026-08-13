@@ -1,16 +1,30 @@
-; xfsetup - standalone color-theme picker for XFMGR2.
+; xfsetup - the standalone settings program for XFMGR2.
 ;
-; A normal $0801 PRG (NOT a bank overlay). XFMGR launches it via chain_run (Alt-F10); it lets the
-; user pick a color theme with live preview, writes the choice to /xfmgr/xfmgr.cfg, then
-; chain_runs back to /xfmgr/xfmgr.prg - which cold-starts, reads the cfg and applies the theme.
-; Because setup is stateless w.r.t. XFMGR's tree/arena, no snapshot of the TREE is needed; the only
-; cost is XFMGR's ~2s reload. Themes are palette remaps (see SRC/themes.p8), so this runs in the
-; same PETSCII 80x30 text mode XFMGR uses.
+; A normal $0801 PRG (NOT a bank overlay). XFMGR launches it via chain_run (Alt-F10); it edits the
+; saved settings with live preview, writes them to <install>/xfmgr.cfg, then chain_runs back to
+; xfmgr.prg - which cold-starts, re-reads the cfg and applies everything. Because setup is stateless
+; w.r.t. XFMGR's tree/arena, no snapshot of the TREE is needed; the only cost is XFMGR's ~2s reload.
 ;
-; It does still take the MACHINE state, exactly as xfmgr.p8 does - screen mode, charset and text
-; color captured in start() and put back in return_to_xfmgr() before the hand-off. It has to: the
-; charset is changed here (txt.lowercase), and XFMGR re-snapshots on the way back in, so anything
-; left changed would be adopted as the user's own setting and never restored.
+; A separate .prg rather than a dialog inside xfmgr.prg, and laid out on x16-MSEDIT's EDCFG model
+; (SRC/edcfg.p8 over there) now that there is more than one thing to set:
+;
+;   - The settings live in SRC/themes.p8, shared with XFMGR. WRITING xfmgr.cfg is THIS program's
+;     job alone - XFMGR only reads it - which keeps diskio's write path (f_open_w/f_write) out of
+;     XFMGR's low RAM entirely.
+;   - The screen is a list of settings under non-selectable section headers, one row per setting.
+;     Up/Down picks a row (headers are skipped), Left/Right changes its value, applied LIVE. F10
+;     writes the cfg and returns to XFMGR; Esc returns without writing.
+;   - Adding a setting = one more SET_ROW entry + a change() arm + a draw arm + its help text,
+;     plus its var in themes.p8 and one append_kv line in cfg_write().
+;
+; It also takes the MACHINE state, exactly as xfmgr.p8 does - screen mode, charset and text color
+; captured in start() and put back in return_to_xfmgr() before the hand-off. It has to: the charset
+; is changed here (txt.lowercase), and XFMGR re-snapshots on the way back in, so anything left
+; changed would be adopted as the user's own setting and never restored.
+;
+; Themes are palette remaps (see SRC/themes.p8), so this runs in the same PETSCII 80x30 text mode
+; XFMGR uses, and every color below is one of the indices a theme repaints - the settings screen
+; previews the theme it is setting.
 
 %import textio
 %import diskio_patched     ; vendored + bounds-patched diskio (block still named 'diskio'); see its header
@@ -22,6 +36,28 @@
 
 main {
     const ubyte SCREEN_MODE = $01           ; 80x30 text (matches XFMGR)
+    const ubyte SCR_W = 80
+    const ubyte SCR_H = 30
+
+    ; setting rows. NSET counts the SELECTABLE rows only - the section headers between them are
+    ; drawn by draw_all() and never highlighted.
+    const ubyte NSET = 3
+    ubyte[3] SET_ROW = [8, 11, 14]          ; Display: Color theme@8 (hdr 7)
+                                            ; Keyboard: Command keys@11 (hdr 10)
+                                            ; Maintenance: Input history@14 (hdr 13)
+    const ubyte ROW_HISTORY = 2             ; the one row that ACTS (on RETURN) instead of holding
+                                            ; a value - see change() and do_clear_history()
+    const ubyte LABEL_COL = 4               ; setting name
+    const ubyte VALUE_COL = 24              ; its value
+    const ubyte HELP_ROW  = 20              ; two-line explanation of the highlighted setting
+
+    ; attribute bytes (bg<<4)|fg built from the themed indices in shared-const, so every one of
+    ; them follows the theme being previewed.
+    const ubyte CB_BAR  = (shared.CLR_TITLE << 4) | shared.CLR_FG      ; top / bottom bars
+    const ubyte CB_BODY = (shared.CLR_BG    << 4) | shared.CLR_FG      ; ordinary setting row
+    const ubyte CB_SEL  = (shared.CLR_TITLE << 4) | shared.CLR_FG      ; highlighted setting row
+    const ubyte CB_HDR  = (shared.CLR_BG    << 4) | shared.CLR_ACCENT  ; section-header chip
+    const ubyte CB_HELP = (shared.CLR_BG    << 4) | shared.CLR_ACCENT  ; the help lines
 
     ; single-line PETSCII box screencodes (drawn with setchr, no cursor move)
     const ubyte SC_TL = sc:'┌'
@@ -31,19 +67,28 @@ main {
     const ubyte SC_H  = sc:'─'
     const ubyte SC_V  = sc:'│'
 
-    const ubyte BX0 = 26                     ; theme box: left / right / top / bottom
-    const ubyte BX1 = 53
-    const ubyte BY0 = 6
-    const ubyte BY1 = 20
-    const ubyte LIST_ROW = 10                ; row of the first theme entry
+    ; one help line pair per setting row, shown under the list for whichever row is highlighted.
+    str[3] HELP1 = [
+        "Repaints the whole XFMGR palette. Previewed live as you change it.",
+        "Auto: use the emulator-safe CTRL keys when x16emu is detected.",
+        "Deletes the saved input-history rings (find, rename, filespec, ...)."
+    ]
+    str[3] HELP2 = [
+        "",
+        "Hardware: always Ctrl-D/F/M/S/V - correct on a real X16.",
+        "Press RETURN to clear them now. This one acts immediately."
+    ]
 
     ubyte saved_mode
     ubyte saved_charset                      ; charset we were launched in (1=ISO 2=upper/gfx 3=lower)
     ubyte saved_color                        ; and the text color (bg<<4|fg) - both put back on exit
-    ubyte sel                                ; currently highlighted theme id (themes.FIRST..LAST)
+    ubyte sel                                ; highlighted SETTING row (0..NSET-1)
+    ubyte theme_id                           ; the theme being previewed (themes.FIRST..LAST)
+    ubyte orig_theme                         ; the theme we opened with - restored on Esc
+    ubyte[40] cfg_line                       ; cfg write buffer (see themes.cfg_line's note on size)
 
     ; every input-history category XFMGR writes as hist/<cat>.his (current + legacy move/copy,
-    ; which merged into "copymove"). "Clear history" deletes each of these from /xfmgr/hist/.
+    ; which merged into "copymove"). "Clear history" deletes each of these from <install>/hist/.
     str[8] HIST_CATS = ["copymove", "mkdir", "rename", "tagspec", "find", "filespec", "move", "copy"]
     ubyte[20] fnbuf                          ; "<cat>.his" scratch for the delete loop
 
@@ -55,66 +100,147 @@ main {
                                             ; exactly the change restore_machine_state undoes
 
         ; The config lives in the program's own folder, alongside the .prg + overlays. No chdir:
-        ; themes.cfg_read/cfg_write build an ABSOLUTE path from the install folder parsed out of
-        ; the root XT launcher (themes.find_progdir), so they find it wherever XFMGR was installed
-        ; and whatever directory we happen to be launched in.
-        sel = themes.cfg_read()
+        ; themes.cfg_read builds an ABSOLUTE path from the install folder parsed out of the root XT
+        ; launcher (themes.find_progdir), so it is found wherever XFMGR was installed and whatever
+        ; directory we happen to be launched in. It also fills themes.hw_keys.
+        theme_id = themes.cfg_read()
+        orig_theme = theme_id
 
-        draw_static()
-        refresh()
-
+        draw_all()
         repeat {
             ubyte k = getkey()
             when k {
-                145 -> {                            ; cursor up
-                    if sel > themes.FIRST {
-                        sel--
-                        refresh()
-                    }
-                }
                 17 -> {                             ; cursor down
-                    if sel < themes.LAST {
-                        sel++
-                        refresh()
-                    }
+                    sel++
+                    if sel >= NSET
+                        sel = 0
+                    draw_all()
                 }
-                13 -> {                             ; ENTER: save + return
-                    themes.cfg_write(sel)
+                145 -> {                            ; cursor up
+                    if sel == 0
+                        sel = NSET - 1
+                    else
+                        sel--
+                    draw_all()
+                }
+                29, ' ' -> {                        ; cursor right / space: next value
+                    change(true)
+                    draw_all()
+                }
+                157 -> {                            ; cursor left: previous value
+                    change(false)
+                    draw_all()
+                }
+                13 -> {                             ; RETURN: only the action row uses it
+                    if sel == ROW_HISTORY
+                        do_clear_history()
+                }
+                21 -> {                             ; F10 ($15): write the settings, back to XFMGR
+                    alert_box("Saving...")          ; centred alert - the write is near-instant, so
+                    sys.wait(30)                    ; hold it ~0.5s or it never registers
+                    if not cfg_write(theme_id) {
+                        txt.plot(2, SCR_H - 3)
+                        txt.print("could not write the settings file!")
+                        void getkey()
+                    }
                     break
                 }
-                'h', 'H' -> ask_clear_history()      ; delete the saved input-history files
-                27 -> break                         ; ESC: cancel (no save)
+                27 -> {                             ; ESC: cancel, cfg untouched
+                    themes.apply_theme(orig_theme)  ; hand XFMGR back the theme that is really saved
+                    break
+                }
                 else -> { }
             }
         }
         return_to_xfmgr()
     }
 
-    sub draw_static() {
-        themes.apply_theme(sel)                     ; preview the current theme before first paint
-        txt.color2(shared.CLR_FG, shared.CLR_BG)
-        txt.clear_screen()
-        drawbox(BX0, BY0, BX1, BY1)
-        txt.color(shared.CLR_TITLE)
-        txt.plot(BX0 + 2, BY0)
-        txt.print(" XFSETUP ")
-        txt.color(shared.CLR_FG)
-        txt.plot(BX0 + 3, BY0 + 2)
-        txt.print("Color theme:")
-        txt.plot(BX0 + 2, BY1 - 2)
-        txt.print(petscii:"\x9eH\x05 Clear history")
-        txt.plot(BX0 + 2, BY1 - 1)
-        txt.print(petscii:"\x9e←┘\x05 Save  \x9eESC\x05 Cancel")
+    sub change(bool forward) {
+        ; adjust the highlighted setting. One `when` arm per setting row.
+        when sel {
+            0 -> {                                  ; color theme: wrap through the presets
+                if forward {
+                    theme_id++
+                    if theme_id > themes.LAST
+                        theme_id = themes.FIRST
+                } else {
+                    if theme_id <= themes.FIRST
+                        theme_id = themes.LAST
+                    else
+                        theme_id--
+                }
+                themes.apply_theme(theme_id)        ; live preview - draw_all repaints in the new colors
+            }
+            1 -> themes.hw_keys = not themes.hw_keys    ; command keys: Auto <-> Force hardware
+            ROW_HISTORY -> { }                  ; an ACTION row, not a value: deliberately deaf to
+                                                ; Left/Right. Clearing the history cannot be undone
+                                                ; by arrowing back, so it takes the explicit RETURN
+                                                ; the row and its help line both name.
+        }
     }
 
-    sub ask_clear_history() {
-        ; delete every hist/<cat>.his file right away (no confirm), flash the result on the box row
-        ; above the hints for ~2s, then blank it. refresh() repaints the theme rows, not this line.
+    ; ---------- the settings file ----------
+
+    sub cfg_write(ubyte id) -> bool {
+        ; Overwrite the cfg with one "key=<value>\r" line per setting. Kept in step with
+        ; themes.cfg_read()'s parser - same keys, first letters distinct.
+        ;
+        ; CHDIR IN, THEN WRITE BY BARE NAME. Handing f_open_w an absolute path does not work here:
+        ; a WRITE open lands the file in the CURRENT directory. It is the same rule op_copymove
+        ; documents when it enters the destination folder before copying, and the reason hist_save
+        ; chdirs before writing its ring.
+        ;
+        ; It failed DESTRUCTIVELY when it was wrong, which is why setup once looked like it "would
+        ; not save": DOS SCRATCH *does* take a path, so the delete below removed the real cfg and
+        ; the open that should have recreated it did nothing - losing the settings rather than
+        ; failing to store them. Hence the bool return, and the message the caller prints.
+        ubyte[80] savedir
+        void strings.copy(diskio.curdir(), savedir)     ; transient buffer - copy before chdir'ing
+        diskio.chdir(themes.progdir_cd())
+        diskio.delete(themes.CFG_NAME)                  ; delete-then-create = portable overwrite
+        void diskio.status()                            ; drop FILE NOT FOUND if it wasn't there
+        bool ok = false
+        if diskio.f_open_w(themes.CFG_NAME) {
+            ubyte n = 0
+            n = append_kv(n, "theme=", id)
+            ubyte hw = 0
+            if themes.hw_keys
+                hw = 1
+            n = append_kv(n, "hwkeys=", hw)             ; 1 = force the hardware CTRL keys
+            ok = diskio.f_write(cfg_line, n)
+            diskio.f_close_w()
+        }
+        diskio.chdir(savedir)                           ; leave the caller's cwd as we found it
+        return ok
+    }
+
+    sub append_kv(ubyte n, str key, ubyte value) -> ubyte {
+        ; append "key<digit>\r" to cfg_line at offset n, return the new offset. Every value here is
+        ; a single digit (theme 1..5, flags 0/1), which keeps this trivial.
+        ubyte j = 0
+        while key[j] != 0 {
+            cfg_line[n] = key[j]
+            n++
+            j++
+        }
+        cfg_line[n] = '0' + value
+        n++
+        cfg_line[n] = 13
+        n++
+        return n
+    }
+
+    ; ---------- the history-clearing action ----------
+
+    sub do_clear_history() {
+        ; delete every hist/<cat>.his file right away (no confirm), flash the result on the help
+        ; rows for ~2s, then repaint. Nothing about this is saved - it has already happened.
         clear_history()
-        clear_msg_row()
-        txt.plot(BX0 + 2, BY1 - 4)
-        txt.print("History cleared")
-        ; ~2s at 60 Hz, or any key to dismiss sooner. Drain first: the 'H' that triggered this
+        txt.color2(shared.CLR_FG, shared.CLR_BG)
+        put_str_at(LABEL_COL, HELP_ROW, "History cleared.                                          ")
+        put_str_at(LABEL_COL, HELP_ROW + 1, "                                                          ")
+        set_color_run(LABEL_COL, SCR_W - 3, HELP_ROW, CB_HELP)
+        ; ~2s at 60 Hz, or any key to dismiss sooner. Drain first: the RETURN that triggered this
         ; is often still queued and would blink the message away unread.
         while cbm.GETIN2() != 0 {
         }
@@ -124,16 +250,7 @@ main {
             if cbm.GETIN2() != 0
                 break
         }
-        clear_msg_row()
-    }
-
-    sub clear_msg_row() {
-        ; blank the message row (BY1-4) inside the box, in the current bg color
-        txt.color2(shared.CLR_FG, shared.CLR_BG)
-        txt.plot(BX0 + 1, BY1 - 4)
-        ubyte c
-        for c in BX0 + 1 to BX1 - 1
-            txt.spc()
+        draw_all()
     }
 
     sub clear_history() {
@@ -156,56 +273,151 @@ main {
         diskio.chdir(savedir)
     }
 
-    sub refresh() {
-        themes.apply_theme(sel)                     ; live preview: recolor the whole screen
-        ubyte i
-        for i in 0 to themes.LAST - themes.FIRST {  ; 0..4
-            ubyte id  = themes.FIRST + i            ; 1..5
-            ubyte row = LIST_ROW + i
-            if id == sel
-                txt.color2(shared.CLR_FG, shared.CLR_TITLE)     ; highlight bar (white on title)
-            else
-                txt.color2(shared.CLR_FG, shared.CLR_BG)
-            ; fill the row interior so the bar spans the box and clears old text
-            ubyte c
-            txt.plot(BX0 + 1, row)
-            for c in BX0 + 1 to BX1 - 1
-                txt.spc()
-            txt.plot(BX0 + 3, row)
-            if id == sel
-                txt.chrout('>')
-            else
-                txt.chrout(' ')
-            txt.spc()
-            txt.print(themes.NAMES[i])
-        }
+    ; ---------- drawing ----------
+
+    sub draw_all() {
+        ; The whole screen is repainted on every keystroke. At 80x30 that is imperceptible, and it
+        ; is what makes the theme preview honest: the bars, headers and help lines are redrawn in
+        ; the palette that was just selected, not left over from the previous one.
+        themes.apply_theme(theme_id)
         txt.color2(shared.CLR_FG, shared.CLR_BG)
+        txt.clear_screen()
+
+        bar_fill(0, CB_BAR)
+        put_str_centered(0, "XFMGR  Settings")
+        set_color_run(0, SCR_W - 1, 0, CB_BAR)
+
+        put_str_at(2, 3, "Up/Down picks a setting.  Left/Right changes it.")
+        set_color_run(0, SCR_W - 1, 3, CB_BODY)
+
+        draw_header(7,  "Display")
+        draw_header(10, "Keyboard")
+        draw_header(13, "Maintenance")
+
+        ubyte i
+        for i in 0 to NSET - 1 {
+            ubyte row = SET_ROW[i]
+            when i {
+                0 -> {
+                    put_str_at(LABEL_COL, row, "Color theme")
+                    put_str_at(VALUE_COL, row, themes.NAMES[theme_id - themes.FIRST])
+                }
+                1 -> {
+                    put_str_at(LABEL_COL, row, "Command keys")
+                    if themes.hw_keys
+                        put_str_at(VALUE_COL, row, "Force hardware")
+                    else
+                        put_str_at(VALUE_COL, row, "Auto-detect   ")
+                }
+                ROW_HISTORY -> {
+                    put_str_at(LABEL_COL, row, "Input history")
+                    put_str_at(VALUE_COL, row, "RETURN clears it")
+                }
+            }
+            ubyte c = CB_BODY
+            if i == sel
+                c = CB_SEL                          ; highlight the whole row, like XFMGR's pickers
+            set_color_run(2, SCR_W - 3, row, c)
+        }
+
+        put_str_at(LABEL_COL, HELP_ROW,     HELP1[sel])
+        put_str_at(LABEL_COL, HELP_ROW + 1, HELP2[sel])
+        set_color_run(LABEL_COL, SCR_W - 3, HELP_ROW,     CB_HELP)
+        set_color_run(LABEL_COL, SCR_W - 3, HELP_ROW + 1, CB_HELP)
+
+        bar_fill(SCR_H - 1, CB_BAR)
+        put_str_centered(SCR_H - 1, "Up/Dn Pick   Lt/Rt Change   F10 Save+Exit   Esc Cancel")
+        set_color_run(0, SCR_W - 1, SCR_H - 1, CB_BAR)
     }
 
-    sub drawbox(ubyte x0, ubyte y0, ubyte x1, ubyte y1) {
-        txt.color(shared.CLR_FG)
-        txt.setchr(x0, y0, SC_TL)
+    sub draw_header(ubyte row, str s) {
+        ; non-selectable section label. A short highlight chip at col 2 (never a full-width run, so
+        ; it cannot be mistaken for a selected setting row) sets it apart from the settings below.
+        put_str_at(2, row, s)
+        set_color_run(2, 2 + lsb(strings.length(s)) - 1, row, CB_HDR)
+    }
+
+    sub alert_box(str msg) {
+        ; a small centred message box (e.g. "Saving...") drawn over the settings screen, in the box
+        ; colors of the current theme (same look as XFMGR's popups).
+        ubyte mlen = lsb(strings.length(msg))
+        ubyte w = mlen + 18                          ; msg + 2 spaces + 1 border each side, + 12 wider
+        ubyte x0 = (SCR_W - w) / 2
+        ubyte x1 = x0 + w - 1
+        ubyte y0 = SCR_H / 2 - 2
+        ubyte y1 = y0 + 4                            ; 5 rows tall
+        ubyte r
+        ubyte c
+        for r in y0 to y1 {                          ; fill
+            set_color_run(x0, x1, r, CB_BODY)
+            for c in x0 to x1
+                txt.setchr(c, r, sc:' ')
+        }
+        txt.setchr(x0, y0, SC_TL)                    ; corners + edges
         txt.setchr(x1, y0, SC_TR)
         txt.setchr(x0, y1, SC_BL)
         txt.setchr(x1, y1, SC_BR)
-        ubyte c
         for c in x0 + 1 to x1 - 1 {
             txt.setchr(c, y0, SC_H)
             txt.setchr(c, y1, SC_H)
         }
-        for c in y0 + 1 to y1 - 1 {
-            txt.setchr(x0, c, SC_V)
-            txt.setchr(x1, c, SC_V)
+        for r in y0 + 1 to y1 - 1 {
+            txt.setchr(x0, r, SC_V)
+            txt.setchr(x1, r, SC_V)
         }
-        for c in x0 to x1 {
-            txt.setclr(c, y0, shared.CLR_BOX)
-            txt.setclr(c, y1, shared.CLR_BOX)
+        set_color_run(x0, x1, y0, shared.CLR_BOX)
+        set_color_run(x0, x1, y1, shared.CLR_BOX)
+        for r in y0 + 1 to y1 - 1 {
+            txt.setclr(x0, r, shared.CLR_BOX)
+            txt.setclr(x1, r, shared.CLR_BOX)
         }
-        for c in y0 to y1 {
-            txt.setclr(x0, c, shared.CLR_BOX)
-            txt.setclr(x1, c, shared.CLR_BOX)
+        ubyte mcol = x0 + (w - mlen) / 2                            ; centred message...
+        ubyte mrow = (y0 + y1) / 2
+        put_str_at(mcol, mrow, msg)
+        set_color_run(mcol, mcol + mlen - 1, mrow, CB_BODY)         ; ...recolored to the box interior
+    }
+
+    sub put_str_at(ubyte col, ubyte row, str s) {
+        txt.plot(col, row)
+        txt.print(s)
+    }
+
+    sub put_str_centered(ubyte row, str s) {
+        ; centre s across the full screen width - used for the title and key-hint BARS, which span
+        ; the whole row. The settings, their headers and the help lines stay left-aligned: they are
+        ; a column of related rows and centring each one would ragged them against each other.
+        ubyte n = lsb(strings.length(s))
+        ubyte col = 0
+        if n < SCR_W
+            col = (SCR_W - n) / 2
+        put_str_at(col, row, s)
+    }
+
+    sub set_color_run(ubyte c0, ubyte c1, ubyte row, ubyte color) {
+        ubyte c
+        for c in c0 to c1 {
+            if c < SCR_W
+                txt.setclr(c, row, color)
         }
     }
+
+    sub bar_fill(ubyte row, ubyte color) {
+        ubyte c
+        for c in 0 to SCR_W - 1 {
+            txt.setchr(c, row, sc:' ')
+            txt.setclr(c, row, color)
+        }
+    }
+
+    sub getkey() -> ubyte {
+        repeat {
+            ubyte k = cbm.GETIN2()
+            if k != 0
+                return k
+        }
+    }
+
+    ; ---------- machine state + the hand-off back to XFMGR ----------
 
     sub snapshot_machine_state() {
         ; Capture the charset + text color we were launched with, so the hand-off back to XFMGR
@@ -234,14 +446,6 @@ main {
             cx16.screen_set_charset(saved_charset, 0)       ; 0 ptr = built-in ROM charset
         if saved_color != 0                                 ; 0 = black-on-black -> skip a bad read
             txt.color2(saved_color & 15, saved_color >> 4)  ; low nibble = fg, high nibble = bg
-    }
-
-    sub getkey() -> ubyte {
-        repeat {
-            ubyte k = cbm.GETIN2()
-            if k != 0
-                return k
-        }
     }
 
     sub return_to_xfmgr() {

@@ -11,7 +11,12 @@ Compiling/running X16 Prog8 here required tools NOT on PATH — found by searchi
 
 - **Java**: `C:\dev\b4x\java19\bin\java.exe` (nothing on PATH; no JAVA_HOME)
 - **64tass assembler** (prog8 needs it to assemble): `C:\8bitProgramming\64tass-1.60\64tass.exe`
-- **Compiler**: `prog8c.jar` in the project root (Prog8 v12.1.1)
+- **Compiler**: `prog8c.jar` in the project root — **v12.3.1-SNAPSHOT since 2026-08-13**, taken
+  from the sibling `x16-MSEDIT` project (that repo tracks the newest jar; check
+  `..\x16-MSEDIT\prog8c.jar` when a newer one is wanted). Superseded jars are archived in
+  `old-compilers\` and swapped back by renaming. **The 12.2.1 -> 12.3.1 hop cut xfmgr.prg by
+  ~1.6 KB** (free low RAM 317 B -> 1954 B) with no source changes — worth re-checking on any
+  future bump, since low RAM is the binding constraint here.
 - **Emulator**: `C:\8bitProgramming\x16emu\x16emu.exe` (path also in LOCAL.BAT)
 
 Build: `build.bat <src.p8>` (in project root) sets PATH for both, then

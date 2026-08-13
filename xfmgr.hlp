@@ -1,5 +1,5 @@
 ==============================================================================
- XFMGR2 - an XTree-style file manager for the Commander X16    (Build 195)
+ XFMGR2 - an XTree-style file manager for the Commander X16    (Build 197)
 ==============================================================================
 
  A dual-pane, keyboard-driven file manager. A collapsible DIRECTORY tree on
@@ -151,7 +151,8 @@
    Alt-F3      Re-log the current context (sub-folders in DIR, files in FILE)
    Alt-P       Prune - recursively delete the selected folder and everything
                under it (DIR pane; type 'prune' to confirm)
-   Alt-F10     Open the color-theme setup (quits to XFSETUP.PRG)
+   Alt-F10     Open the SETTINGS screen (quits to XFSETUP.PRG, which saves
+               and comes straight back). See SETTINGS below.
 
 ------------------------------------------------------------------------------
  In text prompts (Copy, Move, Rename, Mkdir, Filespec, Tag-spec, Find)
@@ -245,6 +246,26 @@
    Q / Esc     Exit back to the file list
 
 ------------------------------------------------------------------------------
+ SETTINGS  (Alt-F10)
+------------------------------------------------------------------------------
+   Alt-F10 quits to XFSETUP.PRG, the settings screen, and XFSETUP loads XFMGR
+   back when you leave it - so the round trip costs one restart and your tree
+   is re-logged from the folder you started in.
+
+   Up/Down    pick a setting        Left/Right  change it (applied at once)
+   F10        save and go back      Esc         go back WITHOUT saving
+
+     Color theme     Classic, Amber Mono, Green Mono, X16 Blue or
+                     High-Contrast. Previewed live while you step through
+                     them - the settings screen itself repaints.
+     Command keys    Auto-detect (default) or Force hardware. See below.
+     Input history   RETURN clears every saved prompt history (find, rename,
+                     filespec, copy/move, ...). Immediate; not undone by Esc.
+
+   Saved settings live in XFMGR.CFG in the install folder, and a re-install
+   keeps the file, so they survive an update.
+
+------------------------------------------------------------------------------
  EMULATOR vs REAL HARDWARE  (key differences)
 ------------------------------------------------------------------------------
    XFMGR detects whether it is running under the x16emu emulator and rebinds
@@ -257,6 +278,12 @@
      Move tagged      Ctrl-O       Ctrl-M
      Search tagged    Ctrl-E       Ctrl-S
      View tagged      Ctrl-L       Ctrl-V
+
+   Set Command keys to "Force hardware" (Alt-F10) to keep the right-hand
+   column everywhere, even under the emulator. That is for a host or emulator
+   build that does NOT grab Ctrl-D/F/M/S/V after all; if yours does grab them,
+   those five commands become unreachable until you set it back to
+   Auto-detect. On real hardware the setting changes nothing.
 
    The emulator also swallows Ctrl-S, so Tag-by-wildcard is Ctrl-W in both
    environments. ALT is the Commodore (C=) key on a real X16; in the
@@ -286,10 +313,10 @@
      +-- XFMGR/            everything else lives here
           +-- XFMGR.PRG        the main program
           +-- *.OVL            banked overlays (viewer, image, music, ui, misc)
-          +-- XFSETUP.PRG      the color-theme setup (Alt-F10)
+          +-- XFSETUP.PRG      the settings screen (Alt-F10)
           +-- ZSMKIT.BIN       the ZSM music engine
           +-- XFMGR.HLP        this help file
-          +-- XFMGR.CFG        your saved theme (kept across updates)
+          +-- XFMGR.CFG        your saved settings (kept across updates)
 
    To install: Copy the unpacked release files plus INSTALL.PRG into one
    folder, boot the X16, CD into that folder and run INSTALL. It creates

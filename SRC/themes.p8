@@ -67,12 +67,25 @@ themes {
         }
     }
 
-    ; ---- config file: /xfmgr/xfmgr.cfg, a tiny "theme=N" text line ----
-    ; The caller must have chdir'd into the program's /xfmgr/ folder first (same place the .ovl
-    ; overlays live). Filenames are PETSCII (module default) so the host-fs matches them.
+    ; ---- config file: /xfmgr/xfmgr.cfg, one "key=<digit>" line per setting ----
+    ; Read here (by absolute path - no chdir), WRITTEN only by XFSETUP (SRC/xfsetup.p8). That split
+    ; is deliberate and copied from x16-MSEDIT: keeping f_open_w/f_write out of this shared module
+    ; keeps diskio's whole write path out of XFMGR's low RAM, where it has nothing to do.
+    ; Filenames are PETSCII (module default) so the host-fs matches them.
 
     str  CFG_NAME = "xfmgr.cfg"
-    ubyte[24] cfg_line                      ; cfg load buffer (read) / write buffer
+    ubyte[32] cfg_line                      ; cfg LOAD buffer, and load_raw does not bound its write:
+                                            ; it must hold the whole file. Today's two settings are
+                                            ; 17 bytes ("theme=N\rhwkeys=N\r"), so this is roughly
+                                            ; two more settings of headroom - grow it (and xfsetup's
+                                            ; write buffer, which is separate) when they are added.
+
+    ; ---- the settings themselves ----
+    ; cfg_read() fills these; XFSETUP edits them and writes them back. The theme id is RETURNED
+    ; rather than stored, because every caller feeds it straight into apply_theme().
+    bool hw_keys = false                    ; true = always use the real-hardware CTRL keys
+                                            ; (Ctrl-D/F/M/S/V) even when running under x16emu.
+                                            ; false = auto-detect (emudbg.is_emulator()).
 
     ; ---- where the program lives (cfg + the .ovl overlays) ----
     ; NOT hard-coded: the root launcher `XT` (a tokenized `10 LOAD"/XFMGR/XFMGR.PRG"`) already names
@@ -165,25 +178,40 @@ themes {
     }
 
     sub cfg_read() -> ubyte {
-        ; Return the saved theme id (1..LAST). Missing file / bad content -> 1 (Classic).
-        ; Reads <progdir>xfmgr.cfg by ABSOLUTE path (see find_progdir), so it needs no chdir and
-        ; leaves the caller's working directory untouched. Uses the headerless KERNAL LOAD
-        ; (diskio.load_raw - the same cbm.LOAD the overlays' loadlib uses, just the honest name for
-        ; raw data rather than a library blob); NEVER f_open, whose read-channel traffic on an
-        ; ABSENT file corrupted the following UI draw / bottom-menu colors. load_raw returns 0 when
-        ; the file isn't there.
+        ; Load every setting out of <progdir>xfmgr.cfg: the theme id is RETURNED (1..LAST), the rest
+        ; land in the module vars above. Missing file / bad content -> the defaults (Classic, and
+        ; auto-detected keys), so an old single-line cfg still reads correctly and simply leaves the
+        ; newer settings at their default.
+        ;
+        ; Reads by ABSOLUTE path (see find_progdir), so it needs no chdir and leaves the caller's
+        ; working directory untouched. Uses the headerless KERNAL LOAD (diskio.load_raw - the same
+        ; cbm.LOAD the overlays' loadlib uses, just the honest name for raw data rather than a
+        ; library blob); NEVER f_open, whose read-channel traffic on an ABSENT file corrupted the
+        ; following UI draw / bottom-menu colors. load_raw returns 0 when the file isn't there.
         ubyte id = 1
+        hw_keys = false
         uword endaddr = diskio.load_raw(path_to(CFG_NAME), &cfg_line)
         if endaddr != 0 {
             @(endaddr) = 0                  ; NUL-terminate the loaded bytes for the parser
-            ; parse "theme=N": find '=' then take the following digit
+            ; Walk the "<key>=<digit>" lines. Keys are told apart by their FIRST letter alone
+            ; ('t'heme, 'h'wkeys) - the file is written by xfsetup.p8's cfg_write() and nothing
+            ; else, so a one-byte match is enough and costs a fraction of a string compare.
             ubyte p = 0
-            while cfg_line[p] != 0 and cfg_line[p] != '='
+            ubyte keychar = cfg_line[0]     ; first letter of the line we are inside
+            while cfg_line[p] != 0 {
+                ubyte ch = cfg_line[p]
                 p++
-            if cfg_line[p] == '=' {
-                ubyte d = cfg_line[p+1]
-                if d >= '1' and d <= '9'
-                    id = d - '0'
+                if ch == 13 or ch == 10 {
+                    keychar = cfg_line[p]   ; a new line starts here
+                } else if ch == '=' {
+                    ubyte digit = cfg_line[p]
+                    if keychar == 't' {
+                        if digit >= '1' and digit <= '9'
+                            id = digit - '0'
+                    } else if keychar == 'h' {
+                        hw_keys = digit != '0'
+                    }
+                }
             }
         }
         if id < FIRST or id > LAST
@@ -191,34 +219,9 @@ themes {
         return id
     }
 
-    sub cfg_write(ubyte id) {
-        ; Write <progdir>xfmgr.cfg as "theme=<id>\r".
-        ;
-        ; CHDIR IN, THEN WRITE BY BARE NAME. This used to hand the absolute path straight to
-        ; f_open_w, and that does not work here: on this machine a WRITE open lands the file in the
-        ; CURRENT directory. It is the same rule op_copymove documents when it enters the
-        ; destination folder before copying, and the reason hist_save chdirs before writing its
-        ; ring - every other writer in this codebase already worked this way. This was the one
-        ; that did not.
-        ;
-        ; It failed DESTRUCTIVELY, which is exactly why the setup looked like it "would not save":
-        ; DOS SCRATCH *does* take a path, so the delete below removed the real cfg, and then the
-        ; open that was supposed to recreate it did nothing. The file was left missing and the next
-        ; XFMGR start read no theme and fell back to Classic - losing the setting rather than
-        ; failing to store it.
-        ;
-        ; READING keeps the absolute path: LOAD accepts one (see cfg_read), only writing does not.
-        ubyte[80] savedir
-        void strings.copy(diskio.curdir(), savedir)     ; transient buffer - copy before chdir'ing
-        diskio.chdir(progdir_cd())
-        diskio.delete(CFG_NAME)                         ; delete-then-create = portable overwrite
-        if diskio.f_open_w(CFG_NAME) {
-            void strings.copy("theme=", cfg_line)   ; 6 chars + NUL
-            cfg_line[6] = '0' + id
-            cfg_line[7] = 13                        ; CR
-            void diskio.f_write(cfg_line, 8)
-            diskio.f_close_w()
-        }
-        diskio.chdir(savedir)                           ; leave the caller's cwd as we found it
-    }
+    ; cfg_write() USED to live here. It now lives in SRC/xfsetup.p8, the only program that writes
+    ; the file - see the note on CFG_NAME above and the header of xfsetup.p8. The rule it learned
+    ; the hard way moved with it: chdir into the install folder and write by BARE name (a write
+    ; open lands the file in the CURRENT directory, path or no path), while READING keeps the
+    ; absolute path because LOAD does accept one.
 }

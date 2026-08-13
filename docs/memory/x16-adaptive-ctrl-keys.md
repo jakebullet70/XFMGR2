@@ -11,6 +11,11 @@ metadata:
 The x16emu emulator window GRABS some Ctrl combos before they reach the app, so XFMGR picks
 **environment-specific CTRL keys** at startup via `emudbg.is_emulator()` ([[prog8-build-toolchain]]).
 
+**Overridable since build 196** (2026-08-13): XFSETUP's "Command keys" row writes `hwkeys=1` to
+xfmgr.cfg, and `start()` gates on `if emudbg.is_emulator() and not themes.hw_keys` — so the hardware
+column can be forced under the emulator. That is why `themes.cfg_read()` now runs at the TOP of
+`start()` and the theme is applied later from the saved `cfg_theme`. See [[xfmgr-color-theme-setup]].
+
 **Five adaptive commands** (emulator key / hardware key):
 
 | Command | Emulator | Hardware |
